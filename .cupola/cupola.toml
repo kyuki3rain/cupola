@@ -1,0 +1,11 @@
+owner = "kyuki3rain"
+repo = "cupola"
+default_branch = "main"
+language = "ja"
+polling_interval_secs = 15
+max_retries = 3
+stall_timeout_secs = 1800
+
+[log]
+level = "debug"
+dir = ".cupola/logs"
