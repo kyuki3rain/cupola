@@ -50,12 +50,12 @@ Cupola の OSS 公開に向けて README.md を作成する。初めてリポジ
 4. The README shall 各コマンドの実行例をコードブロックで提供する
 
 ### Requirement 6: 設定ファイルリファレンスセクション
-**Objective:** As a Cupola ユーザー, I want `cupola.toml` の全設定項目と意味を参照したい, so that プロジェクトに合わせた設定ができる
+**Objective:** As a Cupola ユーザー, I want 設定ファイル（`.cupola/cupola.toml`）の全設定項目と意味を参照したい, so that プロジェクトに合わせた設定ができる
 
 #### Acceptance Criteria
-1. The README shall `cupola.toml` の全設定項目を網羅する
+1. The README shall 設定ファイル（`.cupola/cupola.toml`）の全設定項目を網羅する
 2. The README shall 各項目の型、デフォルト値、説明を記述する
-3. The README shall 設定ファイルの完全な記述例を提供する
+3. The README shall 設定ファイル（`.cupola/cupola.toml`）の完全な記述例を提供する
 
 ### Requirement 7: アーキテクチャ概要セクション
 **Objective:** As a Cupola にコントリビュートしたい開発者, I want コードベースの構造を理解したい, so that 変更すべき箇所を素早く特定できる
