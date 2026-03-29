@@ -1,0 +1,9 @@
+/target
+
+# Cupola - local runtime files
+.cupola/worktrees/
+.cupola/cupola.db
+.cupola/cupola.db-wal
+.cupola/cupola.db-shm
+.cupola/logs/
+.cupola/inputs/
