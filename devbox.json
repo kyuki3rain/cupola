@@ -3,7 +3,8 @@
   "packages": [
     "rustup@latest",
     "git@latest",
-    "nodejs@latest"
+    "nodejs@latest",
+    "sqlite@latest"
   ],
   "shell": {
     "init_hook": [
