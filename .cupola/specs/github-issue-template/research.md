@@ -5,7 +5,7 @@
 - **Discovery Scope**: Simple Addition
 - **Key Findings**:
   - GitHub Issue Forms は YAML ベースのフォーム定義で、`textarea`、`input`、`markdown` などのフィールドタイプをサポートする
-  - `required: true` を設定することで GitHub 側でバリデーションが行われ、未入力の Issue 作成を防止できる
+  - `validations.required: true` を設定することで GitHub 側でバリデーションが行われ、未入力の Issue 作成を防止できる
   - `title` プロパティの `default` にプレフィックスを設定可能だが、ラベルの自動付与は `labels` プロパティで制御する
 
 ## Research Log

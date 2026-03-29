@@ -43,6 +43,6 @@ Cupola 用の GitHub Issue テンプレート（`.github/ISSUE_TEMPLATE/cupola-t
 **Objective:** As a 開発チーム, I want このタスクのスコープを明確にする, so that 不要な成果物を作成しない
 
 #### Acceptance Criteria
-1. The 成果物 shall Issue テンプレート YAML ファイルのみを含む
+1. このタスクにおけるプロダクト成果物（`.github/ISSUE_TEMPLATE/` 配下に追加するファイル）は Issue テンプレート YAML ファイルのみとし、`.cupola/specs/` 配下にコミットされる設計成果物（requirements/design/tasks/research/spec.json など）はこの制約の対象外とする
 2. The 成果物 shall PR テンプレートを含まない
 3. The 成果物 shall ラベルの作成を含まない

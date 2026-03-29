@@ -64,7 +64,7 @@
 
 **Responsibilities & Constraints**
 - GitHub Issue Forms 仕様に準拠した YAML ファイルとして定義する
-- 必須フィールド（概要・背景・動機・要求事項）は `validations.required: true` を設定する
+- 必須フィールド（「概要」「背景・動機」「要求事項」）は `validations.required: true` を設定する
 - 任意フィールド（スコープ・技術的コンテキスト・受け入れ条件・補足事項）は `validations.required: false` を設定する
 - `labels` プロパティは設定しない（`agent:ready` ラベルの自動付与を抑止）
 
@@ -140,7 +140,7 @@ body:
 **Implementation Notes**
 - ファイル配置パス: `.github/ISSUE_TEMPLATE/cupola-task.yml`
 - `labels` プロパティを意図的に省略することで、ラベルの自動付与を抑止する
-- `title` の `default` に `[cupola] ` プレフィックスを設定し、ユーザーが続きを入力する形式にする
+- `title` に `[cupola] ` プレフィックスを設定し、ユーザーが続きを入力する形式にする
 
 ## Testing Strategy
 
