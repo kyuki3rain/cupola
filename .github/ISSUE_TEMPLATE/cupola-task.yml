@@ -1,0 +1,113 @@
+name: cupola タスク
+description: cupola による自動設計・実装を依頼する
+title: "[cupola] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        このテンプレートは cupola に自動設計・実装を依頼するためのものです。
+        cc-sdd の requirements フェーズの入力として使用されます。
+        できるだけ具体的に記述してください。
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 概要
+      description: |
+        何を作るのか、1〜3 文で簡潔に説明してください。
+      placeholder: "例: ユーザープロフィール画面を新規作成する"
+    validations:
+      required: true
+
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景・動機
+      description: |
+        なぜこの変更が必要なのか。現状の問題点や、この機能が解決する課題を記述してください。
+      placeholder: |
+        例:
+        現在、ユーザー情報を確認する手段がない。
+        設定画面から間接的に見ることはできるが、導線が深く使いにくい。
+    validations:
+      required: true
+
+  - type: textarea
+    id: requirements
+    attributes:
+      label: 要求事項
+      description: |
+        実現すべきことを箇条書きで列挙してください。
+        機能要件・非機能要件の区別は不要です。思いつく限り書いてください。
+      placeholder: |
+        例:
+        - ユーザー名、メールアドレス、アバターを表示する
+        - アバターはクリックで変更できる
+        - レスポンシブ対応必須
+        - 表示速度は 200ms 以内
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: スコープ（やること / やらないこと）
+      description: |
+        この Issue の範囲を明確にするために、含めるものと含めないものを記述してください。
+      placeholder: |
+        例:
+        やること:
+        - プロフィール画面の表示
+        - アバター変更機能
+
+        やらないこと:
+        - パスワード変更（別 Issue で対応）
+    validations:
+      required: false
+
+  - type: textarea
+    id: technical_context
+    attributes:
+      label: 技術的コンテキスト
+      description: |
+        関連するファイル、モジュール、API、既存の設計判断など、
+        設計・実装の参考になる技術情報があれば記述してください。
+      placeholder: |
+        例:
+        - 関連ファイル: src/pages/settings.tsx
+        - 既存の User モデル: src/models/user.ts
+        - API: GET /api/users/:id は実装済み
+        - デザインシステム: shadcn/ui を使用
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: 受け入れ条件
+      description: |
+        この Issue が「完了」と判断できる条件を記述してください。
+        テスト観点やレビュー時の確認項目として使われます。
+      placeholder: |
+        例:
+        - /profile にアクセスするとプロフィール画面が表示される
+        - アバターをクリックするとファイル選択ダイアログが開く
+        - 選択した画像がアバターとして反映される
+        - モバイル幅（375px）で崩れない
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: 補足事項
+      description: |
+        その他、設計・実装に影響しうる情報があれば自由に記述してください。
+        参考リンク、類似実装、懸念事項など。
+      placeholder: |
+        例:
+        - 参考: https://example.com/design-spec
+        - 将来的にチーム機能を追加予定なので、拡張性を意識してほしい
+    validations:
+      required: false
