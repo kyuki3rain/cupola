@@ -22,6 +22,8 @@ use cupola::domain::state::State;
 struct MockGitHubState {
     comments: Vec<(u64, String)>,
     closed_issues: Vec<u64>,
+    merged_prs: Vec<u64>,
+    closed_github_issues: Vec<u64>,
 }
 
 struct MockGitHubClient {
@@ -48,14 +50,19 @@ impl GitHubClient for MockGitHubClient {
             labels: vec![],
         })
     }
-    async fn is_issue_open(&self, _n: u64) -> Result<bool> {
-        Ok(true)
+    async fn is_issue_open(&self, issue_number: u64) -> Result<bool> {
+        Ok(!self
+            .state
+            .lock()
+            .unwrap()
+            .closed_github_issues
+            .contains(&issue_number))
     }
     async fn find_pr_by_branches(&self, _h: &str, _b: &str) -> Result<Option<GitHubPr>> {
         Ok(None)
     }
-    async fn is_pr_merged(&self, _n: u64) -> Result<bool> {
-        Ok(false)
+    async fn is_pr_merged(&self, pr_number: u64) -> Result<bool> {
+        Ok(self.state.lock().unwrap().merged_prs.contains(&pr_number))
     }
     async fn list_unresolved_threads(&self, _n: u64) -> Result<Vec<ReviewThread>> {
         Ok(vec![])
@@ -129,6 +136,7 @@ fn new_issue(issue_number: u64) -> Issue {
         retry_count: 0,
         current_pid: None,
         error_message: None,
+        feature_name: None,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     }
@@ -486,4 +494,125 @@ async fn session_manager_stall_detection() {
     let exited = mgr.collect_exited();
     assert_eq!(exited.len(), 1);
     assert!(!exited[0].exit_status.success());
+}
+
+// === Polling-bugfix: Issue close + PR merge priority tests ===
+
+#[tokio::test]
+async fn impl_review_waiting_issue_close_with_merged_pr_becomes_completed() {
+    let (repo, github, config) = setup();
+    let worktree = MockGitWorktree;
+
+    let uc = TransitionUseCase {
+        github: &github,
+        issue_repo: &repo,
+        worktree: &worktree,
+        config: &config,
+    };
+
+    // Set up issue in ImplementationReviewWaiting with impl_pr_number
+    let mut issue = uc.handle_issue_detected(100).await.expect("detect");
+    issue.worktree_path = Some("/tmp/wt".into());
+    issue.state = State::ImplementationReviewWaiting;
+    issue.impl_pr_number = Some(500);
+    repo.update(&issue).await.expect("update");
+    repo.update_state(issue.id, State::ImplementationReviewWaiting)
+        .await
+        .expect("update state");
+
+    // Mark PR as merged and Issue as closed on GitHub (simulates Closes #N)
+    github.state.lock().unwrap().merged_prs.push(500);
+    github.state.lock().unwrap().closed_github_issues.push(100);
+
+    // Simulate: Issue close detected, but PR is merged → should become completed
+    // This is what resolve_close_event_for_issue does
+    use cupola::application::polling_use_case::PollingUseCase;
+    use cupola::application::port::claude_code_runner::ClaudeCodeRunner;
+    use std::path::Path;
+    use std::process::Child;
+
+    struct DummyRunner;
+    impl ClaudeCodeRunner for DummyRunner {
+        fn spawn(&self, _p: &str, _d: &Path, _s: Option<&str>) -> Result<Child> {
+            anyhow::bail!("not implemented")
+        }
+    }
+
+    struct DummyExecLog;
+    impl cupola::application::port::execution_log_repository::ExecutionLogRepository for DummyExecLog {
+        async fn record_start(&self, _: i64, _: State) -> Result<i64> {
+            Ok(0)
+        }
+        async fn record_finish(
+            &self,
+            _: i64,
+            _: Option<i32>,
+            _: Option<&str>,
+            _: Option<&str>,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn find_by_issue(
+            &self,
+            _: i64,
+        ) -> Result<Vec<cupola::domain::execution_log::ExecutionLog>> {
+            Ok(vec![])
+        }
+    }
+
+    let mut polling =
+        PollingUseCase::new(github, repo, DummyExecLog, DummyRunner, worktree, config);
+
+    // Run one cycle — Issue is closed + PR is merged
+    // Step 1 should detect close, check merge, emit ImplementationPrMerged
+    // Step 6 should apply it → completed
+    polling.run_cycle().await.expect("cycle");
+
+    // Verify: The issue should be completed, not cancelled
+    let final_issue = polling
+        .issue_repo_ref()
+        .find_by_id(issue.id)
+        .await
+        .expect("find")
+        .expect("exists");
+    assert_eq!(
+        final_issue.state,
+        State::Completed,
+        "Should be completed, not cancelled"
+    );
+}
+
+#[tokio::test]
+async fn impl_review_waiting_issue_close_without_merge_becomes_cancelled() {
+    let (repo, github, config) = setup();
+    let worktree = MockGitWorktree;
+
+    let uc = TransitionUseCase {
+        github: &github,
+        issue_repo: &repo,
+        worktree: &worktree,
+        config: &config,
+    };
+
+    let mut issue = uc.handle_issue_detected(101).await.expect("detect");
+    issue.worktree_path = Some("/tmp/wt".into());
+    issue.state = State::ImplementationReviewWaiting;
+    issue.impl_pr_number = Some(501);
+    repo.update(&issue).await.expect("update");
+    repo.update_state(issue.id, State::ImplementationReviewWaiting)
+        .await
+        .expect("update state");
+
+    // PR is NOT merged — IssueClosed should lead to cancelled
+    // (merged_prs is empty)
+
+    // Apply IssueClosed directly via TransitionUseCase
+    uc.apply(&mut issue, &Event::IssueClosed)
+        .await
+        .expect("close");
+    assert_eq!(
+        issue.state,
+        State::Cancelled,
+        "Should be cancelled when PR is not merged"
+    );
 }

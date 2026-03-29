@@ -160,6 +160,7 @@ mod tests {
             retry_count: 1,
             current_pid: None,
             error_message: None,
+            feature_name: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };

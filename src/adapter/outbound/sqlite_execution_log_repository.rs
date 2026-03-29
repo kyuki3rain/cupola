@@ -144,6 +144,7 @@ mod tests {
             retry_count: 0,
             current_pid: None,
             error_message: None,
+            feature_name: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }

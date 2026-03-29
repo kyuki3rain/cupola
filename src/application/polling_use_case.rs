@@ -162,7 +162,11 @@ where
                 for issue in &active_issues {
                     match self.github.is_issue_open(issue.github_issue_number).await {
                         Ok(false) => {
-                            events.push((issue.id, Event::IssueClosed));
+                            // For review_waiting states, check if PR was merged first.
+                            // GitHub's "Closes #N" auto-closes the Issue on PR merge,
+                            // so we need to distinguish merge-close from manual-close.
+                            let event = self.resolve_close_event_for_issue(issue).await;
+                            events.push((issue.id, event));
                         }
                         Ok(true) => {}
                         Err(e) => {
@@ -483,6 +487,7 @@ where
                 issue.github_issue_number,
                 &self.config,
                 pr_number,
+                issue.feature_name.as_deref(),
             );
 
             let schema = match session_config.output_schema {
@@ -581,10 +586,18 @@ where
 
         let pr_number = self.github.create_pr(&head, &base, title, body).await?;
 
-        // Record PR number in DB
+        // Record PR number (and feature_name for design phase) in DB
         let mut updated = issue.clone();
         match issue.state {
-            State::DesignRunning => updated.design_pr_number = Some(pr_number),
+            State::DesignRunning => {
+                updated.design_pr_number = Some(pr_number);
+                if let Some(ref output) = output
+                    && let Some(ref name) = output.feature_name
+                {
+                    updated.feature_name = Some(name.clone());
+                    tracing::info!(feature_name = %name, "recorded feature_name from design output");
+                }
+            }
             State::ImplementationRunning => updated.impl_pr_number = Some(pr_number),
             _ => {}
         }
@@ -617,6 +630,50 @@ where
     }
 
     // --- Helpers ---
+
+    /// For review_waiting states, check if the PR was merged before emitting IssueClosed.
+    /// This handles the case where GitHub's "Closes #N" auto-closes the Issue on PR merge.
+    async fn resolve_close_event_for_issue(&self, issue: &Issue) -> Event {
+        let pr_number = match issue.state {
+            State::DesignReviewWaiting => issue.design_pr_number,
+            State::ImplementationReviewWaiting => issue.impl_pr_number,
+            _ => return Event::IssueClosed,
+        };
+
+        let Some(pr_num) = pr_number else {
+            return Event::IssueClosed;
+        };
+
+        match self.github.is_pr_merged(pr_num).await {
+            Ok(true) => {
+                tracing::info!(
+                    issue_id = issue.id,
+                    pr_number = pr_num,
+                    "Issue closed but PR is merged — treating as merge event"
+                );
+                match issue.state {
+                    State::DesignReviewWaiting => Event::DesignPrMerged,
+                    State::ImplementationReviewWaiting => Event::ImplementationPrMerged,
+                    _ => unreachable!(),
+                }
+            }
+            Ok(false) => Event::IssueClosed,
+            Err(e) => {
+                tracing::warn!(
+                    issue_id = issue.id,
+                    pr_number = pr_num,
+                    error = %e,
+                    "failed to check PR merge on issue close, falling back to IssueClosed"
+                );
+                Event::IssueClosed
+            }
+        }
+    }
+
+    /// Access the issue repository (for testing).
+    pub fn issue_repo_ref(&self) -> &I {
+        &self.issue_repo
+    }
 
     fn transition_uc(&self) -> TransitionUseCase<'_, G, I, W> {
         TransitionUseCase {

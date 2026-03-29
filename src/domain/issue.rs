@@ -13,6 +13,7 @@ pub struct Issue {
     pub retry_count: u32,
     pub current_pid: Option<u32>,
     pub error_message: Option<String>,
+    pub feature_name: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

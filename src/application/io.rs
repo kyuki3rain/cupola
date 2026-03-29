@@ -77,6 +77,7 @@ struct CommentEntry {
 pub struct PrCreationOutput {
     pub pr_title: Option<String>,
     pub pr_body: Option<String>,
+    pub feature_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -12,7 +12,7 @@ pub enum OutputSchemaKind {
     Fixing,
 }
 
-pub const PR_CREATION_SCHEMA: &str = r#"{"type":"object","properties":{"pr_title":{"type":"string","description":"PR のタイトル"},"pr_body":{"type":"string","description":"PR の body（Markdown 形式）"}},"required":["pr_title","pr_body"]}"#;
+pub const PR_CREATION_SCHEMA: &str = r#"{"type":"object","properties":{"pr_title":{"type":"string","description":"PR のタイトル"},"pr_body":{"type":"string","description":"PR の body（Markdown 形式）"},"feature_name":{"type":"string","description":"cc-sdd の feature name（.cupola/specs/ 配下のディレクトリ名）"}},"required":["pr_title","pr_body"]}"#;
 
 pub const FIXING_SCHEMA: &str = r#"{"type":"object","properties":{"threads":{"type":"array","items":{"type":"object","properties":{"thread_id":{"type":"string","description":"対応した review thread の ID（PRRT_...）"},"response":{"type":"string","description":"review thread への返信内容"},"resolved":{"type":"boolean","description":"この thread を resolve するか"}},"required":["thread_id","response","resolved"]}}},"required":["threads"]}"#;
 
@@ -21,6 +21,7 @@ pub fn build_session_config(
     issue_number: u64,
     config: &Config,
     pr_number: Option<u64>,
+    feature_name: Option<&str>,
 ) -> SessionConfig {
     match state {
         State::DesignRunning => SessionConfig {
@@ -35,7 +36,7 @@ pub fn build_session_config(
             }
         }
         State::ImplementationRunning => SessionConfig {
-            prompt: build_implementation_prompt(issue_number, &config.language),
+            prompt: build_implementation_prompt(issue_number, &config.language, feature_name),
             output_schema: OutputSchemaKind::PrCreation,
         },
         State::ImplementationFixing => {
@@ -103,6 +104,7 @@ PR の作成はシステム側で行います。以下の情報を出力して�
 
 - pr_title: 設計 PR のタイトル。"Design: <Issue の要約>" の形式
 - pr_body: 設計 PR の body。{language} で記述すること
+- feature_name: cc-sdd の feature name（spec-init で生成した .cupola/specs/ 配下のディレクトリ名）
 
 ## 制約事項
 
@@ -112,7 +114,20 @@ PR の作成はシステム側で行います。以下の情報を出力して�
     )
 }
 
-fn build_implementation_prompt(issue_number: u64, language: &str) -> String {
+fn build_implementation_prompt(
+    issue_number: u64,
+    language: &str,
+    feature_name: Option<&str>,
+) -> String {
+    let feature_instruction = match feature_name {
+        Some(name) => format!(
+            "1. cc-sdd による実装を実行する\n   /kiro:spec-impl {name}\n   タスクを TDD で順次実行すること"
+        ),
+        None => "1. スペックの feature name を確認する\n   ls .cupola/specs/ で feature ディレクトリを特定\n   （複数存在する場合は spec.json の phase が \"tasks-generated\" のものを選択）\n\n2. cc-sdd による実装を実行する\n   /kiro:spec-impl <feature_name>\n   タスクを TDD で順次実行すること".to_string(),
+    };
+
+    let push_step = if feature_name.is_some() { "2" } else { "3" };
+
     format!(
         r#"あなたは自動実装エージェントです。設計書に基づき、cc-sdd による実装を行ってください。
 
@@ -123,14 +138,9 @@ fn build_implementation_prompt(issue_number: u64, language: &str) -> String {
 
 ## 手順
 
-1. スペックの feature name を確認する
-   ls .cupola/specs/ で feature ディレクトリを特定
+{feature_instruction}
 
-2. cc-sdd による実装を実行する
-   /kiro:spec-impl <feature_name>
-   タスクを TDD で順次実行すること
-
-3. 成果物を commit / push する
+{push_step}. 成果物を commit / push する
    最終的に git push
 
 ## output-schema への出力
@@ -198,7 +208,7 @@ mod tests {
     #[test]
     fn design_running_returns_pr_creation_schema() {
         let config = test_config();
-        let session = build_session_config(State::DesignRunning, 42, &config, None);
+        let session = build_session_config(State::DesignRunning, 42, &config, None, None);
         assert_eq!(session.output_schema, OutputSchemaKind::PrCreation);
         assert!(session.prompt.contains("自動設計エージェント"));
         assert!(session.prompt.contains("#42"));
@@ -207,7 +217,13 @@ mod tests {
     #[test]
     fn implementation_running_returns_pr_creation_schema() {
         let config = test_config();
-        let session = build_session_config(State::ImplementationRunning, 42, &config, None);
+        let session = build_session_config(
+            State::ImplementationRunning,
+            42,
+            &config,
+            None,
+            Some("my-feature"),
+        );
         assert_eq!(session.output_schema, OutputSchemaKind::PrCreation);
         assert!(session.prompt.contains("自動実装エージェント"));
     }
@@ -215,7 +231,7 @@ mod tests {
     #[test]
     fn design_fixing_returns_fixing_schema() {
         let config = test_config();
-        let session = build_session_config(State::DesignFixing, 42, &config, Some(85));
+        let session = build_session_config(State::DesignFixing, 42, &config, Some(85), None);
         assert_eq!(session.output_schema, OutputSchemaKind::Fixing);
         assert!(session.prompt.contains("レビュー対応エージェント"));
     }
@@ -223,7 +239,8 @@ mod tests {
     #[test]
     fn implementation_fixing_returns_fixing_schema() {
         let config = test_config();
-        let session = build_session_config(State::ImplementationFixing, 42, &config, Some(90));
+        let session =
+            build_session_config(State::ImplementationFixing, 42, &config, Some(90), None);
         assert_eq!(session.output_schema, OutputSchemaKind::Fixing);
     }
 

@@ -52,7 +52,8 @@ impl SqliteConnection {
                 current_pid         INTEGER,
                 created_at          TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
-                error_message       TEXT
+                error_message       TEXT,
+                feature_name        TEXT
             );
 
             CREATE TABLE IF NOT EXISTS execution_log (
@@ -70,6 +71,10 @@ impl SqliteConnection {
                 ON execution_log(issue_id);",
         )
         .context("failed to initialize SQLite schema")?;
+
+        // Migration: add feature_name column for existing databases
+        let _ = conn.execute_batch("ALTER TABLE issues ADD COLUMN feature_name TEXT;");
+
         Ok(())
     }
 
