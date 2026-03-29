@@ -31,7 +31,7 @@
 ### README.md の現状
 - **Context**: 既存の README.md 構造の確認
 - **Findings**:
-  - `## License` セクションが既に存在（229行目）
+  - `## License` セクションが既に存在
   - 現在は「License is TBD. A link will be added here once the LICENSE file is created.」と記載
   - Table of Contents にも `[License](#license)` が含まれている
 - **Implications**: 新規セクション追加は不要、既存セクションの内容を更新するだけでよい

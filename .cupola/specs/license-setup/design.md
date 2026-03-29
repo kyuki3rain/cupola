@@ -69,7 +69,7 @@
 | Requirements | 2.1, 2.2, 2.3 |
 
 **Responsibilities & Constraints**
-- 既存の `## License` セクション（229行目付近）の内容を置換する
+- 既存の `## License` セクションの内容を置換する（行番号ではなく見出しを基準に特定する）
 - Apache License 2.0 であることを明記する
 - LICENSE ファイルへの参照リンクを含める
 
