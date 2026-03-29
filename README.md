@@ -1,62 +1,62 @@
 # Cupola
 
-GitHub Issue を起点に、設計から実装までを自動化するローカル常駐エージェント。
+A locally-resident agent that automates from design to implementation, starting from GitHub Issues.
 
-## 目次
+## Table of Contents
 
-- [プロジェクト概要](#プロジェクト概要)
-- [前提条件](#前提条件)
-- [インストール・セットアップ](#インストールセットアップ)
-- [使い方](#使い方)
-- [CLI コマンドリファレンス](#cli-コマンドリファレンス)
-- [設定ファイルリファレンス](#設定ファイルリファレンス)
-- [アーキテクチャ概要](#アーキテクチャ概要)
-- [ライセンス](#ライセンス)
+- [Project Overview](#project-overview)
+- [Prerequisites](#prerequisites)
+- [Installation & Setup](#installation--setup)
+- [Usage](#usage)
+- [CLI Command Reference](#cli-command-reference)
+- [Configuration Reference](#configuration-reference)
+- [Architecture Overview](#architecture-overview)
+- [License](#license)
 
-## プロジェクト概要
+## Project Overview
 
-Cupola は、GitHub Issue / PR を唯一の操作面とし、Claude Code + cc-sdd を駆動して設計・実装を自動化するローカル常駐エージェントです。人間は Issue 作成・ラベル付与・PR レビューのみを行い、設計ドキュメント生成から実装、レビュー対応、完了 cleanup までを Cupola が自動化します。GitHub の既存ワークフロー（Issue + PR + review）をそのまま活用し、専用 UI なしで品質担保と自動化を両立します。
+Cupola is a locally-resident agent that uses GitHub Issues and PRs as its sole interface, driving Claude Code + cc-sdd to automate design and implementation. Humans only create Issues, assign labels, and review PRs — Cupola handles everything from design document generation to implementation, review response, and completion cleanup. By leveraging GitHub's existing workflow (Issues + PRs + reviews), Cupola achieves both quality assurance and automation without any dedicated UI.
 
-## 前提条件
+## Prerequisites
 
-| ツール | 用途 | 備考 |
-|--------|------|------|
-| Rust stable | ビルド | devbox 経由で管理 |
-| Claude Code CLI | AI コード生成 | Anthropic 提供 |
-| gh CLI | GitHub API 操作 | GitHub 公式 |
-| Git | バージョン管理 | &#8212; |
-| devbox | 開発環境管理 | Nix ベース |
+| Tool | Purpose | Notes |
+|------|---------|-------|
+| Rust stable | Build | Managed via devbox |
+| Claude Code CLI | AI code generation | Provided by Anthropic |
+| gh CLI | GitHub API operations | GitHub official |
+| Git | Version control | — |
+| devbox | Development environment management | Nix-based |
 
-**cc-sdd（spec-driven development）** は、要件定義・設計・タスク分解・実装を段階的に進める仕様駆動開発の手法です。Cupola は内部で cc-sdd を駆動し、Issue の内容から requirements / design / tasks を自動生成した上で実装を行います。
+**cc-sdd (spec-driven development)** is a specification-driven development methodology that progressively advances through requirements definition, design, task decomposition, and implementation. Cupola internally drives cc-sdd to automatically generate requirements, design, and tasks from Issue content before proceeding with implementation.
 
-devbox を利用する場合、リポジトリルートで `devbox shell` を実行すると必要なツール（Rust 等）が一括でセットアップされます。
+When using devbox, run `devbox shell` at the repository root to set up all required tools (Rust, etc.) at once.
 
-## インストール・セットアップ
+## Installation & Setup
 
-1. リポジトリをクローンする
+1. Clone the repository
 
    ```bash
    git clone https://github.com/<owner>/<repo>.git
    cd <repo>
    ```
 
-2. 開発環境に入る（devbox 利用時）
+2. Enter the development environment (when using devbox)
 
    ```bash
    devbox shell
    ```
 
-   devbox を使わない場合は、Rust stable を手動でインストールしてください。
+   If not using devbox, install Rust stable manually.
 
-3. ビルド・インストールする
+3. Build and install
 
    ```bash
    cargo install --path .
    ```
 
-   > `cargo install` により `cupola` バイナリが `~/.cargo/bin/` に配置されます。PATH に `~/.cargo/bin` が含まれていることを確認してください。
+   > `cargo install` places the `cupola` binary in `~/.cargo/bin/`. Make sure `~/.cargo/bin` is in your PATH.
 
-4. `.cupola/cupola.toml` を作成する
+4. Create `.cupola/cupola.toml`
 
    ```toml
    owner = "your-github-username"
@@ -64,65 +64,65 @@ devbox を利用する場合、リポジトリルートで `devbox shell` を実
    default_branch = "main"
    ```
 
-   全設定項目の詳細は [設定ファイルリファレンス](#設定ファイルリファレンス) を参照してください。
+   See [Configuration Reference](#configuration-reference) for details on all settings.
 
-5. SQLite スキーマを初期化する
+5. Initialize the SQLite schema
 
    ```bash
    cupola init
    ```
 
-6. GitHub リポジトリに `agent:ready` ラベルを作成する
+6. Create the `agent:ready` label in your GitHub repository
 
    ```bash
    gh label create "agent:ready" --description "Cupola automation trigger"
    ```
 
-7. polling を開始する
+7. Start polling
 
    ```bash
    cupola run
    ```
 
-## 使い方
+## Usage
 
-Issue 作成から merge までのワークフロー:
+Workflow from Issue creation to merge:
 
-1. **[人間]** GitHub Issue を作成し、要求事項を記述する
-2. **[人間]** Issue に `agent:ready` ラベルを付与する &#8212; これが Cupola のトリガーとなる
-3. **[Cupola]** Issue を検知し、cc-sdd で設計ドキュメント（requirements / design / tasks）を自動生成する
-4. **[Cupola]** 設計 PR を作成する
-5. **[人間]** 設計 PR をレビューし、approve する
-6. **[Cupola]** タスクに基づき実装を自動生成する
-7. **[Cupola]** 実装 PR を作成する
-8. **[人間]** 実装 PR をレビューし、approve → merge する
-9. **[Cupola]** cleanup 処理（ラベル除去等）を実行する
+1. **[Human]** Create a GitHub Issue and describe the requirements
+2. **[Human]** Add the `agent:ready` label to the Issue — this triggers Cupola
+3. **[Cupola]** Detects the Issue and auto-generates design documents (requirements / design / tasks) using cc-sdd
+4. **[Cupola]** Creates a design PR
+5. **[Human]** Reviews and approves the design PR
+6. **[Cupola]** Auto-generates the implementation based on the tasks
+7. **[Cupola]** Creates an implementation PR
+8. **[Human]** Reviews the implementation PR, approves, and merges
+9. **[Cupola]** Executes cleanup (label removal, etc.)
 
-設計 PR と実装 PR の 2 段階レビューフローにより、人間のレビュー承認を唯一のゲートとして品質を担保します。
+The two-stage review flow (design PR and implementation PR) ensures quality with human review approval as the sole gate.
 
-## CLI コマンドリファレンス
+## CLI Command Reference
 
 ### `cupola run`
 
-polling ループを開始し、`agent:ready` ラベル付き Issue を監視します。
+Starts the polling loop and monitors Issues with the `agent:ready` label.
 
-| オプション | 説明 | デフォルト |
-|-----------|------|-----------|
-| `--polling-interval-secs <秒>` | polling 間隔の上書き（秒） | `cupola.toml` の値 |
-| `--log-level <レベル>` | ログレベルの上書き（trace / debug / info / warn / error） | `cupola.toml` の値 |
-| `--config <パス>` | 設定ファイルパス | `.cupola/cupola.toml` |
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--polling-interval-secs <seconds>` | Override polling interval (seconds) | Value from `cupola.toml` |
+| `--log-level <level>` | Override log level (trace / debug / info / warn / error) | Value from `cupola.toml` |
+| `--config <path>` | Configuration file path | `.cupola/cupola.toml` |
 
 ```bash
-# デフォルト設定で起動
+# Start with default settings
 cupola run
 
-# polling 間隔とログレベルを指定して起動
+# Start with custom polling interval and log level
 cupola run --polling-interval-secs 30 --log-level debug
 ```
 
 ### `cupola init`
 
-SQLite スキーマを初期化します。初回セットアップ時に一度実行してください。
+Initializes the SQLite schema. Run once during initial setup.
 
 ```bash
 cupola init
@@ -130,29 +130,29 @@ cupola init
 
 ### `cupola status`
 
-全 Issue の処理状態を一覧表示します。
+Lists the processing status of all Issues.
 
 ```bash
 cupola status
 ```
 
-## 設定ファイルリファレンス
+## Configuration Reference
 
-設定ファイルは `.cupola/cupola.toml` に配置します。
+The configuration file is located at `.cupola/cupola.toml`.
 
-| 項目 | 型 | デフォルト値 | 説明 |
-|------|----|-------------|------|
-| `owner` | String | &#8212; (必須) | GitHub リポジトリオーナー |
-| `repo` | String | &#8212; (必須) | GitHub リポジトリ名 |
-| `default_branch` | String | &#8212; (必須) | デフォルトブランチ名 |
-| `language` | String | `"ja"` | 生成ドキュメントの言語 |
-| `polling_interval_secs` | u64 | `60` | polling 間隔（秒） |
-| `max_retries` | u32 | `3` | 最大リトライ回数 |
-| `stall_timeout_secs` | u64 | `1800` | stall 判定タイムアウト（秒） |
-| `[log] level` | String | `"info"` | ログレベル |
-| `[log] dir` | String | &#8212; (任意) | ログ出力ディレクトリ |
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `owner` | String | — (required) | GitHub repository owner |
+| `repo` | String | — (required) | GitHub repository name |
+| `default_branch` | String | — (required) | Default branch name |
+| `language` | String | `"ja"` | Language for generated documents |
+| `polling_interval_secs` | u64 | `60` | Polling interval (seconds) |
+| `max_retries` | u32 | `3` | Maximum retry count |
+| `stall_timeout_secs` | u64 | `1800` | Stall detection timeout (seconds) |
+| `[log] level` | String | `"info"` | Log level |
+| `[log] dir` | String | — (optional) | Log output directory |
 
-完全な設定例:
+Full configuration example:
 
 ```toml
 owner = "your-github-username"
@@ -168,18 +168,18 @@ level = "info"
 dir = ".cupola/logs"
 ```
 
-## アーキテクチャ概要
+## Architecture Overview
 
-Cupola は Clean Architecture（4 レイヤー）を採用しています。依存方向は内向きのみです。
+Cupola adopts Clean Architecture (4 layers). Dependencies point inward only.
 
-| レイヤー | ディレクトリ | 責務 |
-|---------|-------------|------|
-| domain | `src/domain/` | 純粋ビジネスロジック。State, Event, StateMachine, Issue, Config。I/O 依存なし |
-| application | `src/application/` | ユースケースとポート（trait）定義。外部依存を trait で抽象化 |
-| adapter | `src/adapter/` | 外部接続の実装。inbound（CLI）/ outbound（GitHub, SQLite, Claude Code, Git） |
-| bootstrap | `src/bootstrap/` | DI 配線、設定読み込み、ランタイム起動 |
+| Layer | Directory | Responsibility |
+|-------|-----------|----------------|
+| domain | `src/domain/` | Pure business logic. State, Event, StateMachine, Issue, Config. No I/O dependencies |
+| application | `src/application/` | Use cases and port (trait) definitions. External dependencies abstracted via traits |
+| adapter | `src/adapter/` | External connection implementations. inbound (CLI) / outbound (GitHub, SQLite, Claude Code, Git) |
+| bootstrap | `src/bootstrap/` | DI wiring, configuration loading, runtime startup |
 
-依存方向: `domain` ← `application` ← `adapter` ← `bootstrap`（内向きのみ）
+Dependency direction: `domain` ← `application` ← `adapter` ← `bootstrap` (inward only)
 
 ```
 src/
@@ -224,6 +224,6 @@ src/
     └── logging.rs
 ```
 
-## ライセンス
+## License
 
-> ライセンスは未定です。LICENSE ファイルが作成され次第、ここにリンクを追加します。
+> License is TBD. A link will be added here once the LICENSE file is created.
