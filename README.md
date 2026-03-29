@@ -1,5 +1,7 @@
 # Cupola
 
+[日本語](./README.ja.md)
+
 A locally-resident agent that automates from design to implementation, starting from GitHub Issues.
 
 ## Table of Contents
