@@ -48,11 +48,13 @@ devbox を利用する場合、リポジトリルートで `devbox shell` を実
 
    devbox を使わない場合は、Rust stable を手動でインストールしてください。
 
-3. ビルドする
+3. ビルド・インストールする
 
    ```bash
-   cargo build
+   cargo install --path .
    ```
+
+   > `cargo install` により `cupola` バイナリが `~/.cargo/bin/` に配置されます。PATH に `~/.cargo/bin` が含まれていることを確認してください。
 
 4. `.cupola/cupola.toml` を作成する
 
