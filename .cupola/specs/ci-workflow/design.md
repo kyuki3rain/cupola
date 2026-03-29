@@ -45,7 +45,7 @@ graph TB
 
 **Architecture Integration**:
 - Selected pattern: 単一ジョブ逐次実行 — プロジェクト規模が小さくシンプルさを優先
-- 既存パターン: steering の tech.md に定義されたコマンド（`cargo fmt --check`, `cargo clippy`, `cargo test`）をそのまま CI に反映
+- 既存パターン: steering の tech.md に定義されたコマンド（`cargo fmt -- --check`, `cargo clippy`, `cargo test`）をそのまま CI に反映
 - 新コンポーネント: `.github/workflows/ci.yml` のみ（既存コードへの変更なし）
 
 ### Technology Stack
