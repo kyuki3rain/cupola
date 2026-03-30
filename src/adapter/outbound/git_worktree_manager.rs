@@ -54,6 +54,11 @@ impl GitWorktreeManager {
 }
 
 impl GitWorktree for GitWorktreeManager {
+    fn fetch(&self) -> Result<()> {
+        self.run_git(&["fetch", "origin"])
+            .context("failed to fetch from origin")
+    }
+
     fn create(&self, path: &Path, branch: &str, start_point: &str) -> Result<()> {
         if path.exists() {
             tracing::info!(path = %path.display(), "worktree already exists, skipping create");

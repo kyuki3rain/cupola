@@ -99,6 +99,9 @@ impl GitHubClient for MockGitHubClient {
 struct MockGitWorktree;
 
 impl GitWorktree for MockGitWorktree {
+    fn fetch(&self) -> Result<()> {
+        Ok(())
+    }
     fn create(&self, _p: &Path, _b: &str, _s: &str) -> Result<()> {
         Ok(())
     }
@@ -886,4 +889,179 @@ async fn session_count_decreases_after_process_exit() {
     assert_eq!(mgr.count(), 1, "only sleep process should remain");
 
     mgr.kill_all();
+}
+
+// === Task 3.2: initialize_issue の動作変更テスト ===
+
+struct TrackingGitWorktree {
+    call_log: Arc<Mutex<Vec<String>>>,
+    fetch_fails: bool,
+}
+
+impl TrackingGitWorktree {
+    fn new() -> Self {
+        Self {
+            call_log: Arc::new(Mutex::new(Vec::new())),
+            fetch_fails: false,
+        }
+    }
+
+    fn with_failing_fetch() -> Self {
+        Self {
+            call_log: Arc::new(Mutex::new(Vec::new())),
+            fetch_fails: true,
+        }
+    }
+
+    fn calls(&self) -> Vec<String> {
+        self.call_log.lock().unwrap().clone()
+    }
+}
+
+impl GitWorktree for TrackingGitWorktree {
+    fn fetch(&self) -> Result<()> {
+        self.call_log.lock().unwrap().push("fetch".to_string());
+        if self.fetch_fails {
+            anyhow::bail!("fetch failed: network error");
+        }
+        Ok(())
+    }
+    fn create(&self, _p: &Path, _b: &str, start_point: &str) -> Result<()> {
+        self.call_log
+            .lock()
+            .unwrap()
+            .push(format!("create:{}", start_point));
+        Ok(())
+    }
+    fn remove(&self, _p: &Path) -> Result<()> {
+        Ok(())
+    }
+    fn create_branch(&self, _p: &Path, _b: &str) -> Result<()> {
+        Ok(())
+    }
+    fn checkout(&self, _p: &Path, _b: &str) -> Result<()> {
+        Ok(())
+    }
+    fn pull(&self, _p: &Path) -> Result<()> {
+        Ok(())
+    }
+    fn push(&self, _p: &Path, _b: &str) -> Result<()> {
+        Ok(())
+    }
+    fn delete_branch(&self, _b: &str) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn initialize_issue_calls_fetch_before_create() {
+    let db = SqliteConnection::open_in_memory().expect("open");
+    db.init_schema().expect("init");
+    let repo = SqliteIssueRepository::new(db);
+    let github = MockGitHubClient::new();
+    let config = test_config();
+    let worktree = TrackingGitWorktree::new();
+
+    let uc = TransitionUseCase {
+        github: &github,
+        issue_repo: &repo,
+        worktree: &worktree,
+        config: &config,
+    };
+
+    // Issue を Initialized 状態で作成
+    let issue = uc.handle_issue_detected(200).await.expect("detect");
+    assert_eq!(issue.state, State::Initialized);
+
+    // step2_initialized_recovery を通じて initialize_issue が呼ばれる
+    let exec_log = MockExecutionLogRepository;
+    let claude_runner = MockClaudeCodeRunner;
+    let mut polling = PollingUseCase::new(github, repo, exec_log, claude_runner, worktree, config);
+    polling.run_cycle().await.expect("cycle");
+
+    // fetch が create より前に呼ばれていることを確認
+    let calls = polling.worktree_ref().calls();
+    let fetch_pos = calls.iter().position(|c| c == "fetch");
+    let create_pos = calls.iter().position(|c| c.starts_with("create:"));
+    assert!(fetch_pos.is_some(), "fetch should have been called");
+    assert!(create_pos.is_some(), "create should have been called");
+    assert!(
+        fetch_pos.unwrap() < create_pos.unwrap(),
+        "fetch must be called before create, calls: {:?}",
+        calls
+    );
+}
+
+#[tokio::test]
+async fn initialize_issue_uses_remote_default_branch_as_start_point() {
+    let db = SqliteConnection::open_in_memory().expect("open");
+    db.init_schema().expect("init");
+    let repo = SqliteIssueRepository::new(db);
+    let github = MockGitHubClient::new();
+    let mut config = test_config();
+    config.default_branch = "develop".to_string();
+    let worktree = TrackingGitWorktree::new();
+
+    let uc = TransitionUseCase {
+        github: &github,
+        issue_repo: &repo,
+        worktree: &worktree,
+        config: &config,
+    };
+
+    let _issue = uc.handle_issue_detected(201).await.expect("detect");
+
+    let exec_log = MockExecutionLogRepository;
+    let claude_runner = MockClaudeCodeRunner;
+    let mut polling =
+        PollingUseCase::new(github, repo, exec_log, claude_runner, worktree, config);
+    polling.run_cycle().await.expect("cycle");
+
+    // start_point が origin/{default_branch} であることを確認
+    let calls = polling.worktree_ref().calls();
+    let create_call = calls.iter().find(|c| c.starts_with("create:"));
+    assert!(create_call.is_some(), "create should have been called");
+    assert_eq!(
+        create_call.unwrap(),
+        "create:origin/develop",
+        "start_point must be origin/{{default_branch}}, calls: {:?}",
+        calls
+    );
+}
+
+#[tokio::test]
+async fn initialize_issue_aborts_on_fetch_failure() {
+    let db = SqliteConnection::open_in_memory().expect("open");
+    db.init_schema().expect("init");
+    let repo = SqliteIssueRepository::new(db);
+    let github = MockGitHubClient::new();
+    let config = test_config();
+    let worktree = TrackingGitWorktree::with_failing_fetch();
+
+    let uc = TransitionUseCase {
+        github: &github,
+        issue_repo: &repo,
+        worktree: &worktree,
+        config: &config,
+    };
+
+    let _issue = uc.handle_issue_detected(202).await.expect("detect");
+
+    let exec_log = MockExecutionLogRepository;
+    let claude_runner = MockClaudeCodeRunner;
+    let mut polling =
+        PollingUseCase::new(github, repo, exec_log, claude_runner, worktree, config);
+    polling.run_cycle().await.expect("cycle");
+
+    // fetch が失敗しても create は呼ばれないことを確認
+    let calls = polling.worktree_ref().calls();
+    assert!(
+        calls.iter().any(|c| c == "fetch"),
+        "fetch should have been attempted"
+    );
+    assert!(
+        !calls.iter().any(|c| c.starts_with("create:")),
+        "create must NOT be called when fetch fails, calls: {:?}",
+        calls
+    );
 }

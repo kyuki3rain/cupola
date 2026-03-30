@@ -234,8 +234,11 @@ where
         let main_branch = format!("cupola/{n}/main");
         let design_branch = format!("cupola/{n}/design");
 
+        self.worktree.fetch()?;
+
+        let start_point = format!("origin/{}", self.config.default_branch);
         let wt = Path::new(&wt_path);
-        self.worktree.create(wt, &main_branch, "HEAD")?;
+        self.worktree.create(wt, &main_branch, &start_point)?;
         self.worktree.push(wt, &main_branch)?;
         self.worktree.create_branch(wt, &design_branch)?;
         self.worktree.push(wt, &design_branch)?;
@@ -745,6 +748,11 @@ where
     /// Access the issue repository (for testing).
     pub fn issue_repo_ref(&self) -> &I {
         &self.issue_repo
+    }
+
+    /// Access the worktree (for testing).
+    pub fn worktree_ref(&self) -> &W {
+        &self.worktree
     }
 
     fn transition_uc(&self) -> TransitionUseCase<'_, G, I, W> {
