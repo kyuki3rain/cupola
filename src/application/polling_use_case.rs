@@ -524,7 +524,10 @@ where
                 OutputSchemaKind::Fixing => Some(FIXING_SCHEMA),
             };
 
-            match self.claude_runner.spawn(&session_config.prompt, wt, schema, &self.config.model) {
+            match self
+                .claude_runner
+                .spawn(&session_config.prompt, wt, schema, &self.config.model)
+            {
                 Ok(child) => {
                     let pid = child.id();
                     tracing::info!(

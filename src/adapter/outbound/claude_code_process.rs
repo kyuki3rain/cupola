@@ -47,7 +47,13 @@ impl ClaudeCodeProcess {
 }
 
 impl ClaudeCodeRunner for ClaudeCodeProcess {
-    fn spawn(&self, prompt: &str, working_dir: &Path, json_schema: Option<&str>, model: &str) -> Result<Child> {
+    fn spawn(
+        &self,
+        prompt: &str,
+        working_dir: &Path,
+        json_schema: Option<&str>,
+        model: &str,
+    ) -> Result<Child> {
         self.build_command(prompt, working_dir, json_schema, model)
             .spawn()
             .context("failed to spawn Claude Code process")
