@@ -21,7 +21,7 @@
 | 要件 | 概要 | コンポーネント | インターフェース |
 |------|------|----------------|-----------------|
 | 1.1, 1.2, 1.3 | gh-token クレートの依存追加 | Cargo.toml | — |
-| 2.1, 2.2, 2.3, 2.4 | resolve_github_token() の置き換え | GithubRestClient, Bootstrap | `gh_token::get()` |
+| 2.1, 2.2, 2.3, 2.4 | resolve_github_token() の置き換え | OctocrabRestClient, Bootstrap | `gh_token::get()` |
 | 3.1, 3.2, 3.3, 3.4, 3.5 | 4段階フォールバック | gh-token クレート内部 | `gh_token::get()` |
 | 4.1, 4.2, 4.3 | エラーハンドリングの維持 | Bootstrap | `anyhow::Result<String>` |
 | 5.1, 5.2, 5.3 | 既存テストの維持 | テストモジュール | — |
@@ -117,7 +117,7 @@ sequenceDiagram
 
 ### adapter/outbound
 
-#### GithubRestClient（変更）
+#### github_rest_client.rs（変更）
 
 | Field | Detail |
 |-------|--------|
