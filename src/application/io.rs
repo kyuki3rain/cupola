@@ -71,6 +71,69 @@ struct CommentEntry {
     body: String,
 }
 
+pub struct CiErrorEntry {
+    pub check_run_name: String,
+    pub conclusion: String,
+    pub output_summary: Option<String>,
+    pub output_text: Option<String>,
+}
+
+pub fn write_ci_errors_input(worktree_path: &Path, errors: &[CiErrorEntry]) -> Result<()> {
+    let inputs_dir = worktree_path.join(".cupola/inputs");
+    std::fs::create_dir_all(&inputs_dir)
+        .with_context(|| format!("failed to create {}", inputs_dir.display()))?;
+
+    let mut content = String::from("# CI Failure Report\n");
+
+    for entry in errors {
+        content.push_str(&format!("\n## {}\n", entry.check_run_name));
+        content.push_str(&format!("Conclusion: {}\n", entry.conclusion));
+
+        if let Some(ref summary) = entry.output_summary {
+            content.push_str("\n### Summary\n");
+            content.push_str(summary);
+            content.push('\n');
+        }
+
+        if let Some(ref text) = entry.output_text {
+            content.push_str("\n### Details\n");
+            content.push_str(text);
+            content.push('\n');
+        }
+
+        content.push_str("\n---\n");
+    }
+
+    let path = inputs_dir.join("ci_errors.txt");
+    std::fs::write(&path, content)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+
+    Ok(())
+}
+
+pub struct ConflictInfo {
+    pub head_branch: String,
+    pub base_branch: String,
+    pub default_branch: String,
+}
+
+pub fn write_conflict_info_input(worktree_path: &Path, info: &ConflictInfo) -> Result<()> {
+    let inputs_dir = worktree_path.join(".cupola/inputs");
+    std::fs::create_dir_all(&inputs_dir)
+        .with_context(|| format!("failed to create {}", inputs_dir.display()))?;
+
+    let content = format!(
+        "# Conflict Information\n\nhead_branch: {}\nbase_branch: {}\ndefault_branch: {}\n",
+        info.head_branch, info.base_branch, info.default_branch,
+    );
+
+    let path = inputs_dir.join("conflict_info.txt");
+    std::fs::write(&path, content)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+
+    Ok(())
+}
+
 // === Output schema parsing ===
 
 #[derive(Debug, Deserialize)]
@@ -152,6 +215,56 @@ mod tests {
                 .expect("should read");
         assert!(content.contains("PRRT_abc"));
         assert!(content.contains("Fix this"));
+    }
+
+    #[test]
+    fn write_ci_errors_input_creates_file() {
+        let tmp = TempDir::new().expect("tempdir");
+        let errors = vec![CiErrorEntry {
+            check_run_name: "build".to_string(),
+            conclusion: "failure".to_string(),
+            output_summary: Some("Build failed".to_string()),
+            output_text: Some("Error: cannot find crate".to_string()),
+        }];
+
+        write_ci_errors_input(tmp.path(), &errors).expect("should write");
+
+        let content = std::fs::read_to_string(tmp.path().join(".cupola/inputs/ci_errors.txt"))
+            .expect("should read");
+        assert!(content.contains("# CI Failure Report"));
+        assert!(content.contains("## build"));
+        assert!(content.contains("Conclusion: failure"));
+        assert!(content.contains("Build failed"));
+        assert!(content.contains("cannot find crate"));
+    }
+
+    #[test]
+    fn write_ci_errors_input_empty_list() {
+        let tmp = TempDir::new().expect("tempdir");
+        write_ci_errors_input(tmp.path(), &[]).expect("should write");
+
+        let content = std::fs::read_to_string(tmp.path().join(".cupola/inputs/ci_errors.txt"))
+            .expect("should read");
+        assert!(content.contains("# CI Failure Report"));
+    }
+
+    #[test]
+    fn write_conflict_info_creates_file() {
+        let tmp = TempDir::new().expect("tempdir");
+        let info = ConflictInfo {
+            head_branch: "feature/my-branch".to_string(),
+            base_branch: "main".to_string(),
+            default_branch: "main".to_string(),
+        };
+
+        write_conflict_info_input(tmp.path(), &info).expect("should write");
+
+        let content = std::fs::read_to_string(tmp.path().join(".cupola/inputs/conflict_info.txt"))
+            .expect("should read");
+        assert!(content.contains("# Conflict Information"));
+        assert!(content.contains("head_branch: feature/my-branch"));
+        assert!(content.contains("base_branch: main"));
+        assert!(content.contains("default_branch: main"));
     }
 
     #[test]

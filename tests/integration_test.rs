@@ -10,7 +10,7 @@ use cupola::application::port::claude_code_runner::ClaudeCodeRunner;
 use cupola::application::port::execution_log_repository::ExecutionLogRepository;
 use cupola::application::port::git_worktree::GitWorktree;
 use cupola::application::port::github_client::{
-    GitHubClient, GitHubIssue, GitHubIssueDetail, GitHubPr, ReviewThread,
+    GitHubCheckRun, GitHubClient, GitHubIssue, GitHubIssueDetail, GitHubPr, ReviewThread,
 };
 use cupola::application::port::issue_repository::IssueRepository;
 use cupola::application::transition_use_case::{TransitionUseCase, prioritize_events};
@@ -92,6 +92,12 @@ impl GitHubClient for MockGitHubClient {
         self.state.lock().unwrap().closed_issues.push(issue_number);
         Ok(())
     }
+    async fn get_ci_check_runs(&self, _pr_number: u64) -> Result<Vec<GitHubCheckRun>> {
+        Ok(vec![])
+    }
+    async fn get_pr_mergeable(&self, _pr_number: u64) -> Result<Option<bool>> {
+        Ok(Some(true))
+    }
 }
 
 // === Mock Git Worktree ===
@@ -144,6 +150,7 @@ fn new_issue(issue_number: u64) -> Issue {
         current_pid: None,
         error_message: None,
         feature_name: None,
+        fixing_causes: vec![],
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     }
@@ -775,6 +782,7 @@ async fn concurrent_session_limit_restricts_spawning() {
             current_pid: None,
             error_message: None,
             feature_name: None,
+            fixing_causes: vec![],
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -819,6 +827,7 @@ async fn no_limit_spawns_all_processes() {
             current_pid: None,
             error_message: None,
             feature_name: None,
+            fixing_causes: vec![],
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };

@@ -1,4 +1,5 @@
 use crate::domain::config::Config;
+use crate::domain::fixing_problem_kind::FixingProblemKind;
 use crate::domain::state::State;
 
 pub struct SessionConfig {
@@ -22,6 +23,7 @@ pub fn build_session_config(
     config: &Config,
     pr_number: Option<u64>,
     feature_name: Option<&str>,
+    fixing_causes: &[FixingProblemKind],
 ) -> SessionConfig {
     match state {
         State::DesignRunning => SessionConfig {
@@ -31,7 +33,13 @@ pub fn build_session_config(
         State::DesignFixing => {
             let pr = pr_number.expect("fixing state requires pr_number in DB");
             SessionConfig {
-                prompt: build_fixing_prompt(issue_number, pr, &config.language),
+                prompt: build_fixing_prompt(
+                    issue_number,
+                    pr,
+                    &config.language,
+                    fixing_causes,
+                    &config.default_branch,
+                ),
                 output_schema: OutputSchemaKind::Fixing,
             }
         }
@@ -42,7 +50,13 @@ pub fn build_session_config(
         State::ImplementationFixing => {
             let pr = pr_number.expect("fixing state requires pr_number in DB");
             SessionConfig {
-                prompt: build_fixing_prompt(issue_number, pr, &config.language),
+                prompt: build_fixing_prompt(
+                    issue_number,
+                    pr,
+                    &config.language,
+                    fixing_causes,
+                    &config.default_branch,
+                ),
                 output_schema: OutputSchemaKind::Fixing,
             }
         }
@@ -158,23 +172,53 @@ PR の作成はシステム側で行います。以下の情報を出力して�
     )
 }
 
-fn build_fixing_prompt(_issue_number: u64, _pr_number: u64, language: &str) -> String {
+fn build_fixing_prompt(
+    _issue_number: u64,
+    _pr_number: u64,
+    language: &str,
+    causes: &[FixingProblemKind],
+    default_branch: &str,
+) -> String {
+    let mut instructions = Vec::new();
+
+    if causes.contains(&FixingProblemKind::ReviewComments) {
+        instructions
+            .push(".cupola/inputs/review_threads.json を参照して修正してください".to_string());
+    }
+
+    if causes.contains(&FixingProblemKind::CiFailure) {
+        instructions.push(".cupola/inputs/ci_errors.txt を参照して修正してください".to_string());
+    }
+
+    if causes.contains(&FixingProblemKind::Conflict) {
+        instructions.push(format!(
+            "origin/{default_branch} を取り込んでconflictを解消してください"
+        ));
+    }
+
+    let instructions_text = if instructions.is_empty() {
+        "指摘内容を確認して修正してください".to_string()
+    } else {
+        instructions
+            .iter()
+            .enumerate()
+            .map(|(i, s)| format!("{}. {s}", i + 1))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
     format!(
-        r#"あなたはレビュー対応エージェントです。レビュー指摘に対応してください。
+        r#"あなたはレビュー対応エージェントです。以下の指摘事項に対応してください。
 
-## 入力
+## 対応内容
 
-レビュー指摘内容は .cupola/inputs/review_threads.json を参照してください。
-各エントリには thread_id、対象ファイルのパス・行番号、レビュアーのコメント履歴が含まれています。
+{instructions_text}
 
 ## 手順
 
-1. .cupola/inputs/review_threads.json を読み取る
+1. 上記の指摘内容を確認する
 
-2. 各 thread に対して以下を行う
-   a. レビューコメントの内容を理解する
-   b. 必要な修正をコードに反映する
-   c. 対応不要と判断した場合はその理由を明確にする
+2. 必要な修正をコードに反映する
 
 3. 修正を commit / push する
    git add -A
@@ -184,9 +228,9 @@ fn build_fixing_prompt(_issue_number: u64, _pr_number: u64, language: &str) -> S
 ## output-schema への出力
 
 コメントの返信と thread の resolve はシステム側で行います。
-各 thread への対応結果を出力してください。
+対応した thread がある場合は各 thread への対応結果を出力してください。
 
-- thread_id: 対応した thread の ID（review_threads.json の thread_id をそのまま使用）
+- thread_id: 対応した thread の ID（thread_id をそのまま使用）
 - response: その thread への返信内容（{language} で記述）
 - resolved: この thread を resolve してよいか（true/false）
 
@@ -209,7 +253,7 @@ mod tests {
     #[test]
     fn design_running_returns_pr_creation_schema() {
         let config = test_config();
-        let session = build_session_config(State::DesignRunning, 42, &config, None, None);
+        let session = build_session_config(State::DesignRunning, 42, &config, None, None, &[]);
         assert_eq!(session.output_schema, OutputSchemaKind::PrCreation);
         assert!(session.prompt.contains("自動設計エージェント"));
         assert!(session.prompt.contains("#42"));
@@ -224,6 +268,7 @@ mod tests {
             &config,
             None,
             Some("my-feature"),
+            &[],
         );
         assert_eq!(session.output_schema, OutputSchemaKind::PrCreation);
         assert!(session.prompt.contains("自動実装エージェント"));
@@ -232,7 +277,7 @@ mod tests {
     #[test]
     fn design_fixing_returns_fixing_schema() {
         let config = test_config();
-        let session = build_session_config(State::DesignFixing, 42, &config, Some(85), None);
+        let session = build_session_config(State::DesignFixing, 42, &config, Some(85), None, &[]);
         assert_eq!(session.output_schema, OutputSchemaKind::Fixing);
         assert!(session.prompt.contains("レビュー対応エージェント"));
     }
@@ -240,8 +285,14 @@ mod tests {
     #[test]
     fn implementation_fixing_returns_fixing_schema() {
         let config = test_config();
-        let session =
-            build_session_config(State::ImplementationFixing, 42, &config, Some(90), None);
+        let session = build_session_config(
+            State::ImplementationFixing,
+            42,
+            &config,
+            Some(90),
+            None,
+            &[],
+        );
         assert_eq!(session.output_schema, OutputSchemaKind::Fixing);
     }
 
@@ -283,7 +334,7 @@ mod tests {
     #[test]
     fn design_prompt_contains_related_instruction() {
         let config = test_config();
-        let session = build_session_config(State::DesignRunning, 42, &config, None, None);
+        let session = build_session_config(State::DesignRunning, 42, &config, None, None, &[]);
         assert!(
             session.prompt.contains("Related: #42"),
             "design prompt should instruct to use 'Related: #N'"
@@ -293,7 +344,7 @@ mod tests {
     #[test]
     fn design_prompt_does_not_contain_closes() {
         let config = test_config();
-        let session = build_session_config(State::DesignRunning, 42, &config, None, None);
+        let session = build_session_config(State::DesignRunning, 42, &config, None, None, &[]);
         assert!(
             !session.prompt.contains("Closes"),
             "design prompt should not contain 'Closes'"
@@ -309,11 +360,78 @@ mod tests {
             &config,
             None,
             Some("my-feature"),
+            &[],
         );
         assert!(
             session.prompt.contains("Closes #42"),
             "implementation prompt should contain 'Closes #42'"
         );
+    }
+
+    // Task 7.1: build_fixing_prompt の各パターンのユニットテスト
+
+    #[test]
+    fn fixing_prompt_review_comments_only() {
+        let config = test_config();
+        let session = build_session_config(
+            State::DesignFixing,
+            42,
+            &config,
+            Some(85),
+            None,
+            &[FixingProblemKind::ReviewComments],
+        );
+        assert!(session.prompt.contains("review_threads.json"));
+        assert!(!session.prompt.contains("ci_errors.txt"));
+        assert!(!session.prompt.contains("conflict"));
+    }
+
+    #[test]
+    fn fixing_prompt_ci_failure_only() {
+        let config = test_config();
+        let session = build_session_config(
+            State::DesignFixing,
+            42,
+            &config,
+            Some(85),
+            None,
+            &[FixingProblemKind::CiFailure],
+        );
+        assert!(!session.prompt.contains("review_threads.json"));
+        assert!(session.prompt.contains("ci_errors.txt"));
+        assert!(!session.prompt.contains("conflict"));
+    }
+
+    #[test]
+    fn fixing_prompt_conflict_only() {
+        let config = test_config();
+        let session = build_session_config(
+            State::DesignFixing,
+            42,
+            &config,
+            Some(85),
+            None,
+            &[FixingProblemKind::Conflict],
+        );
+        assert!(!session.prompt.contains("review_threads.json"));
+        assert!(!session.prompt.contains("ci_errors.txt"));
+        assert!(session.prompt.contains("origin/main"));
+        assert!(session.prompt.contains("conflict"));
+    }
+
+    #[test]
+    fn fixing_prompt_all_causes() {
+        let config = test_config();
+        let causes = vec![
+            FixingProblemKind::CiFailure,
+            FixingProblemKind::Conflict,
+            FixingProblemKind::ReviewComments,
+        ];
+        let session =
+            build_session_config(State::DesignFixing, 42, &config, Some(85), None, &causes);
+        assert!(session.prompt.contains("review_threads.json"));
+        assert!(session.prompt.contains("ci_errors.txt"));
+        assert!(session.prompt.contains("origin/main"));
     }
 
     #[test]

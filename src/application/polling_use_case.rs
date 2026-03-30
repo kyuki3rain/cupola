@@ -6,7 +6,9 @@ use tokio::signal;
 use tokio::time::interval;
 
 use crate::application::io::{
-    parse_fixing_output, parse_pr_creation_output, write_issue_input, write_review_threads_input,
+    CiErrorEntry, ConflictInfo, parse_fixing_output, parse_pr_creation_output,
+    write_ci_errors_input, write_conflict_info_input, write_issue_input,
+    write_review_threads_input,
 };
 use crate::application::port::claude_code_runner::ClaudeCodeRunner;
 use crate::application::port::execution_log_repository::ExecutionLogRepository;
@@ -22,6 +24,7 @@ use crate::application::session_manager::{ExitedSession, SessionManager};
 use crate::application::transition_use_case::{TransitionUseCase, prioritize_events};
 use crate::domain::config::Config;
 use crate::domain::event::Event;
+use crate::domain::fixing_problem_kind::FixingProblemKind;
 use crate::domain::issue::Issue;
 use crate::domain::state::State;
 
@@ -354,13 +357,13 @@ where
 
     // --- Step 4: PR monitoring ---
 
-    async fn step4_pr_monitoring(&self, events: &mut Vec<(i64, Event)>) {
+    async fn step4_pr_monitoring(&mut self, events: &mut Vec<(i64, Event)>) {
         let active = match self.issue_repo.find_active().await {
             Ok(a) => a,
             Err(_) => return,
         };
 
-        for issue in &active {
+        for mut issue in active {
             if !issue.state.is_review_waiting() {
                 continue;
             }
@@ -375,7 +378,7 @@ where
                 continue;
             };
 
-            // Check merge first (priority)
+            // (1) Check merge first (priority) — if merged, skip further checks
             match self.github.is_pr_merged(pr_num).await {
                 Ok(true) => {
                     let event = match issue.state {
@@ -393,15 +396,72 @@ where
                 }
             }
 
-            // Check unresolved threads
+            let mut causes: Vec<FixingProblemKind> = Vec::new();
+
+            // (2) CI failure check
+            match self.github.get_ci_check_runs(pr_num).await {
+                Ok(runs) => {
+                    let has_failure = runs
+                        .iter()
+                        .any(|r| r.conclusion.as_deref() == Some("failure"));
+                    if has_failure {
+                        causes.push(FixingProblemKind::CiFailure);
+                        tracing::info!(pr_number = pr_num, "CI failure detected");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(pr_number = pr_num, error = %e, "failed to get CI check runs");
+                    // Skip CI check; continue with other checks
+                }
+            }
+
+            // (3) Conflict check
+            match self.github.get_pr_mergeable(pr_num).await {
+                Ok(Some(false)) => {
+                    causes.push(FixingProblemKind::Conflict);
+                    tracing::info!(
+                        pr_number = pr_num,
+                        "conflict detected, adding to fixing causes"
+                    );
+                }
+                Ok(None) => {
+                    // GitHub is still computing — skip this cycle
+                }
+                Ok(Some(true)) => {}
+                Err(e) => {
+                    tracing::warn!(pr_number = pr_num, error = %e, "failed to get PR mergeable");
+                    // Skip conflict check; continue
+                }
+            }
+
+            // (4) Unresolved review threads check
             match self.github.list_unresolved_threads(pr_num).await {
                 Ok(threads) if !threads.is_empty() => {
-                    events.push((issue.id, Event::UnresolvedThreadsDetected));
+                    causes.push(FixingProblemKind::ReviewComments);
                 }
                 Ok(_) => {}
                 Err(e) => {
                     tracing::warn!(pr_number = pr_num, error = %e, "failed to list unresolved threads");
                 }
+            }
+
+            // (5) If any causes found, save to DB and emit event
+            if !causes.is_empty() {
+                tracing::info!(
+                    pr_number = pr_num,
+                    cause_count = causes.len(),
+                    "fixing causes collected"
+                );
+                issue.fixing_causes = causes;
+                if let Err(e) = self.issue_repo.update(&issue).await {
+                    tracing::warn!(
+                        issue_id = issue.id,
+                        error = %e,
+                        "failed to update fixing_causes, skipping event"
+                    );
+                    continue;
+                }
+                events.push((issue.id, Event::UnresolvedThreadsDetected));
             }
         }
     }
@@ -520,6 +580,7 @@ where
                 &self.config,
                 pr_number,
                 issue.feature_name.as_deref(),
+                &issue.fixing_causes,
             );
 
             let schema = match session_config.output_schema {
@@ -569,8 +630,46 @@ where
                     _ => None,
                 };
                 if let Some(pr_num) = pr_number {
-                    let threads = self.github.list_unresolved_threads(pr_num).await?;
-                    write_review_threads_input(wt, &threads)?;
+                    // Write inputs based on fixing_causes
+                    let causes = &issue.fixing_causes;
+
+                    if causes.contains(&FixingProblemKind::ReviewComments) {
+                        let threads = self.github.list_unresolved_threads(pr_num).await?;
+                        write_review_threads_input(wt, &threads)?;
+                    }
+
+                    if causes.contains(&FixingProblemKind::CiFailure) {
+                        let runs = self.github.get_ci_check_runs(pr_num).await?;
+                        let errors: Vec<CiErrorEntry> = runs
+                            .into_iter()
+                            .filter(|r| r.conclusion.as_deref() == Some("failure"))
+                            .map(|r| CiErrorEntry {
+                                check_run_name: r.name,
+                                conclusion: r.conclusion.unwrap_or_default(),
+                                output_summary: None,
+                                output_text: None,
+                            })
+                            .collect();
+                        write_ci_errors_input(wt, &errors)?;
+                    }
+
+                    if causes.contains(&FixingProblemKind::Conflict) {
+                        let n = issue.github_issue_number;
+                        let head_branch = format!("cupola/{n}/main");
+                        let base_branch = self.config.default_branch.clone();
+                        let info = ConflictInfo {
+                            head_branch,
+                            base_branch: base_branch.clone(),
+                            default_branch: base_branch,
+                        };
+                        write_conflict_info_input(wt, &info)?;
+                    }
+
+                    // Fallback: if no causes set (old behavior), write review threads
+                    if causes.is_empty() {
+                        let threads = self.github.list_unresolved_threads(pr_num).await?;
+                        write_review_threads_input(wt, &threads)?;
+                    }
                 }
             }
             _ => {} // ImplementationRunning needs no input preparation

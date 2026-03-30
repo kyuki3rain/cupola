@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::OptionalExtension;
 
 use crate::application::port::issue_repository::IssueRepository;
+use crate::domain::fixing_problem_kind::FixingProblemKind;
 use crate::domain::issue::Issue;
 use crate::domain::state::State;
 
@@ -25,7 +26,8 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db.conn().lock().expect("mutex poisoned");
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, created_at, updated_at
+                        worktree_path, retry_count, current_pid, error_message, feature_name,
+                        fixing_causes, created_at, updated_at
                  FROM issues WHERE id = ?1",
             )?;
             let issue = stmt
@@ -44,7 +46,8 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db.conn().lock().expect("mutex poisoned");
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, created_at, updated_at
+                        worktree_path, retry_count, current_pid, error_message, feature_name,
+                        fixing_causes, created_at, updated_at
                  FROM issues WHERE github_issue_number = ?1",
             )?;
             let issue = stmt
@@ -63,7 +66,8 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db.conn().lock().expect("mutex poisoned");
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, created_at, updated_at
+                        worktree_path, retry_count, current_pid, error_message, feature_name,
+                        fixing_causes, created_at, updated_at
                  FROM issues WHERE state NOT IN ('completed', 'cancelled')",
             )?;
             let issues = stmt
@@ -82,7 +86,8 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db.conn().lock().expect("mutex poisoned");
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, created_at, updated_at
+                        worktree_path, retry_count, current_pid, error_message, feature_name,
+                        fixing_causes, created_at, updated_at
                  FROM issues WHERE state IN ('design_running', 'design_fixing', 'implementation_running', 'implementation_fixing')",
             )?;
             let issues = stmt
@@ -100,10 +105,13 @@ impl IssueRepository for SqliteIssueRepository {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db.conn().lock().expect("mutex poisoned");
+            let fixing_causes_json =
+                serde_json::to_string(&issue.fixing_causes).unwrap_or_else(|_| "[]".to_string());
             conn.execute(
                 "INSERT INTO issues (github_issue_number, state, design_pr_number, impl_pr_number,
-                                     worktree_path, retry_count, current_pid, error_message, feature_name)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                                     worktree_path, retry_count, current_pid, error_message, feature_name,
+                                     fixing_causes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 rusqlite::params![
                     issue.github_issue_number,
                     state_to_str(&issue.state),
@@ -114,6 +122,7 @@ impl IssueRepository for SqliteIssueRepository {
                     issue.current_pid,
                     issue.error_message,
                     issue.feature_name,
+                    fixing_causes_json,
                 ],
             )
             .context("save issue failed")?;
@@ -143,11 +152,14 @@ impl IssueRepository for SqliteIssueRepository {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db.conn().lock().expect("mutex poisoned");
+            let fixing_causes_json =
+                serde_json::to_string(&issue.fixing_causes).unwrap_or_else(|_| "[]".to_string());
             conn.execute(
                 "UPDATE issues SET state = ?1, design_pr_number = ?2, impl_pr_number = ?3,
                                    worktree_path = ?4, retry_count = ?5, current_pid = ?6,
-                                   error_message = ?7, feature_name = ?8, updated_at = datetime('now')
-                 WHERE id = ?9",
+                                   error_message = ?7, feature_name = ?8, fixing_causes = ?9,
+                                   updated_at = datetime('now')
+                 WHERE id = ?10",
                 rusqlite::params![
                     state_to_str(&issue.state),
                     issue.design_pr_number,
@@ -157,6 +169,7 @@ impl IssueRepository for SqliteIssueRepository {
                     issue.current_pid,
                     issue.error_message,
                     issue.feature_name,
+                    fixing_causes_json,
                     issue.id,
                 ],
             )
@@ -226,8 +239,12 @@ pub fn str_to_state(s: &str) -> State {
 
 fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
     let state_str: String = row.get(2)?;
-    let created_str: String = row.get(10)?;
-    let updated_str: String = row.get(11)?;
+    let fixing_causes_json: String = row.get(10).unwrap_or_else(|_| "[]".to_string());
+    let created_str: String = row.get(11)?;
+    let updated_str: String = row.get(12)?;
+
+    let fixing_causes: Vec<FixingProblemKind> =
+        serde_json::from_str(&fixing_causes_json).unwrap_or_default();
 
     Ok(Issue {
         id: row.get(0)?,
@@ -240,6 +257,7 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
         current_pid: row.get(7)?,
         error_message: row.get(8)?,
         feature_name: row.get(9)?,
+        fixing_causes,
         created_at: parse_sqlite_datetime(&created_str),
         updated_at: parse_sqlite_datetime(&updated_str),
     })
@@ -275,6 +293,7 @@ mod tests {
             current_pid: None,
             error_message: None,
             feature_name: None,
+            fixing_causes: vec![],
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -395,6 +414,25 @@ mod tests {
         assert_eq!(found.retry_count, 0);
         assert!(found.current_pid.is_none());
         assert!(found.error_message.is_none());
+    }
+
+    #[tokio::test]
+    async fn fixing_causes_persist_and_load() {
+        use crate::domain::fixing_problem_kind::FixingProblemKind;
+
+        let (_db, repo) = setup();
+        let id = repo.save(&new_issue(80)).await.expect("save");
+
+        let mut issue = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert!(issue.fixing_causes.is_empty());
+
+        issue.fixing_causes = vec![FixingProblemKind::CiFailure, FixingProblemKind::Conflict];
+        repo.update(&issue).await.expect("update");
+
+        let found = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert_eq!(found.fixing_causes.len(), 2);
+        assert_eq!(found.fixing_causes[0], FixingProblemKind::CiFailure);
+        assert_eq!(found.fixing_causes[1], FixingProblemKind::Conflict);
     }
 
     #[test]

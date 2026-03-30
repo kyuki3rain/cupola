@@ -1,6 +1,14 @@
 use anyhow::Result;
 
 #[derive(Debug, Clone)]
+pub struct GitHubCheckRun {
+    pub id: u64,
+    pub name: String,
+    pub status: String,
+    pub conclusion: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct GitHubIssue {
     pub number: u64,
     pub title: String,
@@ -94,4 +102,16 @@ pub trait GitHubClient: Send + Sync {
         &self,
         issue_number: u64,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
+
+    /// PR の CI check-runs を取得する。status が "completed" のもののみ返す。
+    fn get_ci_check_runs(
+        &self,
+        pr_number: u64,
+    ) -> impl std::future::Future<Output = Result<Vec<GitHubCheckRun>>> + Send;
+
+    /// PR の mergeable フィールドを取得する。None は GitHub が計算中を意味する。
+    fn get_pr_mergeable(
+        &self,
+        pr_number: u64,
+    ) -> impl std::future::Future<Output = Result<Option<bool>>> + Send;
 }
