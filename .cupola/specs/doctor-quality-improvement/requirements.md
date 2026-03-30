@@ -12,9 +12,9 @@
 
 #### 受け入れ条件
 
-1. When `cargo test` が git 未インストール環境で実行された場合、the `doctor` モジュールの git 関連テストは shall git の存在確認を先に行ってからアサートを実施する、またはスキップする。
-2. If git コマンドが PATH 上に存在しない場合、the doctor テストは shall テストを `#[ignore]` またはランタイムスキップ（`skip` / `cfg` ガード）で回避し、テストスイート全体を失敗させない。
-3. The `doctor` モジュールの git チェックテストは shall 環境依存のアサートを条件付きで実行し、git 存在時のみ結果を検証する。
+1. When `cargo test` が git 未インストール環境で実行された場合、`doctor` モジュールの git 関連テストは shall git の存在確認を先に行ってからアサートを実施するか、スキップする。
+2. If git コマンドが PATH 上に存在しない場合、`doctor` モジュールの git 関連テストは shall `#[ignore]` またはランタイムスキップ（早期 `return`）で回避し、テストスイート全体を失敗させない。
+3. `doctor` モジュールの git チェックテストは shall 環境依存のアサートを条件付きで実行し、git 存在時のみ結果を検証する。
 
 ---
 
@@ -25,7 +25,7 @@
 #### 受け入れ条件
 
 1. When `check_toml` が `tempdir` 上に `cupola.toml` が存在する環境で呼び出された場合、the doctor テストは shall 必須フィールドが揃っていることを検証するアサートをパスする。
-2. When `check_toml` が `tempdir` 上に `cupola.toml` が存在しない環境で呼び出された場合、the doctor テストは shall チェック失敗（`DoctorStatus::Fail` 相当）を返すことを検証する。
+2. When `check_toml` が `tempdir` 上に `cupola.toml` が存在しない環境で呼び出された場合、the doctor テストは shall チェック失敗（`CheckStatus::Fail` 相当）を返すことを検証する。
 3. When `check_toml` が必須フィールドを欠いた `cupola.toml` を持つ `tempdir` で呼び出された場合、the doctor テストは shall チェック失敗を返すことを検証する。
 4. The steering チェックと db チェックのテストも shall `tempdir` を使った制御された環境で、存在する/しないの両ケースをカバーする。
 

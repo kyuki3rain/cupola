@@ -65,7 +65,6 @@ graph TB
     DoctorHandler --> DoctorUseCase
     DoctorUseCase --> ConfigLoaderPort
     TomlLoader --> ConfigLoaderPort
-    Config --> domain
 ```
 
 **Architecture Integration**:
@@ -80,8 +79,8 @@ graph TB
 | Layer | Choice / Version | Role | Notes |
 |-------|-----------------|------|-------|
 | adapter/inbound | clap (derive) | `Doctor` サブコマンド追加 | 既存 CLI 構造を拡張 |
-| application | Rust std + serde_json | DoctorUseCase, ConfigLoader port | `serde_json` で JSON パース |
-| bootstrap | toml + thiserror | TomlConfigLoader 実装 | 既存 config_loader.rs を拡張 |
+| application | Rust std + serde_json + thiserror | DoctorUseCase, ConfigLoader port | `serde_json` で JSON パース |
+| bootstrap | toml | TomlConfigLoader 実装 | 既存 config_loader.rs を拡張 |
 | test | tempfile crate | tempdir ベーステスト | `TempDir` でクリーンな環境を生成 |
 
 ## System Flows
@@ -99,7 +98,7 @@ sequenceDiagram
     User->>CLI: cupola doctor
     CLI->>App: Command::Doctor
     App->>Toml: 実装をDI
-    App->>UC: new(config_loader: Box<dyn ConfigLoader>)
+    App->>UC: new(config_loader: TomlConfigLoader)
     App->>UC: run(config_path)
     UC->>CL: load(path)
     CL->>Toml: (実装呼び出し)
@@ -328,7 +327,7 @@ impl ConfigLoader for TomlConfigLoader {
 **Responsibilities & Constraints**
 - `cli.rs` に `Command::Doctor` を追加（config path パラメータをオプションで受け付け）
 - `bootstrap/app.rs` の `Doctor` arm で `DoctorUseCase` を構築・実行し、結果を表示
-- `CheckStatus::Ok` → `✅ {message}`、`CheckStatus::Fail` → `❌ {message}` でフォーマット
+- `CheckStatus::Ok` → `✅ {message}`、`CheckStatus::Warn` → `⚠️ {message}`、`CheckStatus::Fail` → `❌ {message}` でフォーマット
 - `std::process::exit(1)` を使用せず、いずれかのチェックが Fail の場合は `Err(anyhow!("doctor checks failed"))` を返す
 
 **Contracts**: Service [x]

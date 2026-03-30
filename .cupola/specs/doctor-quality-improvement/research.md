@@ -47,9 +47,9 @@
 
 - **Context**: `read_dir().next().is_some()` はディレクトリエントリ（サブディレクトリ・`.DS_Store` 等）もカウントしてしまう。
 - **Findings**:
-  - `entry.file_type()?.is_file()` でフィルタすることでファイルのみ確認可能。
-  - `.DS_Store` はファイルだが、`entry.file_name().to_string_lossy().starts_with('.')` で除外する方針も検討したが、隠しファイル除外は過剰設計と判断。steering ファイルは `.md` 等であり、`.DS_Store` のみの場合は実質空とみなすべきとする Issue の意図を採用。
-- **Implications**: `is_file()` フィルタのみで要件を満たす。
+  - `entry.file_type()?.is_file()` でフィルタすることで「ディレクトリ以外」を確認可能だが、`.DS_Store` もファイルとしてカウントされてしまう。
+  - `.DS_Store` のみが存在する場合は「実質空」とみなすという要件を満たすため、`entry.file_name().to_string_lossy()` でファイル名を確認し、`.` で始まらないエントリのみ steering ファイルとしてカウントする。
+- **Implications**: `entry.file_type()?.is_file()` に加えて、`file_name` が `.` で始まらないエントリのみを数えることで、`.DS_Store` のみの場合は 0 件として扱う。
 
 ### process::exit(1) の廃止
 

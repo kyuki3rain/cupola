@@ -30,7 +30,7 @@
 - [ ] 2. DoctorUseCase の診断ロジックを実装する
 
 - [ ] 2.1 DoctorUseCase の骨格と結果型を定義し、check_toml を実装する
-  - `CheckStatus { Ok(String), Fail(String) }` と `DoctorCheckResult { name: String, status: CheckStatus }` を `application/doctor_use_case.rs` に定義する
+  - `CheckStatus { Ok(String), Warn(String), Fail(String) }` と `DoctorCheckResult { name: String, status: CheckStatus }` を `application/doctor_use_case.rs` に定義する
   - `DoctorUseCase<C: ConfigLoader>` 構造体と `new(config_loader: C) -> Self` を定義する
   - `run(&self, config_path: &Path) -> Vec<DoctorCheckResult>` メソッドを定義し、各チェック関数の呼び出しを組み立てる
   - `check_toml` を実装し、`self.config_loader.load(path)` を呼び出して成功/失敗を `DoctorCheckResult` に変換する（bootstrap への直接依存なし）
@@ -63,8 +63,8 @@
 
 - [ ] 2.5 (P) check_steering を実装する（ファイル限定カウント）
   - steering ディレクトリ（`.cupola/steering/`）を `std::fs::read_dir` で走査する
-  - `entry.file_type()?.is_file()` でフィルタし、通常ファイルのみをカウントする
-  - カウントが 0 の場合（空ディレクトリ、サブディレクトリのみ、`.DS_Store` のみ等）は `CheckStatus::Fail` を返す
+  - `entry.file_type()?.is_file()` でフィルタしたうえで、隠しファイル（ファイル名が `.` で始まるもの）を除外し、通常ファイルのみをカウントする
+  - カウントが 0 の場合（空ディレクトリ、サブディレクトリのみ、`.DS_Store` など隠しファイルのみ等）は `CheckStatus::Fail` を返す
   - `read_dir().next().is_some()` による不正確な確認は使用しない
   - 本タスクは 2.1 に依存するが 2.2-2.4/2.6 とは独立して実装できる
   - _Requirements: 6.1, 6.2, 6.3_
