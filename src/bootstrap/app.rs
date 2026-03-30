@@ -98,7 +98,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             let repo = SqliteIssueRepository::new(db);
 
             // Load config for max_concurrent_sessions display
-            let config_path = Path::new("cupola.toml");
+            let config_path = Path::new(".cupola/cupola.toml");
             let max_sessions = if config_path.exists() {
                 load_toml(config_path).ok().and_then(|t| {
                     let overrides = CliOverrides {
