@@ -29,6 +29,12 @@ pub enum Command {
     Init,
     /// Show status of all issues
     Status,
+    /// Run environment diagnostics
+    Doctor {
+        /// Config file path
+        #[arg(long, default_value = ".cupola/cupola.toml")]
+        config: PathBuf,
+    },
 }
 
 #[cfg(test)]
@@ -89,5 +95,27 @@ mod tests {
     fn parse_status_command() {
         let cli = Cli::parse_from(["cupola", "status"]);
         assert!(matches!(cli.command, Command::Status));
+    }
+
+    #[test]
+    fn parse_doctor_with_defaults() {
+        let cli = Cli::parse_from(["cupola", "doctor"]);
+        match cli.command {
+            Command::Doctor { config } => {
+                assert_eq!(config, PathBuf::from(".cupola/cupola.toml"));
+            }
+            _ => panic!("expected Doctor command"),
+        }
+    }
+
+    #[test]
+    fn parse_doctor_with_custom_config() {
+        let cli = Cli::parse_from(["cupola", "doctor", "--config", "/custom/path.toml"]);
+        match cli.command {
+            Command::Doctor { config } => {
+                assert_eq!(config, PathBuf::from("/custom/path.toml"));
+            }
+            _ => panic!("expected Doctor command"),
+        }
     }
 }

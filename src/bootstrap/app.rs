@@ -11,10 +11,12 @@ use crate::adapter::outbound::github_rest_client::{OctocrabRestClient, resolve_g
 use crate::adapter::outbound::sqlite_connection::SqliteConnection;
 use crate::adapter::outbound::sqlite_execution_log_repository::SqliteExecutionLogRepository;
 use crate::adapter::outbound::sqlite_issue_repository::SqliteIssueRepository;
+use crate::application::doctor_use_case::{CheckStatus, DoctorUseCase};
 use crate::application::polling_use_case::PollingUseCase;
 use crate::application::port::issue_repository::IssueRepository;
 use crate::bootstrap::config_loader::{CliOverrides, load_toml};
 use crate::bootstrap::logging::init_logging;
+use crate::bootstrap::toml_config_loader::TomlConfigLoader;
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
@@ -85,6 +87,29 @@ pub async fn run(cli: Cli) -> Result<()> {
             let db = SqliteConnection::open(db_path)?;
             db.init_schema()?;
             println!("SQLite schema initialized at {}", db_path.display());
+            Ok(())
+        }
+
+        Command::Doctor { config } => {
+            let loader = TomlConfigLoader;
+            let use_case = DoctorUseCase::new(loader);
+            let results = use_case.run(&config);
+
+            let mut has_failure = false;
+            for result in &results {
+                match &result.status {
+                    CheckStatus::Ok(msg) => println!("✅ {}: {}", result.name, msg),
+                    CheckStatus::Warn(msg) => println!("⚠️  {}: {}", result.name, msg),
+                    CheckStatus::Fail(msg) => {
+                        println!("❌ {}: {}", result.name, msg);
+                        has_failure = true;
+                    }
+                }
+            }
+
+            if has_failure {
+                return Err(anyhow::anyhow!("doctor checks failed"));
+            }
             Ok(())
         }
 
