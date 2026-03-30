@@ -126,9 +126,9 @@ flowchart TD
 | 5.1 | steering ディレクトリチェック | DoctorUseCase | - | C6 |
 | 5.2 | cupola.db 存在確認 | DoctorUseCase | - | C7 |
 | 5.3 | steering チェック失敗記録 | DoctorUseCase | CheckResult | - |
-| 6.1 | 成功時 ✅ 表示 | DoctorUseCase | CheckResult | Display |
-| 6.2 | 失敗時 ❌ 表示 | DoctorUseCase | CheckResult | Display |
-| 6.3 | 修正手順表示 | DoctorUseCase | CheckResult | Display |
+| 6.1 | 成功時 ✅ 表示 | app.rs | CheckResult | Display |
+| 6.2 | 失敗時 ❌ 表示 | app.rs | CheckResult | Display |
+| 6.3 | 修正手順表示 | app.rs | CheckResult | Display |
 | 7.1 | exit 0 | app.rs | - | Exit0 |
 | 7.2 | exit 1 | app.rs | - | Exit1 |
 
@@ -138,7 +138,7 @@ flowchart TD
 |-----------|--------------|--------|--------------|------------------|-----------|
 | CheckResult | domain | チェック結果の型表現 | 2.4, 3.2, 6.1-6.3 | なし | - |
 | CommandRunner | application/port | 外部コマンド実行の抽象化 | 2.1-2.3, 3.1 | なし | Service |
-| DoctorUseCase | application | チェック実行のオーケストレーション | 1.1, 2.1-5.3, 6.1-6.3 | CommandRunner (P0), config_loader (P1) | Service |
+| DoctorUseCase | application | チェック実行のオーケストレーション | 1.1, 2.1-5.3 | CommandRunner (P0), config_loader (P1) | Service |
 | ProcessCommandRunner | adapter/outbound | CommandRunner の実装 | 2.1-2.3, 3.1 | std::process::Command (P0) | Service |
 | Command::Doctor | adapter/inbound | CLI サブコマンド定義 | 1.1, 1.2 | clap (P0) | - |
 
@@ -215,13 +215,13 @@ pub trait CommandRunner: Send + Sync {
 | Field | Detail |
 |-------|--------|
 | Intent | 全チェック項目を順番に実行し、結果リストを返す |
-| Requirements | 1.1, 2.1-5.3, 6.1-6.3 |
+| Requirements | 1.1, 2.1-5.3 |
 
 **Responsibilities & Constraints**
 - 7 つのチェック項目を定められた順序で実行
 - gh 認証チェックの結果に基づき、ラベルチェックの実行/スキップを判定
 - 設定ファイルのチェックには既存の `config_loader::load_toml()` を再利用
-- 結果の表示（stdout 出力）も本 use case 内で行う
+- チェック結果を `Vec<CheckResult>` として返却し、結果の表示（stdout 出力）は bootstrap/inbound 側で行う
 
 **Dependencies**
 - Inbound: app.rs — コマンドディスパッチ (P0)
@@ -321,7 +321,7 @@ impl CommandRunner for ProcessCommandRunner {
 
 ### Unit Tests
 - `DoctorUseCase::run()`: モック `CommandRunner` を注入し、各チェックの成功/失敗パターンを検証
-- `CheckResult` の表示フォーマット: ✅/❌ アイコンと修正手順の出力を検証
+- bootstrap/inbound 側の結果表示: ✅/❌ アイコンと修正手順の出力を検証
 - gh 認証失敗時のラベルチェックスキップ動作を検証
 - `cupola.toml` 必須項目欠落時のチェック失敗を検証
 

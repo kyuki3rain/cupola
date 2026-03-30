@@ -25,7 +25,7 @@
 **Objective:** 開発者として、リポジトリに `agent:ready` ラベルが存在するかを確認したい。cupola のワークフローに必要なラベルが設定済みかを把握するため。
 
 #### Acceptance Criteria
-1. While `gh auth status` チェックが成功している場合, when `doctor` コマンドが実行された場合, the cupola CLI shall `gh label list` を使用して `agent:ready` ラベルの存在を確認する
+1. When `gh auth status` チェックが成功している場合, the cupola CLI shall `gh label list` を使用して `agent:ready` ラベルの存在を確認する
 2. If `gh auth status` チェックが失敗している場合, the cupola CLI shall `agent:ready` ラベルチェックをスキップし、スキップした旨を表示する
 
 ### Requirement 4: 設定ファイルのチェック
@@ -43,6 +43,7 @@
 1. When `doctor` コマンドが実行された場合, the cupola CLI shall `.cupola/steering/` ディレクトリにファイルが 1 つ以上存在するかを確認する
 2. When `doctor` コマンドが実行された場合, the cupola CLI shall `.cupola/cupola.db` の存在を確認する（`cupola init` 済みかの確認）
 3. If steering ディレクトリが空またはファイルが存在しない場合, the cupola CLI shall 該当チェックを失敗として記録する
+4. If `.cupola/cupola.db` が存在しない場合, the cupola CLI shall 該当チェックを失敗として記録する
 
 ### Requirement 6: 結果表示
 **Objective:** 開発者として、チェック結果を一目で把握できる形式で確認したい。問題の有無を素早く判断するため。
