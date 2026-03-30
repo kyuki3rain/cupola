@@ -44,7 +44,7 @@
   - 現在は DB から active issues を取得して表示するのみ
   - SessionManager にアクセスしていない（status コマンドは polling ループ外で実行される）
   - DB の `current_pid` フィールドから実行中かどうかを推定可能
-- **Implications**: SessionManager は status コマンドからアクセスできないため、DB ベースでカウントする方法を検討する必要がある。active issues のうち `needs_process()` かつ `current_pid.is_some()` のものをカウントする
+- **Implications**: SessionManager は status コマンドからアクセスできないため、DB ベースでカウントする必要がある。そのために polling ループ側で「プロセス起動時に DB の `current_pid` を `Some(pid)` に更新し、`collect_exited()` で終了を検知したタイミングで `None` にクリアする」更新フローを設計・実装タスク化する。Status コマンドでは active issues のうち `needs_process()` かつ `current_pid.is_some()` のものを `running_count` としてカウントする
 
 ## Architecture Pattern Evaluation
 
@@ -75,4 +75,4 @@
 
 ## Risks & Mitigations
 - リスク: status コマンドでの実行中プロセス数が DB ベースのため若干不正確になりうる → polling サイクルで自動修正されるため実用上問題なし
-- リスク: max_concurrent_sessions=0 の場合に全プロセス起動不可 → 0 を設定した場合は「制限なし」として扱うか、バリデーションで拒否する
+- リスク: max_concurrent_sessions=0 の場合に全プロセス起動不可 → 0 以下の値はバリデーションエラーとして拒否する（requirements の「正の整数」と整合）

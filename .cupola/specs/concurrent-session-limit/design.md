@@ -146,7 +146,8 @@ flowchart TD
 
 ##### State Management
 - State model: `max_concurrent_sessions: Option<u32>` フィールドを既存 Config struct に追加
-- `None` = 制限なし、`Some(n)` = 最大 n 並列実行
+- `None` = 制限なし、`Some(n)` where n > 0 = 最大 n 並列実行
+- 0 以下の値は設定読み込み時にバリデーションエラーとする
 
 ### Bootstrap Layer
 
@@ -257,8 +258,12 @@ impl SessionManager {
 
 **Implementation Notes**
 - Integration: SessionManager は status コマンドからアクセスできないため、DB の current_pid フィールドから推定する
+- PID 永続化フロー:
+  - PollingUseCase Step 7 でセッションプロセスの spawn に成功したタイミングで、その `pid` を対応する `Issue.current_pid = Some(pid)` として DB に保存する（`state` の更新と同一トランザクション内で行うことを推奨）
+  - SessionManager 側で子プロセスの終了回収（例: `collect_exited()`）を行う際、終了した `pid` から対応する Issue を特定し、`current_pid = None` にクリアするとともに、Issue の `state` を完了／失敗など適切な状態に更新して DB に保存する
+  - 異常終了等でプロセスが存在しないのに `current_pid` が残っているケースについては、起動時や定期的なリコンシリエーションで `state.needs_process()` かつ OS 上に存在しない `pid` をクリーンアップする実装としてもよい（必須ではない）
 - Validation: Config の読み込みは既存の config_loader を再利用
-- Risks: DB ベースのカウントはプロセス異常終了直後にずれる可能性があるが、実用上問題なし
+- Risks: DB ベースのカウントはプロセス異常終了直後にずれる可能性があるが、次の polling サイクルで修正される
 
 ## Data Models
 
@@ -272,8 +277,8 @@ pub max_concurrent_sessions: Option<u32>,
 ```
 
 - `None`: 制限なし（後方互換性）
-- `Some(0)`: 制限なしとして扱う（0 は実質的に無意味な値のため）
 - `Some(n)` where n > 0: 最大 n 並列実行
+- 0 以下の値はバリデーションエラーとして扱う（requirements 側の「正の整数」と整合）
 
 ### Logical Data Model
 
@@ -316,7 +321,7 @@ DB スキーマの変更なし。
 - `max_concurrent_sessions = 2` の設定で 3 つの needs_process Issue がある場合、2 つだけ起動されることを検証
 - `max_concurrent_sessions` 未設定時に全 Issue が起動されることを検証
 - 上限到達後、プロセス終了により空きができた次サイクルでスキップ Issue が起動されることを検証
-- `max_concurrent_sessions = 0` の場合に制限なしとして動作することを検証
+- `max_concurrent_sessions = 0` の場合にバリデーションエラーとなることを検証
 
 ### E2E Tests
 - cupola.toml に `max_concurrent_sessions` を設定し、`cupola status` で正しく表示されることを検証
