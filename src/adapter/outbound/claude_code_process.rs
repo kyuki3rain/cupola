@@ -23,13 +23,16 @@ impl ClaudeCodeProcess {
         prompt: &str,
         working_dir: &Path,
         json_schema: Option<&str>,
+        model: &str,
     ) -> Command {
         let mut cmd = Command::new(&self.executable);
         cmd.arg("-p")
             .arg(prompt)
             .arg("--output-format")
             .arg("json")
-            .arg("--dangerously-skip-permissions");
+            .arg("--dangerously-skip-permissions")
+            .arg("--model")
+            .arg(model);
 
         if let Some(schema) = json_schema {
             cmd.arg("--json-schema").arg(schema);
@@ -44,8 +47,14 @@ impl ClaudeCodeProcess {
 }
 
 impl ClaudeCodeRunner for ClaudeCodeProcess {
-    fn spawn(&self, prompt: &str, working_dir: &Path, json_schema: Option<&str>) -> Result<Child> {
-        self.build_command(prompt, working_dir, json_schema)
+    fn spawn(
+        &self,
+        prompt: &str,
+        working_dir: &Path,
+        json_schema: Option<&str>,
+        model: &str,
+    ) -> Result<Child> {
+        self.build_command(prompt, working_dir, json_schema, model)
             .spawn()
             .context("failed to spawn Claude Code process")
     }
@@ -59,7 +68,7 @@ mod tests {
     #[test]
     fn build_command_without_schema() {
         let proc = ClaudeCodeProcess::new("claude");
-        let cmd = proc.build_command("hello", Path::new("/tmp"), None);
+        let cmd = proc.build_command("hello", Path::new("/tmp"), None, "sonnet");
 
         let program = cmd.get_program();
         assert_eq!(program, OsStr::new("claude"));
@@ -73,6 +82,8 @@ mod tests {
                 "--output-format",
                 "json",
                 "--dangerously-skip-permissions",
+                "--model",
+                "sonnet",
             ]
         );
     }
@@ -81,7 +92,7 @@ mod tests {
     fn build_command_with_schema() {
         let proc = ClaudeCodeProcess::new("claude");
         let schema = r#"{"type":"object"}"#;
-        let cmd = proc.build_command("test", Path::new("/work"), Some(schema));
+        let cmd = proc.build_command("test", Path::new("/work"), Some(schema), "sonnet");
 
         let args: Vec<&OsStr> = cmd.get_args().collect();
         assert!(args.contains(&OsStr::new("--json-schema")));
@@ -91,7 +102,17 @@ mod tests {
     #[test]
     fn build_command_with_custom_executable() {
         let proc = ClaudeCodeProcess::new("/usr/local/bin/claude");
-        let cmd = proc.build_command("prompt", Path::new("."), None);
+        let cmd = proc.build_command("prompt", Path::new("."), None, "sonnet");
         assert_eq!(cmd.get_program(), OsStr::new("/usr/local/bin/claude"));
+    }
+
+    #[test]
+    fn build_command_with_model_opus() {
+        let proc = ClaudeCodeProcess::new("claude");
+        let cmd = proc.build_command("hello", Path::new("/tmp"), None, "opus");
+
+        let args: Vec<&OsStr> = cmd.get_args().collect();
+        assert!(args.contains(&OsStr::new("--model")));
+        assert!(args.contains(&OsStr::new("opus")));
     }
 }

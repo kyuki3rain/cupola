@@ -21,6 +21,7 @@ pub struct Config {
     pub log_level: LogLevel,
     pub log_dir: Option<PathBuf>,
     pub max_concurrent_sessions: Option<u32>,
+    pub model: String,
 }
 
 impl Config {
@@ -36,6 +37,7 @@ impl Config {
             log_level: LogLevel::Info,
             log_dir: None,
             max_concurrent_sessions: None,
+            model: "sonnet".to_string(),
         }
     }
 
@@ -65,6 +67,7 @@ mod tests {
         assert_eq!(config.log_level, LogLevel::Info);
         assert!(config.log_dir.is_none());
         assert!(config.max_concurrent_sessions.is_none());
+        assert_eq!(config.model, "sonnet");
     }
 
     #[test]
