@@ -110,6 +110,10 @@ impl SessionManager {
         results
     }
 
+    pub fn count(&self) -> usize {
+        self.sessions.len()
+    }
+
     pub fn is_running(&self, issue_id: i64) -> bool {
         self.sessions.contains_key(&issue_id)
     }
@@ -221,6 +225,28 @@ mod tests {
         let exited = mgr.collect_exited();
         assert_eq!(exited.len(), 1);
         assert!(!exited[0].exit_status.success());
+    }
+
+    #[test]
+    fn count_reflects_registered_and_exited() {
+        let mut mgr = SessionManager::new();
+        assert_eq!(mgr.count(), 0);
+
+        let child1 = spawn_echo();
+        mgr.register(1, child1);
+        assert_eq!(mgr.count(), 1);
+
+        let child2 = spawn_sleep(10);
+        mgr.register(2, child2);
+        assert_eq!(mgr.count(), 2);
+
+        // Wait for echo to finish
+        std::thread::sleep(Duration::from_millis(200));
+        let exited = mgr.collect_exited();
+        assert_eq!(exited.len(), 1);
+        assert_eq!(mgr.count(), 1);
+
+        mgr.kill_all();
     }
 
     #[test]

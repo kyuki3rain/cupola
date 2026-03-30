@@ -20,6 +20,7 @@ pub struct Config {
     pub stall_timeout_secs: u64,
     pub log_level: LogLevel,
     pub log_dir: Option<PathBuf>,
+    pub max_concurrent_sessions: Option<u32>,
 }
 
 impl Config {
@@ -34,7 +35,15 @@ impl Config {
             stall_timeout_secs: 1800,
             log_level: LogLevel::Info,
             log_dir: None,
+            max_concurrent_sessions: None,
         }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(0) = self.max_concurrent_sessions {
+            return Err("max_concurrent_sessions must be greater than 0".to_string());
+        }
+        Ok(())
     }
 }
 
@@ -55,5 +64,29 @@ mod tests {
         assert_eq!(config.stall_timeout_secs, 1800);
         assert_eq!(config.log_level, LogLevel::Info);
         assert!(config.log_dir.is_none());
+        assert!(config.max_concurrent_sessions.is_none());
+    }
+
+    #[test]
+    fn validate_rejects_zero_max_concurrent_sessions() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.max_concurrent_sessions = Some(0);
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_positive_max_concurrent_sessions() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.max_concurrent_sessions = Some(3);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_none_max_concurrent_sessions() {
+        let config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        assert!(config.validate().is_ok());
     }
 }

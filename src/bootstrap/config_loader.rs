@@ -13,6 +13,7 @@ pub struct CupolaToml {
     pub polling_interval_secs: Option<u64>,
     pub max_retries: Option<u32>,
     pub stall_timeout_secs: Option<u64>,
+    pub max_concurrent_sessions: Option<u32>,
     pub log: Option<LogToml>,
 }
 
@@ -56,6 +57,7 @@ impl CupolaToml {
             stall_timeout_secs: self.stall_timeout_secs.unwrap_or(1800),
             log_level,
             log_dir,
+            max_concurrent_sessions: self.max_concurrent_sessions,
         }
     }
 }
@@ -123,6 +125,7 @@ dir = ".cupola/logs"
         assert_eq!(parsed.polling_interval_secs, Some(30));
         assert_eq!(parsed.max_retries, Some(5));
         assert_eq!(parsed.stall_timeout_secs, Some(900));
+        assert!(parsed.max_concurrent_sessions.is_none());
         assert_eq!(
             parsed.log.as_ref().and_then(|l| l.level.as_deref()),
             Some("debug")
@@ -178,6 +181,26 @@ default_branch = "main"
         assert_eq!(config.stall_timeout_secs, 1800);
         assert_eq!(config.log_level, LogLevel::Info);
         assert!(config.log_dir.is_none());
+        assert!(config.max_concurrent_sessions.is_none());
+    }
+
+    #[test]
+    fn parse_max_concurrent_sessions() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+max_concurrent_sessions = 3
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        assert_eq!(parsed.max_concurrent_sessions, Some(3));
+
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides);
+        assert_eq!(config.max_concurrent_sessions, Some(3));
     }
 
     #[test]
