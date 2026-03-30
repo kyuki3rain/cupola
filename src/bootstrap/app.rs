@@ -13,6 +13,7 @@ use crate::adapter::outbound::sqlite_connection::SqliteConnection;
 use crate::adapter::outbound::sqlite_execution_log_repository::SqliteExecutionLogRepository;
 use crate::adapter::outbound::sqlite_issue_repository::SqliteIssueRepository;
 use crate::application::doctor_use_case::DoctorUseCase;
+use crate::application::init_use_case::InitUseCase;
 use crate::application::polling_use_case::PollingUseCase;
 use crate::application::port::issue_repository::IssueRepository;
 use crate::bootstrap::config_loader::{CliOverrides, load_toml};
@@ -81,13 +82,31 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Init => {
-            let db_path = Path::new(".cupola/cupola.db");
-            if let Some(parent) = db_path.parent() {
-                std::fs::create_dir_all(parent).context("failed to create .cupola directory")?;
-            }
-            let db = SqliteConnection::open(db_path)?;
-            db.init_schema()?;
-            println!("SQLite schema initialized at {}", db_path.display());
+            let base_dir = std::env::current_dir().context("failed to get current directory")?;
+            let uc = InitUseCase::new(base_dir);
+            let report = uc.run()?;
+
+            println!("cupola init completed:");
+            println!(
+                "  database: {}",
+                if report.db_initialized { "initialized" } else { "skipped" }
+            );
+            println!(
+                "  cupola.toml: {}",
+                if report.toml_created { "created" } else { "skipped (already exists)" }
+            );
+            println!(
+                "  steering templates: {}",
+                if report.steering_copied { "copied" } else { "skipped" }
+            );
+            println!(
+                "  .gitignore: {}",
+                if report.gitignore_updated {
+                    "updated"
+                } else {
+                    "skipped (already has cupola entries)"
+                }
+            );
             Ok(())
         }
 

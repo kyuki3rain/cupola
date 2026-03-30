@@ -1,5 +1,6 @@
 pub mod doctor_use_case;
 pub mod error;
+pub mod init_use_case;
 pub mod io;
 pub mod polling_use_case;
 pub mod port;
