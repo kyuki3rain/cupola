@@ -267,9 +267,19 @@ where
                 .unwrap_or(0);
 
             if session.exit_status.success() {
+                tracing::info!(
+                    issue_number = issue.github_issue_number,
+                    exit_code = session.exit_status.code().unwrap_or(0),
+                    "Claude Code process exited successfully"
+                );
                 self.handle_successful_exit(&issue, &session, log_id, events)
                     .await;
             } else {
+                tracing::info!(
+                    issue_number = issue.github_issue_number,
+                    exit_code = session.exit_status.code().unwrap_or(-1),
+                    "Claude Code process exited with failure"
+                );
                 // Record failure
                 let _ = self
                     .exec_log_repo
@@ -555,6 +565,11 @@ where
             _ => None,
         };
         if let Some(pr_num) = existing {
+            tracing::info!(
+                issue_number = n,
+                pr_number = pr_num,
+                "PR already exists in DB, skipping creation"
+            );
             return Ok(pr_num);
         }
 
@@ -568,6 +583,13 @@ where
                 _ => {}
             }
             let _ = self.issue_repo.update(&updated).await;
+            tracing::info!(
+                issue_number = n,
+                pr_number = pr.number,
+                head = %head,
+                base = %base,
+                "PR already exists on GitHub, skipping creation"
+            );
             return Ok(pr.number);
         }
 
@@ -585,6 +607,13 @@ where
             .unwrap_or(&fb_body);
 
         let pr_number = self.github.create_pr(&head, &base, title, body).await?;
+        tracing::info!(
+            issue_number = n,
+            pr_number = pr_number,
+            head = %head,
+            base = %base,
+            "PR created successfully"
+        );
 
         // Record PR number (and feature_name for design phase) in DB
         let mut updated = issue.clone();
@@ -621,12 +650,27 @@ where
                 tracing::warn!(thread_id = %resp.thread_id, error = %e, "failed to reply to thread");
                 continue;
             }
-            if resp.resolved
-                && let Err(e) = self.github.resolve_thread(&resp.thread_id).await
-            {
-                tracing::warn!(thread_id = %resp.thread_id, error = %e, "failed to resolve thread");
+            tracing::info!(
+                thread_id = %resp.thread_id,
+                "replied to review thread"
+            );
+            if resp.resolved {
+                if let Err(e) = self.github.resolve_thread(&resp.thread_id).await {
+                    tracing::warn!(thread_id = %resp.thread_id, error = %e, "failed to resolve thread");
+                } else {
+                    tracing::info!(
+                        thread_id = %resp.thread_id,
+                        "resolved review thread"
+                    );
+                }
             }
         }
+
+        tracing::info!(
+            issue_number = _issue.github_issue_number,
+            thread_count = output.threads.len(),
+            "fixing post-processing completed"
+        );
     }
 
     // --- Helpers ---

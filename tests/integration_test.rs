@@ -616,3 +616,72 @@ async fn impl_review_waiting_issue_close_without_merge_becomes_cancelled() {
         "Should be cancelled when PR is not merged"
     );
 }
+
+// === INFO ログ出力検証テスト ===
+// tracing::info! はクロスカッティング関心事であり、ログ出力自体は tracing の内部で処理される。
+// 以下のテストでは、ログ追加後も全ての状態遷移パスが正常に動作することを検証する。
+// 実際のログ出力内容は E2E テスト（cupola run）で目視確認する。
+
+#[tokio::test]
+async fn state_transition_log_does_not_break_all_transition_paths() {
+    let (repo, github, config) = setup();
+    let worktree = MockGitWorktree;
+
+    let uc = TransitionUseCase {
+        github: &github,
+        issue_repo: &repo,
+        worktree: &worktree,
+        config: &config,
+    };
+
+    // Path 1: Idle → Initialized (via handle_issue_detected)
+    let mut issue = uc.handle_issue_detected(42).await.expect("detect");
+    assert_eq!(issue.state, State::Initialized);
+
+    // Path 2: Initialized → DesignRunning
+    issue.worktree_path = Some("/tmp/wt".into());
+    repo.update(&issue).await.expect("update");
+    uc.apply(&mut issue, &Event::InitializationCompleted)
+        .await
+        .expect("init completed");
+    assert_eq!(issue.state, State::DesignRunning);
+
+    // Path 3: DesignRunning → DesignReviewWaiting
+    issue.design_pr_number = Some(100);
+    repo.update(&issue).await.expect("update");
+    uc.apply(&mut issue, &Event::ProcessCompletedWithPr)
+        .await
+        .expect("pr");
+    assert_eq!(issue.state, State::DesignReviewWaiting);
+
+    // Path 4: DesignReviewWaiting → DesignFixing
+    uc.apply(&mut issue, &Event::UnresolvedThreadsDetected)
+        .await
+        .expect("unresolved");
+    assert_eq!(issue.state, State::DesignFixing);
+
+    // Path 5: DesignFixing → DesignReviewWaiting
+    uc.apply(&mut issue, &Event::ProcessCompleted)
+        .await
+        .expect("fix done");
+    assert_eq!(issue.state, State::DesignReviewWaiting);
+
+    // Path 6: IssueClosed → Cancelled
+    let mut issue2 = uc.handle_issue_detected(43).await.expect("detect");
+    uc.apply(&mut issue2, &Event::IssueClosed)
+        .await
+        .expect("close");
+    assert_eq!(issue2.state, State::Cancelled);
+
+    // Path 7: ProcessFailed → same state (retry)
+    let mut issue3 = uc.handle_issue_detected(44).await.expect("detect");
+    issue3.worktree_path = Some("/tmp/wt3".into());
+    repo.update(&issue3).await.expect("update");
+    uc.apply(&mut issue3, &Event::InitializationCompleted)
+        .await
+        .expect("init");
+    uc.apply(&mut issue3, &Event::ProcessFailed)
+        .await
+        .expect("fail");
+    assert_eq!(issue3.state, State::DesignRunning);
+}
