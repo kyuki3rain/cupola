@@ -196,6 +196,7 @@ mod tests {
         let db = SqliteConnection::open_in_memory().expect("should open");
         // Running init_schema twice should not fail even if model column already exists
         db.init_schema().expect("first init");
-        db.init_schema().expect("second init should succeed (idempotent)");
+        db.init_schema()
+            .expect("second init should succeed (idempotent)");
     }
 }

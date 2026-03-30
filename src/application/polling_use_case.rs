@@ -161,7 +161,11 @@ where
             Ok(active_issues) => {
                 for issue in &active_issues {
                     // Re-check labels and update model in DB if changed
-                    match self.github.get_issue_labels(issue.github_issue_number).await {
+                    match self
+                        .github
+                        .get_issue_labels(issue.github_issue_number)
+                        .await
+                    {
                         Ok(labels) => {
                             let new_model = extract_model_from_labels(&labels);
                             if new_model != issue.model {
@@ -558,8 +562,7 @@ where
                 OutputSchemaKind::Fixing => Some(FIXING_SCHEMA),
             };
 
-            let resolved_model =
-                resolve_model(issue.model.as_deref(), &self.config.model);
+            let resolved_model = resolve_model(issue.model.as_deref(), &self.config.model);
 
             match self
                 .claude_runner
@@ -847,7 +850,11 @@ where
 fn extract_model_from_labels(labels: &[String]) -> Option<String> {
     labels.iter().find_map(|l| {
         let model = l.strip_prefix("model:")?.trim();
-        if model.is_empty() { None } else { Some(model.to_string()) }
+        if model.is_empty() {
+            None
+        } else {
+            Some(model.to_string())
+        }
     })
 }
 

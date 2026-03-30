@@ -1106,9 +1106,10 @@ async fn step1_updates_model_from_label() {
     let github = MockGitHubClient::new();
     {
         let mut state = github.state.lock().unwrap();
-        state
-            .issue_labels
-            .insert(300, vec!["model:opus".to_string(), "agent:ready".to_string()]);
+        state.issue_labels.insert(
+            300,
+            vec!["model:opus".to_string(), "agent:ready".to_string()],
+        );
     }
     let config = test_config();
     let mut polling = setup_polling_with_github(github, config);
@@ -1129,11 +1130,7 @@ async fn step1_updates_model_from_label() {
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
-    let issue_id = polling
-        .issue_repo_ref()
-        .save(&issue)
-        .await
-        .expect("save");
+    let issue_id = polling.issue_repo_ref().save(&issue).await.expect("save");
 
     // Run step 1 by running one full cycle
     polling.run_cycle().await.expect("cycle");
@@ -1185,11 +1182,7 @@ async fn step1_clears_model_when_label_removed() {
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
-    let issue_id = polling
-        .issue_repo_ref()
-        .save(&issue)
-        .await
-        .expect("save");
+    let issue_id = polling.issue_repo_ref().save(&issue).await.expect("save");
 
     // Run one cycle
     polling.run_cycle().await.expect("cycle");
