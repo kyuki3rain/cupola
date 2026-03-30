@@ -10,7 +10,7 @@
 - **Discovery Scope**: Simple Addition（既存関数へのプロンプト文字列追加）
 - **Key Findings**:
   - 変更対象は `src/application/prompt.rs` 内の3つのプライベート関数のみ
-  - 追加するのはプロンプト文字列のテキストであり、Rustのロジック変更は不要
+  - 追加するのは主にプロンプト文字列のテキストであり、最小限のロジック変更（手順番号の動的生成）のみ伴う
   - 既存テストはプロンプト内容の存在確認をしており、新規テストで品質チェック文言の存在を検証できる
 
 ## Research Log
@@ -28,7 +28,7 @@
 ### cargo品質チェックコマンドの確認
 
 - **Context**: プロンプトに記述すべきコマンドの正確な形式の確認
-- **Sources Consulted**: `.cupola/steering/tech.md`、`.claude/rules/rust-hooks.md`
+- **Sources Consulted**: `.cupola/steering/tech.md`
 - **Findings**:
   - `cargo fmt` — コード整形
   - `cargo clippy -- -D warnings` — 全警告をエラーとして静的解析
