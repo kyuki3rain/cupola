@@ -211,4 +211,4 @@ permissions:
   contents: write
 ```
 
-- 外部 Action はコミットハッシュでピン留めすることを推奨するが、本機能では ci.yml と統一してバージョンタグ固定（`@v2`、`@stable`）を使用する
+- 外部 Action はセキュリティ観点から **コミットハッシュでピン留めする**。`.github/workflows/ci.yml` と同様に `actions/checkout@<commit>` および `Swatinem/rust-cache@<commit>` 形式を採用し、`@v2` や `@stable` などの可変タグは使用しない

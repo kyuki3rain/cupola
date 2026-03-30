@@ -39,7 +39,7 @@
   - GitHub Release が存在しない場合は自動作成されることを確認する
   - _Requirements: 1.4, 3.1, 3.3, 3.4_
 
-- [ ]* 4. ワークフロー動作の検証
+- [ ] 4. ワークフロー動作の検証
   - テストタグ（`v0.0.1-test` 等）を push してワークフロー全体が正常に動作することを確認する
   - GitHub Release に `cupola-x86_64-unknown-linux-gnu.tar.gz` および `cupola-aarch64-unknown-linux-gnu.tar.gz` の両方が含まれることを確認する
   - 既存 `ci.yml` がタグ push で誤ってトリガーされないことを確認する
