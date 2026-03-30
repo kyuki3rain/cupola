@@ -54,6 +54,11 @@ impl GitWorktreeManager {
 }
 
 impl GitWorktree for GitWorktreeManager {
+    fn fetch(&self) -> Result<()> {
+        self.run_git(&["fetch", "origin"])
+            .context("failed to fetch from origin")
+    }
+
     fn create(&self, path: &Path, branch: &str, start_point: &str) -> Result<()> {
         if path.exists() {
             tracing::info!(path = %path.display(), "worktree already exists, skipping create");
@@ -110,6 +115,90 @@ impl GitWorktree for GitWorktreeManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn init_git_repo(dir: &std::path::Path) {
+        assert!(
+            Command::new("git")
+                .args(["init"])
+                .current_dir(dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["config", "user.email", "test@example.com"])
+                .current_dir(dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["config", "user.name", "Test"])
+                .current_dir(dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    #[test]
+    fn fetch_succeeds_with_valid_origin() {
+        let origin_dir = tempfile::tempdir().unwrap();
+        let repo_dir = tempfile::tempdir().unwrap();
+
+        // Init bare origin repo
+        assert!(
+            Command::new("git")
+                .args(["init", "--bare"])
+                .current_dir(origin_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        // Init local repo and add origin remote
+        init_git_repo(repo_dir.path());
+        assert!(
+            Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    origin_dir.path().to_str().unwrap(),
+                ])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let mgr = GitWorktreeManager::new(repo_dir.path());
+        let result = mgr.fetch();
+        assert!(
+            result.is_ok(),
+            "fetch should succeed with valid origin: {result:?}"
+        );
+    }
+
+    #[test]
+    fn fetch_fails_without_origin_has_context() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_git_repo(repo_dir.path());
+
+        let mgr = GitWorktreeManager::new(repo_dir.path());
+        let result = mgr.fetch();
+        assert!(
+            result.is_err(),
+            "fetch should fail when origin is not configured"
+        );
+        let err_msg = format!("{:#}", result.unwrap_err());
+        assert!(
+            err_msg.contains("failed to fetch from origin"),
+            "error should contain context message, got: {err_msg}"
+        );
+    }
 
     #[test]
     fn remove_nonexistent_worktree_is_ok() {
