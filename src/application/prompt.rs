@@ -285,7 +285,7 @@ mod tests {
         let config = test_config();
         let session = build_session_config(State::DesignRunning, 42, &config, None, None);
         assert!(
-            session.prompt.contains("Related"),
+            session.prompt.contains("Related: #42"),
             "design prompt should instruct to use 'Related: #N'"
         );
     }
