@@ -14,6 +14,7 @@ pub struct CupolaToml {
     pub max_retries: Option<u32>,
     pub stall_timeout_secs: Option<u64>,
     pub max_concurrent_sessions: Option<u32>,
+    pub model: Option<String>,
     pub log: Option<LogToml>,
 }
 
@@ -58,6 +59,7 @@ impl CupolaToml {
             log_level,
             log_dir,
             max_concurrent_sessions: self.max_concurrent_sessions,
+            model: self.model.unwrap_or_else(|| "sonnet".to_string()),
         }
     }
 }
@@ -182,6 +184,7 @@ default_branch = "main"
         assert_eq!(config.log_level, LogLevel::Info);
         assert!(config.log_dir.is_none());
         assert!(config.max_concurrent_sessions.is_none());
+        assert_eq!(config.model, "sonnet");
     }
 
     #[test]
@@ -223,6 +226,62 @@ level = "info"
 
         assert_eq!(config.polling_interval_secs, 10);
         assert_eq!(config.log_level, LogLevel::Debug);
+    }
+
+    #[test]
+    fn parse_model_specified() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+model = "opus"
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        assert_eq!(parsed.model.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn parse_model_unspecified() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        assert!(parsed.model.is_none());
+    }
+
+    #[test]
+    fn into_config_model_specified() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+model = "opus"
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides);
+        assert_eq!(config.model, "opus");
+    }
+
+    #[test]
+    fn into_config_model_default() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides);
+        assert_eq!(config.model, "sonnet");
     }
 
     #[test]

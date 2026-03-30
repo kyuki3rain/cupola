@@ -537,7 +537,7 @@ async fn impl_review_waiting_issue_close_with_merged_pr_becomes_completed() {
 
     struct DummyRunner;
     impl ClaudeCodeRunner for DummyRunner {
-        fn spawn(&self, _p: &str, _d: &Path, _s: Option<&str>) -> Result<Child> {
+        fn spawn(&self, _p: &str, _d: &Path, _s: Option<&str>, _m: &str) -> Result<Child> {
             anyhow::bail!("not implemented")
         }
     }
@@ -700,6 +700,7 @@ impl ClaudeCodeRunner for MockClaudeCodeRunner {
         _prompt: &str,
         _working_dir: &Path,
         _json_schema: Option<&str>,
+        _model: &str,
     ) -> Result<std::process::Child> {
         use std::process::{Command, Stdio};
         Command::new("sleep")
