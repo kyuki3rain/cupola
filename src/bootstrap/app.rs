@@ -89,15 +89,27 @@ pub async fn run(cli: Cli) -> Result<()> {
             println!("cupola init completed:");
             println!(
                 "  database: {}",
-                if report.db_initialized { "initialized" } else { "skipped" }
+                if report.db_initialized {
+                    "initialized"
+                } else {
+                    "skipped"
+                }
             );
             println!(
                 "  cupola.toml: {}",
-                if report.toml_created { "created" } else { "skipped (already exists)" }
+                if report.toml_created {
+                    "created"
+                } else {
+                    "skipped (already exists)"
+                }
             );
             println!(
                 "  steering templates: {}",
-                if report.steering_copied { "copied" } else { "skipped" }
+                if report.steering_copied {
+                    "copied"
+                } else {
+                    "skipped"
+                }
             );
             println!(
                 "  .gitignore: {}",

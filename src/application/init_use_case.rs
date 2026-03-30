@@ -79,7 +79,10 @@ mod tests {
 
         assert!(report.db_initialized, "db should be initialized");
         assert!(report.toml_created, "toml should be created");
-        assert!(!report.steering_copied, "steering should be skipped (no template)");
+        assert!(
+            !report.steering_copied,
+            "steering should be skipped (no template)"
+        );
         assert!(report.gitignore_updated, "gitignore should be updated");
 
         // ファイルの存在確認
@@ -121,20 +124,27 @@ mod tests {
         // 1回目の実行
         uc.run().expect("first run");
 
-        let toml_content_after_first = fs::read_to_string(
-            tmp.path().join(".cupola").join("cupola.toml"),
-        )
-        .expect("read toml");
+        let toml_content_after_first =
+            fs::read_to_string(tmp.path().join(".cupola").join("cupola.toml")).expect("read toml");
         let gitignore_content_after_first =
             fs::read_to_string(tmp.path().join(".gitignore")).expect("read gitignore");
 
         // 2回目の実行
         let report = uc.run().expect("second run");
 
-        assert!(!report.db_initialized, "db already existed, should be skipped on 2nd run");
+        assert!(
+            !report.db_initialized,
+            "db already existed, should be skipped on 2nd run"
+        );
         assert!(!report.toml_created, "toml should be skipped on 2nd run");
-        assert!(!report.steering_copied, "steering should be skipped on 2nd run");
-        assert!(!report.gitignore_updated, "gitignore should be skipped on 2nd run");
+        assert!(
+            !report.steering_copied,
+            "steering should be skipped on 2nd run"
+        );
+        assert!(
+            !report.gitignore_updated,
+            "gitignore should be skipped on 2nd run"
+        );
 
         // ファイル内容が変わっていないこと
         assert_eq!(
@@ -164,7 +174,10 @@ mod tests {
         let uc = InitUseCase::new(tmp.path().to_path_buf());
         let report = uc.run().expect("run");
 
-        assert!(report.steering_copied, "steering should be copied when template exists");
+        assert!(
+            report.steering_copied,
+            "steering should be copied when template exists"
+        );
 
         let dest = tmp
             .path()
@@ -183,7 +196,10 @@ mod tests {
 
         assert!(report.db_initialized);
         assert!(report.toml_created);
-        assert!(!report.steering_copied, "should skip steering without template");
+        assert!(
+            !report.steering_copied,
+            "should skip steering without template"
+        );
         assert!(report.gitignore_updated);
     }
 }
