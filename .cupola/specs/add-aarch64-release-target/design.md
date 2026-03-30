@@ -211,4 +211,4 @@ permissions:
   contents: write
 ```
 
-- 外部 Action はセキュリティ観点から **コミットハッシュでピン留めする**。`.github/workflows/ci.yml` と同様に `actions/checkout@<commit>` および `Swatinem/rust-cache@<commit>` 形式を採用し、`@v2` や `@stable` などの可変タグは使用しない
+- 外部 Action はセキュリティ観点から、**可能なものはコミットハッシュでピン留めする**。`.github/workflows/ci.yml` と同様に `actions/checkout@<commit>` および `Swatinem/rust-cache@<commit>` 形式を採用する。一方で、既存 CI ですでに利用している `dtolnay/rust-toolchain@stable` のように、上流で `@stable` 利用が推奨されている Action については、そのポリシーに従い `dtolnay/rust-toolchain@stable` を例外として認める。`softprops/action-gh-release` についても、`.github/workflows/release.yml` で実際に使用するリビジョン（コミットハッシュまたはタグ。例: `softprops/action-gh-release@<commit>` や `softprops/action-gh-release@vX`）を明示的に指定し、本方針と整合するように管理する
