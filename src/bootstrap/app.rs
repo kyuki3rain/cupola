@@ -7,7 +7,7 @@ use crate::adapter::outbound::claude_code_process::ClaudeCodeProcess;
 use crate::adapter::outbound::git_worktree_manager::GitWorktreeManager;
 use crate::adapter::outbound::github_client_impl::GitHubClientImpl;
 use crate::adapter::outbound::github_graphql_client::GraphQLClient;
-use crate::adapter::outbound::github_rest_client::{OctocrabRestClient, resolve_github_token};
+use crate::adapter::outbound::github_rest_client::OctocrabRestClient;
 use crate::adapter::outbound::process_command_runner::ProcessCommandRunner;
 use crate::adapter::outbound::sqlite_connection::SqliteConnection;
 use crate::adapter::outbound::sqlite_execution_log_repository::SqliteExecutionLogRepository;
@@ -56,7 +56,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             db.init_schema()?;
 
             // Resolve GitHub token
-            let token = resolve_github_token()?;
+            let token = gh_token::get()?;
 
             // Build adapters
             let rest = OctocrabRestClient::new(token.clone(), cfg.owner.clone(), cfg.repo.clone())?;
