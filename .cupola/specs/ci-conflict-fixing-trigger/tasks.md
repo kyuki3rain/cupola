@@ -12,7 +12,7 @@
 
 - [ ] 1.2 Issue エンティティに fixing_causes フィールドを追加してDBスキーマを移行する
   - `Issue` 構造体に `fixing_causes: Vec<FixingProblemKind>` フィールドを追加する
-  - SQLite の `issues` テーブルに `fixing_causes TEXT NOT NULL DEFAULT '[]'` カラムを追加するスキーマ移行を実装する（`ALTER TABLE IF NOT EXISTS` またはスキーマ初期化時の対応）
+  - SQLite の `issues` テーブルに `fixing_causes TEXT NOT NULL DEFAULT '[]'` カラムを追加するスキーマ移行を実装する（`PRAGMA table_info(issues)` でカラムの存在を確認し、存在しない場合のみ `ALTER TABLE issues ADD COLUMN fixing_causes TEXT NOT NULL DEFAULT '[]'` を実行する、あるいは `ALTER TABLE issues ADD COLUMN` 実行時の重複カラムエラーをハンドリングする）
   - `SqliteIssueRepository` の CRUD 操作（insert/update/find）で `fixing_causes` を JSON 文字列に変換して保存・読み込みする
   - 既存の `Issue` 構築箇所に `fixing_causes: vec![]` のデフォルト値を追加する
   - _Requirements: 3.5, 4.1, 5.1, 5.2_
@@ -114,7 +114,7 @@
   - CI 失敗 + unresolved thread が同時発生した場合に1回の `UnresolvedThreadsDetected` イベントにまとめられることを検証
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 5.5_
 
-- [ ]* 7.3 prepare_inputs の入力ファイル書き出しを検証するテストを追加する
+- [ ] 7.3 prepare_inputs の入力ファイル書き出しを検証するテストを追加する
   - `fixing_causes = [CiFailure]` で `ci_errors.txt` のみ生成されることを tempdir で検証
   - `fixing_causes = [Conflict]` で `conflict_info.txt` のみ生成されることを tempdir で検証
   - `fixing_causes = [ReviewComments, CiFailure]` で両ファイルが生成されることを tempdir で検証

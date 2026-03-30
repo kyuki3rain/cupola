@@ -77,7 +77,7 @@ graph TB
 
 | Layer | Choice / Version | Role in Feature | Notes |
 |-------|------------------|-----------------|-------|
-| Backend / Services | Rust (Edition 2024) + tokio | 非同期polllingループ拡張 | 変更なし |
+| Backend / Services | Rust (Edition 2024) + tokio | 非同期pollingループ拡張 | 変更なし |
 | GitHub API | reqwest (直接REST) | CI check-runs API呼び出し | octocrab非対応のため |
 | GitHub API | octocrab | PR mergeable フィールド取得 | 既存 `get(pr_num)` 流用 |
 | Data / Storage | SQLite (rusqlite) | fixing_causes カラム追加 | JSON配列としてシリアライズ |
@@ -155,7 +155,7 @@ sequenceDiagram
 | 1.4 | Checks API 失敗時はスキップ | step4_pr_monitoring | GitHubClient::get_ci_check_runs | step4判定フロー |
 | 1.5 | API コールを +2回/サイクル以内に収める | step4_pr_monitoring | — | step4判定フロー |
 | 2.1 | mergeable フィールドを polling で確認 | step4_pr_monitoring | GitHubClient::get_pr_mergeable | step4判定フロー |
-| 2.2 | conflict 時に fixing 遷移 | step4_pr_monitoring | event: UnresolvedThreadsDetected | step4判定フロー |
+| 2.2 | conflict 時に fixing 遷移 | step4_pr_monitoring | event: UnresolvedThreadsDetected（fixing 遷移の汎用トリガー。threads, CI, conflict など複数原因で発火しうる） | step4判定フロー |
 | 2.3 | conflict 情報を conflict_info.txt に書き出し | prepare_inputs, io.rs | write_conflict_info_input | fixingプロセス起動フロー |
 | 2.4 | mergeable==null はスキップ | step4_pr_monitoring | GitHubClient::get_pr_mergeable | step4判定フロー |
 | 2.5 | conflict_info.txt にブランチ名を含める | io.rs | write_conflict_info_input | fixingプロセス起動フロー |
@@ -340,13 +340,13 @@ for each issue in review_waiting:
     // (5) 問題があればDB更新 + イベント発行
     if !causes.is_empty():
         issue.fixing_causes = causes
-        issue.ci_error_log = ci_errors  // prepare_inputs用に一時保持
+        // ci_errors は prepare_inputs で GitHub から再取得する（Issue には保持しない）
         issue_repo.update(&issue)
         emit UnresolvedThreadsDetected
 ```
 
 **Implementation Notes**
-- Integration: CI エラーログは `step4` 内でDB更新時に `issue.fixing_causes` とともに保持。実際のファイル書き出しは `prepare_inputs` で行う
+- Integration: CI エラーログは `prepare_inputs` で GitHub から再取得してファイルに書き出す（Issue エンティティには保持しない）。`step4` では `fixing_causes` のみをDBに保存する
 - Validation: merge確認後にCIチェックを実行（API効率化のため）
 - Risks: `get_ci_check_runs` は2段階API呼び出し（PR head SHA取得 → check-runs取得）になるため、失敗時の部分的エラー処理を明確にすること
 
@@ -454,7 +454,7 @@ DesignFixing | ImplementationFixing:
         threads = github.list_unresolved_threads(pr_num)
         write_review_threads_input(wt, &threads)?
     if CiFailure in causes:
-        // CI errors は step4 で取得済み → issue から取得 or 再取得
+        // CI errors は prepare_inputs で GitHub から再取得する
         errors = github.get_ci_check_runs(pr_num)でfailureのみ抽出
         write_ci_errors_input(wt, &errors)?
     if Conflict in causes:
