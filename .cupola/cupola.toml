@@ -5,6 +5,7 @@ language = "ja"
 polling_interval_secs = 60
 max_retries = 3
 stall_timeout_secs = 1800
+max_concurrent_sessions = 3
 
 [log]
 level = "info"
