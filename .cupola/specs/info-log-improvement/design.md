@@ -107,20 +107,20 @@ graph TB
 
 ```rust
 // 既存の apply() メソッド内に以下のログを追加
-// 挿入位置: StateMachine::transition() 成功後、DB 更新前
+// 挿入位置: update_state() 成功後（DB 更新が永続化された直後）
 tracing::info!(
     issue_number = issue.github_issue_number,
-    from = %old_state,
-    to = %new_state,
+    from = ?old_state,
+    to = ?new_state,
     "state transition"
 );
 ```
-- Preconditions: `StateMachine::transition()` が成功（Ok を返却）
+- Preconditions: `StateMachine::transition()` が成功（Ok を返却）し、`update_state()` による DB 更新が完了
 - Postconditions: INFO ログが 1 行出力される
-- Invariants: 遷移が発生しない場合（エラー時）はログを出力しない
+- Invariants: 遷移が発生しない場合（エラー時）や DB 更新に失敗した場合はログを出力しない
 
 **Implementation Notes**
-- `State` enum は `Display` trait を実装済み（`%` フォーマット利用可能）であることを確認。未実装の場合は `Debug`（`?`）を使用
+- 現状 `State` enum は `Debug` 派生のみ想定するため、ログ出力には `Debug`（`?`）フォーマットを使用する（例: `from = ?old_state, to = ?new_state`）。将来 `Display` trait を実装した場合は `%` フォーマットへの切り替えを検討する
 - `old_state` と `new_state` は `apply()` 内の既存ローカル変数をそのまま使用
 
 #### PollingUseCase — PR 作成ログ
@@ -244,12 +244,12 @@ tracing::info!(
 ## Testing Strategy
 
 ### Unit Tests
-- `TransitionUseCase::apply()` で状態遷移後に INFO ログが出力されることを `tracing-test` クレートで検証
+- `TransitionUseCase::apply()` で状態遷移後に INFO ログが出力されることを、`tracing_subscriber::fmt::TestWriter` など既存のテスト用ユーティリティを用いて検証
 - `State` enum の `Display` 実装（または `Debug`）が期待する文字列を返すことを検証
 
 ### Integration Tests
 - `PollingUseCase` の既存テストに対し、`tracing_subscriber::fmt::TestWriter` でログ出力を確認
-- 各イベント（PR 作成、fixing 完了、プロセス終了）のフローで期待するログフィールドが含まれることを検証
+- 各イベント（PR 作成、fixing 完了、プロセス終了）のフローで、`tracing_subscriber::fmt::TestWriter` で取得したログに期待するフィールドが含まれることを検証
 
 ### E2E Tests
 - `cupola run` を INFO ログレベルで実行し、状態遷移・PR 作成・fixing 完了・プロセス終了の全ログが出力されることを目視確認

@@ -1,9 +1,9 @@
 # Implementation Plan
 
 - [ ] 1. 状態遷移の INFO ログを追加する
-  - `TransitionUseCase::apply()` 内で状態遷移が成功した直後に、遷移元状態・遷移先状態・issue_number を構造化フィールドとして含む INFO ログを出力する
+  - `TransitionUseCase::apply()` 内で、DB 更新（`update_state`）が成功し状態遷移が永続化された直後に、遷移元状態・遷移先状態・issue_number を構造化フィールドとして含む INFO ログを出力する
   - `State` enum が `Display` trait を実装していない場合は `Debug` フォーマットを使用する
-  - IssueClosed → Cancelled を含む全ての遷移パスが同一のログ出力を通ることを確認する
+  - IssueClosed → Cancelled を含む全ての「update_state 成功パス」が同一のログ出力を通ることを確認する（DB 更新に失敗したパスではログを出力しない）
   - _Requirements: 1.1, 1.2, 1.3_
 
 - [ ] 2. PR 作成の INFO ログを追加する
