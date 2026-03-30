@@ -25,7 +25,7 @@
 
 - [ ] 2. (P) GitHub API からラベル一覧を取得する機能を追加する
 - [ ] 2.1 (P) GitHubClient トレイトに get_issue_labels メソッドを追加する
-  - `application/port/github_client.rs` の `GitHubClient` トレイトに `get_issue_labels(issue_number: u64) -> Result<Vec<String>>` メソッドを追加する
+  - `application/port/github_client.rs` の `GitHubClient` トレイトに `get_issue_labels(issue_number: u64) -> impl Future<Output = Result<Vec<String>>> + Send` メソッドを追加する
   - 戻り値はラベル名の文字列リスト（ラベルなしの場合は空 Vec）
   - GitHub API エラー時は `Err` を返す
   - タスク 1 と並行して実施可能（異なるファイルを操作するため）

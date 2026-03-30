@@ -51,7 +51,7 @@
 | Option | 説明 | 利点 | リスク / 制限 | 採用 |
 |--------|------|------|---------------|------|
 | A: get_issue() 流用 | 非終端 Issue のラベル確認に既存の `get_issue()` を使用 | 新メソッド不要 | title・body も取得するため無駄な転送量が増える | 不採用 |
-| B: GitHubIssue に labels 追加 | `list_ready_issues` の戻り値にラベルを含める | 新規 Issue 検出時に即座にモデル初期化可能 | 非終端 Issue のラベル更新には対応できない（別途仕組みが必要） | 部分採用（新規 Issue 初期化は list_ready_issues の labels で行う） |
+| B: GitHubIssue に labels 追加 | `GitHubIssue` に `labels` を追加し、`list_ready_issues` の戻り値にラベルを含める案 | 新規 Issue 検出時に即座にモデル初期化可能 | 非終端 Issue のラベル更新には対応できない（別途仕組みが必要） | 不採用（最終設計では GitHubIssue に labels を追加せず、get_issue_labels のみ採用） |
 | C: 新メソッド get_issue_labels 追加 | ラベルのみを取得する専用 API メソッド | 軽量、用途が明確 | トレイト・アダプタ両方の実装が必要 | **採用**（非終端 Issue の動的更新に使用） |
 
 ## Design Decisions
@@ -75,7 +75,7 @@
   1. 優先順位解決ロジックをドメイン層（Issue struct）に持つ
   2. アプリケーション層（PollingUseCase）で解決
   3. Config に解決メソッドを追加
-- **Selected Approach**: `PollingUseCase::step7_spawn_processes` 内で `issue.model.as_deref().unwrap_or(&self.config.model)` として解決する
+- **Selected Approach**: `PollingUseCase::step7_spawn_processes` 内で `resolve_model(issue, &self.config)` のようなヘルパーを用い、`Issue → cupola.toml → "sonnet"` の優先順位（Issue の `model` が `Some` かつ非空ならそれを使用し、次に config の `model` が設定されていればそれを使用し、いずれもなければ `"sonnet"` にフォールバック）でモデルを解決する
 - **Rationale**: モデル選択はユースケース固有のオーケストレーションロジックであり、アプリケーション層が適切。ドメイン層は純粋であるべき。
 - **Trade-offs**: PollingUseCase が変更されるが、責務は適切に分離されている
 
@@ -88,7 +88,7 @@
 
 ## Risks & Mitigations
 
-- **既存 DB へのマイグレーション漏れ** — `cargo run -- init` がべき等に `ALTER TABLE IF NOT EXISTS` を実行するか、または起動時に自動マイグレーションを行う仕組みを追加する
+- **既存 DB へのマイグレーション漏れ** — `cargo run -- init` がべき等に `PRAGMA table_info` などでカラムの存在を確認してから `ALTER TABLE ... ADD COLUMN` を実行するか、あるいは `ALTER TABLE ... ADD COLUMN` 実行時の duplicate column エラーを握りつぶす形で起動時に自動マイグレーションを行う仕組みを追加する
 - **ラベル取得 API レート制限** — `get_issue_labels` を非終端 Issue ごとに毎サイクル呼び出すため、Issue 数が多い場合は GitHub API レート制限に達する可能性がある。現時点では許容範囲内と判断するが、将来的には `list_ready_issues` のレスポンスにラベル情報を含めてリクエスト数を削減することが可能
 - **model:* ラベルが複数存在する場合の順序不定** — ラベルリストの先頭に見つかったものを使用するという仕様で対応。ドキュメントに明記する。
 
