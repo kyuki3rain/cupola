@@ -33,9 +33,10 @@ impl InitUseCase {
 
         // Step 2: SQLite スキーマ初期化
         let db_path = cupola_dir.join("cupola.db");
+        let db_existed = db_path.exists();
         let db = SqliteConnection::open(&db_path)?;
         db.init_schema()?;
-        let db_initialized = true;
+        let db_initialized = !db_existed;
         tracing::info!(path = %db_path.display(), "SQLite schema initialized");
 
         // Step 3-5: ファイル生成
@@ -130,7 +131,7 @@ mod tests {
         // 2回目の実行
         let report = uc.run().expect("second run");
 
-        assert!(report.db_initialized, "db init is idempotent");
+        assert!(!report.db_initialized, "db already existed, should be skipped on 2nd run");
         assert!(!report.toml_created, "toml should be skipped on 2nd run");
         assert!(!report.steering_copied, "steering should be skipped on 2nd run");
         assert!(!report.gitignore_updated, "gitignore should be skipped on 2nd run");

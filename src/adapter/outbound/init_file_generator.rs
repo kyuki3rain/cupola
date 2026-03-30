@@ -18,6 +18,7 @@ default_branch = ""
 "#;
 
 const GITIGNORE_MARKER: &str = "# cupola";
+const GITIGNORE_CONTENT_CHECK: &str = ".cupola/cupola.db";
 
 const GITIGNORE_ENTRIES: &str = r#"# cupola
 .cupola/cupola.db
@@ -144,16 +145,18 @@ impl InitFileGenerator {
             let content = std::fs::read_to_string(&gitignore_path).with_context(|| {
                 format!("failed to read .gitignore at {}", gitignore_path.display())
             })?;
-            if content.contains(GITIGNORE_MARKER) {
+            if content.contains(GITIGNORE_MARKER) || content.contains(GITIGNORE_CONTENT_CHECK) {
                 tracing::info!(
                     path = %gitignore_path.display(),
                     "cupola entries already present in .gitignore, skipping"
                 );
                 return Ok(false);
             }
-            // 既存の末尾に改行を追加してから追記
-            let separator = if content.ends_with('\n') { "" } else { "\n" };
-            let new_content = format!("{content}{separator}\n{GITIGNORE_ENTRIES}");
+            // 既存の行末スタイルを検出し、同じ改行コードで追記する
+            let line_ending = if content.contains("\r\n") { "\r\n" } else { "\n" };
+            let separator = if content.ends_with('\n') { "" } else { line_ending };
+            let entries = GITIGNORE_ENTRIES.replace('\n', line_ending);
+            let new_content = format!("{content}{separator}{entries}");
             std::fs::write(&gitignore_path, new_content).with_context(|| {
                 format!(
                     "failed to append to .gitignore at {}",
