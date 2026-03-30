@@ -12,8 +12,8 @@ cupola init コマンドの拡張: SQLiteスキーマ初期化に加え、cupola
 **Objective:** 開発者として、既存の SQLite スキーマ初期化機能が引き続き動作することを保証したい。拡張によって既存機能が壊れないようにするため。
 
 #### Acceptance Criteria
-1. When `cupola init` コマンドが実行された場合, the cupola CLI shall SQLite データベースファイルを作成し、スキーマを初期化する
-2. While SQLite データベースが既に初期化済みの場合, the cupola CLI shall エラーを発生させずに正常に処理を完了する
+1. When `cupola init` コマンドが実行された場合, the cupola CLI shall create a SQLite データベースファイル and initialize the スキーマ
+2. When the SQLite データベースが既に初期化済みの場合, the cupola CLI shall complete processing successfully without raising an error
 
 ### Requirement 2: cupola.toml 雛形生成
 **Objective:** 開発者として、`cupola init` 実行時に cupola.toml の雛形が自動生成されることで、手動でファイルを作成する手間を省きたい。
@@ -42,7 +42,7 @@ cupola init コマンドの拡張: SQLiteスキーマ初期化に加え、cupola
 **Objective:** 開発者として、`cupola init` を何度実行しても同じ結果になることを保証したい。誤って既存設定を破壊するリスクを排除するため。
 
 #### Acceptance Criteria
-1. The cupola CLI shall `cupola init` を複数回実行しても、既存ファイルの内容を変更しない
+1. The cupola CLI shall `cupola init` を複数回実行しても、既存ファイルの内容を上書き・削除するなどの破壊的変更を行わない（ただし Requirement 4 で定義された `.gitignore` への初回の cupola 用エントリ追記は許可される）
 2. When `cupola init` が2回連続で実行された場合, the cupola CLI shall 2回目の実行で全てのファイル生成ステップをスキップし、正常終了する
 
 ### Requirement 6: スコープ外の明示

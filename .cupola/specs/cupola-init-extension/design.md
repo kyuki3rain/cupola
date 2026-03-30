@@ -108,9 +108,9 @@ flowchart TD
 ```
 
 **Key Decisions**:
-- 各ステップは独立して実行され、前ステップの失敗が後続に影響しない
+- 各ステップは論理的に独立しており、スキップ条件や冪等チェックの結果は他ステップに影響しないが、致命的エラー（特にファイル操作エラー）発生時はその時点で処理を中断し、`cupola init` を失敗させる（fail-fast）
 - SQLite 初期化を最初に実行（既存動作の維持を最優先）
-- 全ステップでスキップ理由をログ出力
+- 全ステップでスキップ理由や非致命的な注意事項をログ出力し、致命的エラー時はエラーメッセージを出力して即時終了する
 
 ## Requirements Traceability
 
@@ -180,7 +180,7 @@ pub struct InitReport {
 ```
 - Preconditions: なし（空のリポジトリでも動作）
 - Postconditions: `.cupola/` 配下に必要ファイルが生成されている
-- Invariants: 既存ファイルは一切変更されない
+- Invariants: 既存ファイルを上書き・削除しない。ただし `.gitignore` への cupola 管理ブロックの初回追記（append-only）は許可される
 
 ### Adapter Layer (Outbound)
 
@@ -225,7 +225,7 @@ impl InitFileGenerator {
 ```
 - Preconditions: `base_dir` が有効なパス
 - Postconditions: 戻り値 `true` = 実際にファイル操作を実行、`false` = スキップ
-- Invariants: 既存ファイルの内容を変更しない
+- Invariants: 既存ファイルを上書きしない。ただし `.gitignore` への cupola 管理ブロックの追記（マーカー未存在時の append-only）は許可される
 
 **Implementation Notes**
 - Integration: `InitUseCase` から呼び出され、各操作の結果を `InitReport` に集約
@@ -241,7 +241,7 @@ impl InitFileGenerator {
 ```toml
 owner = ""
 repo = ""
-default_branch = "main"
+default_branch = ""
 
 # language = "ja"
 # polling_interval_secs = 60
@@ -254,7 +254,7 @@ default_branch = "main"
 # dir = ".cupola/logs"
 ```
 
-- 必須フィールド（`owner`, `repo`, `default_branch`）は空欄または安全なデフォルト値
+- 必須フィールド（`owner`, `repo`, `default_branch`）は空欄
 - オプションフィールドはコメントアウトでデフォルト値を示す
 - ユーザーが後から手動で編集する前提
 
