@@ -1013,8 +1013,7 @@ async fn initialize_issue_uses_remote_default_branch_as_start_point() {
 
     let exec_log = MockExecutionLogRepository;
     let claude_runner = MockClaudeCodeRunner;
-    let mut polling =
-        PollingUseCase::new(github, repo, exec_log, claude_runner, worktree, config);
+    let mut polling = PollingUseCase::new(github, repo, exec_log, claude_runner, worktree, config);
     polling.run_cycle().await.expect("cycle");
 
     // start_point が origin/{default_branch} であることを確認
@@ -1049,8 +1048,7 @@ async fn initialize_issue_aborts_on_fetch_failure() {
 
     let exec_log = MockExecutionLogRepository;
     let claude_runner = MockClaudeCodeRunner;
-    let mut polling =
-        PollingUseCase::new(github, repo, exec_log, claude_runner, worktree, config);
+    let mut polling = PollingUseCase::new(github, repo, exec_log, claude_runner, worktree, config);
     polling.run_cycle().await.expect("cycle");
 
     // fetch が失敗しても create は呼ばれないことを確認
