@@ -8,13 +8,16 @@ use crate::adapter::outbound::git_worktree_manager::GitWorktreeManager;
 use crate::adapter::outbound::github_client_impl::GitHubClientImpl;
 use crate::adapter::outbound::github_graphql_client::GraphQLClient;
 use crate::adapter::outbound::github_rest_client::{OctocrabRestClient, resolve_github_token};
+use crate::adapter::outbound::process_command_runner::ProcessCommandRunner;
 use crate::adapter::outbound::sqlite_connection::SqliteConnection;
 use crate::adapter::outbound::sqlite_execution_log_repository::SqliteExecutionLogRepository;
 use crate::adapter::outbound::sqlite_issue_repository::SqliteIssueRepository;
+use crate::application::doctor_use_case::DoctorUseCase;
 use crate::application::polling_use_case::PollingUseCase;
 use crate::application::port::issue_repository::IssueRepository;
 use crate::bootstrap::config_loader::{CliOverrides, load_toml};
 use crate::bootstrap::logging::init_logging;
+use crate::domain::check_result::CheckStatus;
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
@@ -85,6 +88,32 @@ pub async fn run(cli: Cli) -> Result<()> {
             let db = SqliteConnection::open(db_path)?;
             db.init_schema()?;
             println!("SQLite schema initialized at {}", db_path.display());
+            Ok(())
+        }
+
+        Command::Doctor => {
+            let runner = ProcessCommandRunner;
+            let use_case = DoctorUseCase::new(Box::new(runner));
+            let results = use_case.run();
+
+            let has_failure = results.iter().any(|r| r.is_failed());
+
+            for result in &results {
+                match result.status {
+                    CheckStatus::Pass => println!("✅ {}", result.name),
+                    CheckStatus::Fail => {
+                        println!("❌ {}", result.name);
+                        if let Some(remedy) = &result.remedy {
+                            println!("   → {remedy}");
+                        }
+                    }
+                    CheckStatus::Skipped => println!("⏭ {} (skipped)", result.name),
+                }
+            }
+
+            if has_failure {
+                std::process::exit(1);
+            }
             Ok(())
         }
 

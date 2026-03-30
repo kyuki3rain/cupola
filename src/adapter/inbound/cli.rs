@@ -29,6 +29,8 @@ pub enum Command {
     Init,
     /// Show status of all issues
     Status,
+    /// Check prerequisites (tools, config, project setup)
+    Doctor,
 }
 
 #[cfg(test)]
@@ -89,5 +91,11 @@ mod tests {
     fn parse_status_command() {
         let cli = Cli::parse_from(["cupola", "status"]);
         assert!(matches!(cli.command, Command::Status));
+    }
+
+    #[test]
+    fn parse_doctor_command() {
+        let cli = Cli::parse_from(["cupola", "doctor"]);
+        assert!(matches!(cli.command, Command::Doctor));
     }
 }
