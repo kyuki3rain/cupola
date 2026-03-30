@@ -117,24 +117,30 @@ mod tests {
     use super::*;
 
     fn init_git_repo(dir: &std::path::Path) {
-        assert!(Command::new("git")
-            .args(["init"])
-            .current_dir(dir)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["config", "user.email", "test@example.com"])
-            .current_dir(dir)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(dir)
-            .status()
-            .unwrap()
-            .success());
+        assert!(
+            Command::new("git")
+                .args(["init"])
+                .current_dir(dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["config", "user.email", "test@example.com"])
+                .current_dir(dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["config", "user.name", "Test"])
+                .current_dir(dir)
+                .status()
+                .unwrap()
+                .success()
+        );
     }
 
     #[test]
@@ -143,30 +149,37 @@ mod tests {
         let repo_dir = tempfile::tempdir().unwrap();
 
         // Init bare origin repo
-        assert!(Command::new("git")
-            .args(["init", "--bare"])
-            .current_dir(origin_dir.path())
-            .status()
-            .unwrap()
-            .success());
+        assert!(
+            Command::new("git")
+                .args(["init", "--bare"])
+                .current_dir(origin_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
 
         // Init local repo and add origin remote
         init_git_repo(repo_dir.path());
-        assert!(Command::new("git")
-            .args([
-                "remote",
-                "add",
-                "origin",
-                origin_dir.path().to_str().unwrap(),
-            ])
-            .current_dir(repo_dir.path())
-            .status()
-            .unwrap()
-            .success());
+        assert!(
+            Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    origin_dir.path().to_str().unwrap(),
+                ])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
 
         let mgr = GitWorktreeManager::new(repo_dir.path());
         let result = mgr.fetch();
-        assert!(result.is_ok(), "fetch should succeed with valid origin: {result:?}");
+        assert!(
+            result.is_ok(),
+            "fetch should succeed with valid origin: {result:?}"
+        );
     }
 
     #[test]
@@ -176,7 +189,10 @@ mod tests {
 
         let mgr = GitWorktreeManager::new(repo_dir.path());
         let result = mgr.fetch();
-        assert!(result.is_err(), "fetch should fail when origin is not configured");
+        assert!(
+            result.is_err(),
+            "fetch should fail when origin is not configured"
+        );
         let err_msg = format!("{:#}", result.unwrap_err());
         assert!(
             err_msg.contains("failed to fetch from origin"),
