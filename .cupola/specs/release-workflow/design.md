@@ -134,14 +134,14 @@ sequenceDiagram
 | Requirements | 1.1, 1.2 |
 
 **Responsibilities & Constraints**
-- `on.push.tags` でパターン `v[0-9]+.[0-9]+.[0-9]+` にマッチするタグのみをトリガー
-- パターン外のタグやブランチ push ではトリガーしない
+- `on.push.tags` で glob パターン `v*` のタグ push をトリガーし、ジョブ内でタグ名を正規表現 `^v[0-9]+\.[0-9]+\.[0-9]+$` で検証する
+- セマンティックバージョニング形式とみなせないタグやブランチ push では後続ジョブを実行しない
 
 **Contracts**: Batch [x]
 
 ##### Batch / Job Contract
-- Trigger: `push.tags: ["v[0-9]+.[0-9]+.[0-9]+"]`
-- Input / validation: タグ名がセマンティックバージョニング正規表現に一致
+- Trigger: `push.tags: ["v*"]`
+- Input / validation: ジョブ内で取得したタグ名がセマンティックバージョニング正規表現 `^v[0-9]+\.[0-9]+\.[0-9]+$` に一致することを検証
 - Output / destination: build ジョブの起動
 - Idempotency & recovery: 同一タグの再 push は GitHub が重複を防止
 

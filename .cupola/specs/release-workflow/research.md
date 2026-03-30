@@ -25,7 +25,7 @@
 - **Sources Consulted**: GitHub Security Hardening guide
 - **Findings**:
   - タグ参照（@v4）はミュータブルで改ざんリスクあり
-  - コミットハッシュ参照（@sha256...）はイミュータブルで安全
+  - コミット SHA 参照（@<40 桁の SHA-1>）はイミュータブルで安全
   - Issue 参考 YAML で既にハッシュピン留め済み
 - **Implications**: 参考 YAML のハッシュ値をそのまま採用
 
