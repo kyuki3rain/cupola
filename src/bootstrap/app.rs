@@ -31,6 +31,8 @@ pub async fn run(cli: Cli) -> Result<()> {
                 log_level,
             };
             let cfg = toml.into_config(&overrides);
+            cfg.validate()
+                .map_err(|e| anyhow::anyhow!("config validation failed: {e}"))?;
 
             // Initialize logging (hold guard for app lifetime)
             let _guard = init_logging(cfg.log_level, cfg.log_dir.as_deref());
@@ -95,10 +97,35 @@ pub async fn run(cli: Cli) -> Result<()> {
             let db = SqliteConnection::open(db_path)?;
             let repo = SqliteIssueRepository::new(db);
 
+            // Load config for max_concurrent_sessions display
+            let config_path = Path::new("cupola.toml");
+            let max_sessions = if config_path.exists() {
+                load_toml(config_path).ok().and_then(|t| {
+                    let overrides = CliOverrides {
+                        polling_interval_secs: None,
+                        log_level: None,
+                    };
+                    let cfg = t.into_config(&overrides);
+                    cfg.max_concurrent_sessions
+                })
+            } else {
+                None
+            };
+
             let issues = repo.find_active().await?;
             if issues.is_empty() {
                 println!("No active issues.");
             } else {
+                let running_count = issues
+                    .iter()
+                    .filter(|i| i.state.needs_process() && i.current_pid.is_some())
+                    .count();
+
+                match max_sessions {
+                    Some(max) => println!("Running: {running_count}/{max}"),
+                    None => println!("Running: {running_count}"),
+                }
+
                 for issue in &issues {
                     let pr_info = match (issue.design_pr_number, issue.impl_pr_number) {
                         (Some(d), Some(i)) => format!("design_pr:#{d} impl_pr:#{i}"),
