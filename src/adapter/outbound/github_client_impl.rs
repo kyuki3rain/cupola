@@ -1,7 +1,8 @@
 use anyhow::Result;
 
 use crate::application::port::github_client::{
-    GitHubCheckRun, GitHubClient, GitHubIssue, GitHubIssueDetail, GitHubPr, ReviewThread,
+    GitHubCheckRun, GitHubClient, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails,
+    ReviewThread,
 };
 
 use super::github_graphql_client::GraphQLClient;
@@ -69,5 +70,9 @@ impl GitHubClient for GitHubClientImpl {
 
     async fn get_pr_mergeable(&self, pr_number: u64) -> Result<Option<bool>> {
         self.rest.get_pr_mergeable(pr_number).await
+    }
+
+    async fn get_pr_details(&self, pr_number: u64) -> Result<GitHubPrDetails> {
+        self.rest.get_pr_details(pr_number).await
     }
 }

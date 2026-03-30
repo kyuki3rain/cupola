@@ -105,8 +105,8 @@ impl IssueRepository for SqliteIssueRepository {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db.conn().lock().expect("mutex poisoned");
-            let fixing_causes_json =
-                serde_json::to_string(&issue.fixing_causes).unwrap_or_else(|_| "[]".to_string());
+            let fixing_causes_json = serde_json::to_string(&issue.fixing_causes)
+                .context("failed to serialize fixing_causes")?;
             conn.execute(
                 "INSERT INTO issues (github_issue_number, state, design_pr_number, impl_pr_number,
                                      worktree_path, retry_count, current_pid, error_message, feature_name,
@@ -152,8 +152,8 @@ impl IssueRepository for SqliteIssueRepository {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db.conn().lock().expect("mutex poisoned");
-            let fixing_causes_json =
-                serde_json::to_string(&issue.fixing_causes).unwrap_or_else(|_| "[]".to_string());
+            let fixing_causes_json = serde_json::to_string(&issue.fixing_causes)
+                .context("failed to serialize fixing_causes")?;
             conn.execute(
                 "UPDATE issues SET state = ?1, design_pr_number = ?2, impl_pr_number = ?3,
                                    worktree_path = ?4, retry_count = ?5, current_pid = ?6,
@@ -244,7 +244,10 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
     let updated_str: String = row.get(12)?;
 
     let fixing_causes: Vec<FixingProblemKind> =
-        serde_json::from_str(&fixing_causes_json).unwrap_or_default();
+        serde_json::from_str(&fixing_causes_json).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, raw = %fixing_causes_json, "failed to parse fixing_causes, defaulting to empty");
+            vec![]
+        });
 
     Ok(Issue {
         id: row.get(0)?,

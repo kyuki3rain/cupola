@@ -378,22 +378,24 @@ where
                 continue;
             };
 
-            // (1) Check merge first (priority) — if merged, skip further checks
-            match self.github.is_pr_merged(pr_num).await {
-                Ok(true) => {
-                    let event = match issue.state {
-                        State::DesignReviewWaiting => Event::DesignPrMerged,
-                        State::ImplementationReviewWaiting => Event::ImplementationPrMerged,
-                        _ => continue,
-                    };
-                    events.push((issue.id, event));
-                    continue;
-                }
-                Ok(false) => {}
+            // (1) Get PR details once — used for both merged and mergeable checks
+            let pr_details = match self.github.get_pr_details(pr_num).await {
+                Ok(details) => details,
                 Err(e) => {
-                    tracing::warn!(pr_number = pr_num, error = %e, "failed to check PR merge");
+                    tracing::warn!(pr_number = pr_num, error = %e, "failed to get PR details");
                     continue;
                 }
+            };
+
+            // (1a) Check merge first (priority) — if merged, skip further checks
+            if pr_details.merged {
+                let event = match issue.state {
+                    State::DesignReviewWaiting => Event::DesignPrMerged,
+                    State::ImplementationReviewWaiting => Event::ImplementationPrMerged,
+                    _ => continue,
+                };
+                events.push((issue.id, event));
+                continue;
             }
 
             let mut causes: Vec<FixingProblemKind> = Vec::new();
@@ -415,23 +417,19 @@ where
                 }
             }
 
-            // (3) Conflict check
-            match self.github.get_pr_mergeable(pr_num).await {
-                Ok(Some(false)) => {
+            // (3) Conflict check (reuse mergeable from already-fetched PR details)
+            match pr_details.mergeable {
+                Some(false) => {
                     causes.push(FixingProblemKind::Conflict);
                     tracing::info!(
                         pr_number = pr_num,
                         "conflict detected, adding to fixing causes"
                     );
                 }
-                Ok(None) => {
-                    // GitHub is still computing — skip this cycle
+                None => {
+                    // GitHub is still computing mergeability — skip this cycle's conflict check
                 }
-                Ok(Some(true)) => {}
-                Err(e) => {
-                    tracing::warn!(pr_number = pr_num, error = %e, "failed to get PR mergeable");
-                    // Skip conflict check; continue
-                }
+                Some(true) => {}
             }
 
             // (4) Unresolved review threads check
@@ -646,8 +644,8 @@ where
                             .map(|r| CiErrorEntry {
                                 check_run_name: r.name,
                                 conclusion: r.conclusion.unwrap_or_default(),
-                                output_summary: None,
-                                output_text: None,
+                                output_summary: r.output_summary,
+                                output_text: r.output_text,
                             })
                             .collect();
                         write_ci_errors_input(wt, &errors)?;
@@ -655,12 +653,26 @@ where
 
                     if causes.contains(&FixingProblemKind::Conflict) {
                         let n = issue.github_issue_number;
-                        let head_branch = format!("cupola/{n}/main");
-                        let base_branch = self.config.default_branch.clone();
-                        let info = ConflictInfo {
-                            head_branch,
-                            base_branch: base_branch.clone(),
-                            default_branch: base_branch,
+                        let info = match issue.state {
+                            State::DesignFixing => {
+                                let head_branch = format!("cupola/{n}/design");
+                                let base_branch = format!("cupola/{n}/main");
+                                ConflictInfo {
+                                    head_branch,
+                                    base_branch,
+                                    default_branch: self.config.default_branch.clone(),
+                                }
+                            }
+                            State::ImplementationFixing => {
+                                let head_branch = format!("cupola/{n}/main");
+                                let base_branch = self.config.default_branch.clone();
+                                ConflictInfo {
+                                    head_branch,
+                                    base_branch: base_branch.clone(),
+                                    default_branch: base_branch,
+                                }
+                            }
+                            _ => unreachable!("Conflict cause set only for design/implementation fixing states"),
                         };
                         write_conflict_info_input(wt, &info)?;
                     }
@@ -911,6 +923,15 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+
+    use crate::application::port::github_client::{
+        GitHubCheckRun, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails, ReviewComment,
+        ReviewThread,
+    };
+    use crate::domain::config::Config;
+    use crate::domain::execution_log::ExecutionLog;
 
     // Test that the retry policy evaluation works correctly with PollingUseCase
     #[test]
@@ -942,5 +963,313 @@ mod tests {
         let base = "main".to_string();
         assert_eq!(head, "cupola/42/main");
         assert_eq!(base, "main");
+    }
+
+    // --- Mocks for step4 tests ---
+
+    struct MockGitHub {
+        pr_details: GitHubPrDetails,
+        check_runs: Vec<GitHubCheckRun>,
+        threads: Vec<ReviewThread>,
+    }
+
+    impl MockGitHub {
+        fn new(
+            merged: bool,
+            mergeable: Option<bool>,
+            failure_names: Vec<&str>,
+            has_threads: bool,
+        ) -> Self {
+            let check_runs = failure_names
+                .into_iter()
+                .map(|name| GitHubCheckRun {
+                    id: 1,
+                    name: name.to_string(),
+                    status: "completed".to_string(),
+                    conclusion: Some("failure".to_string()),
+                    output_summary: None,
+                    output_text: None,
+                })
+                .collect();
+            let threads = if has_threads {
+                vec![ReviewThread {
+                    id: "t1".to_string(),
+                    path: "file.rs".to_string(),
+                    line: None,
+                    comments: vec![ReviewComment {
+                        author: "reviewer".to_string(),
+                        body: "fix this".to_string(),
+                    }],
+                }]
+            } else {
+                vec![]
+            };
+            Self {
+                pr_details: GitHubPrDetails { merged, mergeable },
+                check_runs,
+                threads,
+            }
+        }
+    }
+
+    impl crate::application::port::github_client::GitHubClient for MockGitHub {
+        async fn list_ready_issues(&self) -> anyhow::Result<Vec<GitHubIssue>> {
+            unimplemented!()
+        }
+        async fn get_issue(&self, _: u64) -> anyhow::Result<GitHubIssueDetail> {
+            unimplemented!()
+        }
+        async fn is_issue_open(&self, _: u64) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+        async fn find_pr_by_branches(&self, _: &str, _: &str) -> anyhow::Result<Option<GitHubPr>> {
+            unimplemented!()
+        }
+        async fn is_pr_merged(&self, _: u64) -> anyhow::Result<bool> {
+            Ok(self.pr_details.merged)
+        }
+        async fn list_unresolved_threads(&self, _: u64) -> anyhow::Result<Vec<ReviewThread>> {
+            Ok(self.threads.clone())
+        }
+        async fn create_pr(&self, _: &str, _: &str, _: &str, _: &str) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
+        async fn reply_to_thread(&self, _: &str, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn resolve_thread(&self, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn comment_on_issue(&self, _: u64, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn close_issue(&self, _: u64) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn get_ci_check_runs(&self, _: u64) -> anyhow::Result<Vec<GitHubCheckRun>> {
+            Ok(self.check_runs.clone())
+        }
+        async fn get_pr_mergeable(&self, _: u64) -> anyhow::Result<Option<bool>> {
+            Ok(self.pr_details.mergeable)
+        }
+        async fn get_pr_details(&self, _: u64) -> anyhow::Result<GitHubPrDetails> {
+            Ok(self.pr_details.clone())
+        }
+    }
+
+    struct MockIssueRepo {
+        issues: Vec<Issue>,
+        updated: Arc<Mutex<Vec<Issue>>>,
+    }
+
+    impl MockIssueRepo {
+        fn new(issues: Vec<Issue>) -> (Self, Arc<Mutex<Vec<Issue>>>) {
+            let updated = Arc::new(Mutex::new(vec![]));
+            (
+                Self {
+                    issues,
+                    updated: updated.clone(),
+                },
+                updated,
+            )
+        }
+    }
+
+    impl crate::application::port::issue_repository::IssueRepository for MockIssueRepo {
+        async fn find_by_id(&self, _: i64) -> anyhow::Result<Option<Issue>> {
+            unimplemented!()
+        }
+        async fn find_by_issue_number(&self, _: u64) -> anyhow::Result<Option<Issue>> {
+            unimplemented!()
+        }
+        async fn find_active(&self) -> anyhow::Result<Vec<Issue>> {
+            Ok(self.issues.clone())
+        }
+        async fn find_needing_process(&self) -> anyhow::Result<Vec<Issue>> {
+            unimplemented!()
+        }
+        async fn save(&self, _: &Issue) -> anyhow::Result<i64> {
+            unimplemented!()
+        }
+        async fn update_state(&self, _: i64, _: State) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        async fn update(&self, issue: &Issue) -> anyhow::Result<()> {
+            self.updated.lock().unwrap().push(issue.clone());
+            Ok(())
+        }
+        async fn reset_for_restart(&self, _: i64) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+    }
+
+    struct NoopExecLogRepo;
+    impl crate::application::port::execution_log_repository::ExecutionLogRepository
+        for NoopExecLogRepo
+    {
+        async fn record_start(&self, _: i64, _: State) -> anyhow::Result<i64> {
+            Ok(0)
+        }
+        async fn record_finish(
+            &self,
+            _: i64,
+            _: Option<i32>,
+            _: Option<&str>,
+            _: Option<&str>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn find_by_issue(&self, _: i64) -> anyhow::Result<Vec<ExecutionLog>> {
+            Ok(vec![])
+        }
+    }
+
+    struct NoopClaudeRunner;
+    impl crate::application::port::claude_code_runner::ClaudeCodeRunner for NoopClaudeRunner {
+        fn spawn(
+            &self,
+            _: &str,
+            _: &Path,
+            _: Option<&str>,
+            _: &str,
+        ) -> anyhow::Result<std::process::Child> {
+            unimplemented!()
+        }
+    }
+
+    struct NoopWorktree;
+    impl crate::application::port::git_worktree::GitWorktree for NoopWorktree {
+        fn fetch(&self) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        fn create(&self, _: &Path, _: &str, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        fn remove(&self, _: &Path) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        fn create_branch(&self, _: &Path, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        fn checkout(&self, _: &Path, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        fn pull(&self, _: &Path) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        fn push(&self, _: &Path, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+        fn delete_branch(&self, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+    }
+
+    type TestUseCase = PollingUseCase<MockGitHub, MockIssueRepo, NoopExecLogRepo, NoopClaudeRunner, NoopWorktree>;
+
+    fn make_uc(github: MockGitHub, repo: MockIssueRepo) -> TestUseCase {
+        let config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        PollingUseCase::new(github, repo, NoopExecLogRepo, NoopClaudeRunner, NoopWorktree, config)
+    }
+
+    fn review_waiting_issue(state: State, pr_num: u64) -> Issue {
+        let (design_pr, impl_pr) = match state {
+            State::DesignReviewWaiting => (Some(pr_num), None),
+            State::ImplementationReviewWaiting => (None, Some(pr_num)),
+            _ => (None, None),
+        };
+        Issue {
+            id: 1,
+            github_issue_number: 42,
+            state,
+            design_pr_number: design_pr,
+            impl_pr_number: impl_pr,
+            worktree_path: None,
+            retry_count: 0,
+            current_pid: None,
+            error_message: None,
+            feature_name: None,
+            fixing_causes: vec![],
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn step4_merged_pr_emits_event_and_skips_cause_collection() {
+        let issue = review_waiting_issue(State::DesignReviewWaiting, 10);
+        let (repo, updated) = MockIssueRepo::new(vec![issue]);
+        let github = MockGitHub::new(true, None, vec![], false);
+        let mut uc = make_uc(github, repo);
+        let mut events = vec![];
+        uc.step4_pr_monitoring(&mut events).await;
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], (1, Event::DesignPrMerged)));
+        assert!(
+            updated.lock().unwrap().is_empty(),
+            "DB must not be updated for merged PR"
+        );
+    }
+
+    #[tokio::test]
+    async fn step4_mergeable_none_skips_conflict_no_event() {
+        let issue = review_waiting_issue(State::DesignReviewWaiting, 10);
+        let (repo, updated) = MockIssueRepo::new(vec![issue]);
+        // mergeable=None: GitHub is still computing
+        let github = MockGitHub::new(false, None, vec![], false);
+        let mut uc = make_uc(github, repo);
+        let mut events = vec![];
+        uc.step4_pr_monitoring(&mut events).await;
+        assert!(events.is_empty(), "no events when mergeable is None and no other issues");
+        assert!(updated.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn step4_ci_failure_adds_cause_and_updates_db() {
+        let issue = review_waiting_issue(State::ImplementationReviewWaiting, 20);
+        let (repo, updated) = MockIssueRepo::new(vec![issue]);
+        let github = MockGitHub::new(false, Some(true), vec!["build"], false);
+        let mut uc = make_uc(github, repo);
+        let mut events = vec![];
+        uc.step4_pr_monitoring(&mut events).await;
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], (1, Event::UnresolvedThreadsDetected)));
+        let updates = updated.lock().unwrap();
+        assert_eq!(updates.len(), 1);
+        assert!(updates[0].fixing_causes.contains(&FixingProblemKind::CiFailure));
+        assert!(!updates[0].fixing_causes.contains(&FixingProblemKind::Conflict));
+    }
+
+    #[tokio::test]
+    async fn step4_conflict_adds_cause() {
+        let issue = review_waiting_issue(State::DesignReviewWaiting, 30);
+        let (repo, updated) = MockIssueRepo::new(vec![issue]);
+        let github = MockGitHub::new(false, Some(false), vec![], false);
+        let mut uc = make_uc(github, repo);
+        let mut events = vec![];
+        uc.step4_pr_monitoring(&mut events).await;
+        let updates = updated.lock().unwrap();
+        assert_eq!(updates.len(), 1);
+        assert!(updates[0].fixing_causes.contains(&FixingProblemKind::Conflict));
+        assert!(!updates[0].fixing_causes.contains(&FixingProblemKind::CiFailure));
+    }
+
+    #[tokio::test]
+    async fn step4_multiple_causes_collected_simultaneously() {
+        let issue = review_waiting_issue(State::DesignReviewWaiting, 40);
+        let (repo, updated) = MockIssueRepo::new(vec![issue]);
+        // conflict + CI failure + unresolved threads
+        let github = MockGitHub::new(false, Some(false), vec!["ci-check"], true);
+        let mut uc = make_uc(github, repo);
+        let mut events = vec![];
+        uc.step4_pr_monitoring(&mut events).await;
+        let updates = updated.lock().unwrap();
+        assert_eq!(updates.len(), 1);
+        let causes = &updates[0].fixing_causes;
+        assert!(causes.contains(&FixingProblemKind::CiFailure));
+        assert!(causes.contains(&FixingProblemKind::Conflict));
+        assert!(causes.contains(&FixingProblemKind::ReviewComments));
+        assert_eq!(causes.len(), 3);
     }
 }

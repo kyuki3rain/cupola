@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use octocrab::Octocrab;
 
 use crate::application::port::github_client::{
-    GitHubCheckRun, GitHubIssue, GitHubIssueDetail, GitHubPr,
+    GitHubCheckRun, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails,
 };
 
 pub struct OctocrabRestClient {
@@ -43,9 +43,9 @@ impl OctocrabRestClient {
 
         let sha = pr.head.sha.clone();
 
-        // Step 2: GET /repos/{owner}/{repo}/commits/{sha}/check-runs
+        // Step 2: GET /repos/{owner}/{repo}/commits/{sha}/check-runs?per_page=100
         let url = format!(
-            "https://api.github.com/repos/{}/{}/commits/{}/check-runs",
+            "https://api.github.com/repos/{}/{}/commits/{}/check-runs?per_page=100",
             self.owner, self.repo, sha
         );
 
@@ -86,6 +86,14 @@ impl OctocrabRestClient {
                             name: r["name"].as_str().unwrap_or("").to_string(),
                             status,
                             conclusion: r["conclusion"].as_str().map(str::to_string),
+                            output_summary: r["output"]["summary"]
+                                .as_str()
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_string),
+                            output_text: r["output"]["text"]
+                                .as_str()
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_string),
                         })
                     })
                     .collect()
@@ -104,6 +112,20 @@ impl OctocrabRestClient {
             .with_context(|| format!("failed to get PR #{pr_number} for mergeable check"))?;
 
         Ok(pr.mergeable)
+    }
+
+    pub async fn get_pr_details(&self, pr_number: u64) -> Result<GitHubPrDetails> {
+        let pr = self
+            .octocrab
+            .pulls(&self.owner, &self.repo)
+            .get(pr_number)
+            .await
+            .with_context(|| format!("failed to get PR #{pr_number} details"))?;
+
+        Ok(GitHubPrDetails {
+            merged: pr.merged_at.is_some(),
+            mergeable: pr.mergeable,
+        })
     }
 
     pub async fn list_ready_issues(&self) -> Result<Vec<GitHubIssue>> {

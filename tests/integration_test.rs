@@ -10,7 +10,8 @@ use cupola::application::port::claude_code_runner::ClaudeCodeRunner;
 use cupola::application::port::execution_log_repository::ExecutionLogRepository;
 use cupola::application::port::git_worktree::GitWorktree;
 use cupola::application::port::github_client::{
-    GitHubCheckRun, GitHubClient, GitHubIssue, GitHubIssueDetail, GitHubPr, ReviewThread,
+    GitHubCheckRun, GitHubClient, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails,
+    ReviewThread,
 };
 use cupola::application::port::issue_repository::IssueRepository;
 use cupola::application::transition_use_case::{TransitionUseCase, prioritize_events};
@@ -97,6 +98,12 @@ impl GitHubClient for MockGitHubClient {
     }
     async fn get_pr_mergeable(&self, _pr_number: u64) -> Result<Option<bool>> {
         Ok(Some(true))
+    }
+    async fn get_pr_details(&self, pr_number: u64) -> Result<GitHubPrDetails> {
+        Ok(GitHubPrDetails {
+            merged: self.state.lock().unwrap().merged_prs.contains(&pr_number),
+            mergeable: Some(true),
+        })
     }
 }
 

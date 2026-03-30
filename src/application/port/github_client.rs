@@ -6,6 +6,16 @@ pub struct GitHubCheckRun {
     pub name: String,
     pub status: String,
     pub conclusion: Option<String>,
+    /// Corresponds to GitHub Checks API `output.summary`.
+    pub output_summary: Option<String>,
+    /// Corresponds to GitHub Checks API `output.text`.
+    pub output_text: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GitHubPrDetails {
+    pub merged: bool,
+    pub mergeable: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -114,4 +124,10 @@ pub trait GitHubClient: Send + Sync {
         &self,
         pr_number: u64,
     ) -> impl std::future::Future<Output = Result<Option<bool>>> + Send;
+
+    /// PR の merged / mergeable を 1 回の API 呼び出しで取得する。
+    fn get_pr_details(
+        &self,
+        pr_number: u64,
+    ) -> impl std::future::Future<Output = Result<GitHubPrDetails>> + Send;
 }

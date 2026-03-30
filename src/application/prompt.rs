@@ -33,13 +33,7 @@ pub fn build_session_config(
         State::DesignFixing => {
             let pr = pr_number.expect("fixing state requires pr_number in DB");
             SessionConfig {
-                prompt: build_fixing_prompt(
-                    issue_number,
-                    pr,
-                    &config.language,
-                    fixing_causes,
-                    &config.default_branch,
-                ),
+                prompt: build_fixing_prompt(issue_number, pr, &config.language, fixing_causes),
                 output_schema: OutputSchemaKind::Fixing,
             }
         }
@@ -50,13 +44,7 @@ pub fn build_session_config(
         State::ImplementationFixing => {
             let pr = pr_number.expect("fixing state requires pr_number in DB");
             SessionConfig {
-                prompt: build_fixing_prompt(
-                    issue_number,
-                    pr,
-                    &config.language,
-                    fixing_causes,
-                    &config.default_branch,
-                ),
+                prompt: build_fixing_prompt(issue_number, pr, &config.language, fixing_causes),
                 output_schema: OutputSchemaKind::Fixing,
             }
         }
@@ -177,7 +165,6 @@ fn build_fixing_prompt(
     _pr_number: u64,
     language: &str,
     causes: &[FixingProblemKind],
-    default_branch: &str,
 ) -> String {
     let mut instructions = Vec::new();
 
@@ -191,9 +178,9 @@ fn build_fixing_prompt(
     }
 
     if causes.contains(&FixingProblemKind::Conflict) {
-        instructions.push(format!(
-            "origin/{default_branch} を取り込んでconflictを解消してください"
-        ));
+        instructions.push(
+            "PR の base ブランチを取り込んでconflictを解消してください".to_string(),
+        );
     }
 
     let instructions_text = if instructions.is_empty() {
@@ -415,7 +402,8 @@ mod tests {
         );
         assert!(!session.prompt.contains("review_threads.json"));
         assert!(!session.prompt.contains("ci_errors.txt"));
-        assert!(session.prompt.contains("origin/main"));
+        assert!(!session.prompt.contains("origin/main"), "should not hard-code origin/default_branch");
+        assert!(session.prompt.contains("base ブランチ"));
         assert!(session.prompt.contains("conflict"));
     }
 
@@ -431,7 +419,8 @@ mod tests {
             build_session_config(State::DesignFixing, 42, &config, Some(85), None, &causes);
         assert!(session.prompt.contains("review_threads.json"));
         assert!(session.prompt.contains("ci_errors.txt"));
-        assert!(session.prompt.contains("origin/main"));
+        assert!(!session.prompt.contains("origin/main"), "should not hard-code origin/default_branch");
+        assert!(session.prompt.contains("base ブランチ"));
     }
 
     #[test]
