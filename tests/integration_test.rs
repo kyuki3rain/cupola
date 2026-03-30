@@ -28,6 +28,7 @@ struct MockGitHubState {
     closed_issues: Vec<u64>,
     merged_prs: Vec<u64>,
     closed_github_issues: Vec<u64>,
+    issue_labels: std::collections::HashMap<u64, Vec<String>>,
 }
 
 struct MockGitHubClient {
@@ -92,6 +93,16 @@ impl GitHubClient for MockGitHubClient {
         self.state.lock().unwrap().closed_issues.push(issue_number);
         Ok(())
     }
+    async fn get_issue_labels(&self, issue_number: u64) -> Result<Vec<String>> {
+        Ok(self
+            .state
+            .lock()
+            .unwrap()
+            .issue_labels
+            .get(&issue_number)
+            .cloned()
+            .unwrap_or_default())
+    }
 }
 
 // === Mock Git Worktree ===
@@ -144,6 +155,7 @@ fn new_issue(issue_number: u64) -> Issue {
         current_pid: None,
         error_message: None,
         feature_name: None,
+        model: None,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     }
@@ -775,6 +787,7 @@ async fn concurrent_session_limit_restricts_spawning() {
             current_pid: None,
             error_message: None,
             feature_name: None,
+            model: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -819,6 +832,7 @@ async fn no_limit_spawns_all_processes() {
             current_pid: None,
             error_message: None,
             feature_name: None,
+            model: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -1063,4 +1077,300 @@ async fn initialize_issue_aborts_on_fetch_failure() {
         "create must NOT be called when fetch fails, calls: {:?}",
         calls
     );
+}
+
+// === Task 4.3: Issue label model override integration tests ===
+
+fn setup_polling_with_github(
+    github: MockGitHubClient,
+    config: Config,
+) -> PollingUseCase<
+    MockGitHubClient,
+    SqliteIssueRepository,
+    MockExecutionLogRepository,
+    MockClaudeCodeRunner,
+    MockGitWorktree,
+> {
+    let db = SqliteConnection::open_in_memory().expect("open");
+    db.init_schema().expect("init");
+    let repo = SqliteIssueRepository::new(db);
+    let exec_log = MockExecutionLogRepository;
+    let claude_runner = MockClaudeCodeRunner;
+    let worktree = MockGitWorktree;
+    PollingUseCase::new(github, repo, exec_log, claude_runner, worktree, config)
+}
+
+#[tokio::test]
+async fn step1_updates_model_from_label() {
+    // Given: active issue with model:* label on GitHub
+    let github = MockGitHubClient::new();
+    {
+        let mut state = github.state.lock().unwrap();
+        state
+            .issue_labels
+            .insert(300, vec!["model:opus".to_string(), "agent:ready".to_string()]);
+    }
+    let config = test_config();
+    let mut polling = setup_polling_with_github(github, config);
+
+    // Insert an active issue into DB (DesignRunning, so it's in find_active)
+    let issue = Issue {
+        id: 0,
+        github_issue_number: 300,
+        state: State::DesignRunning,
+        design_pr_number: None,
+        impl_pr_number: None,
+        worktree_path: Some("/tmp/wt/300".into()),
+        retry_count: 0,
+        current_pid: None,
+        error_message: None,
+        feature_name: None,
+        model: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    let issue_id = polling
+        .issue_repo_ref()
+        .save(&issue)
+        .await
+        .expect("save");
+
+    // Run step 1 by running one full cycle
+    polling.run_cycle().await.expect("cycle");
+
+    // Verify model was updated to "opus"
+    let updated = polling
+        .issue_repo_ref()
+        .find_by_id(issue_id)
+        .await
+        .expect("find")
+        .expect("exists");
+    assert_eq!(
+        updated.model.as_deref(),
+        Some("opus"),
+        "model should be updated from label"
+    );
+
+    // Clean up
+    polling.graceful_shutdown().await;
+}
+
+#[tokio::test]
+async fn step1_clears_model_when_label_removed() {
+    // Given: active issue that previously had model set, but label is now gone
+    let github = MockGitHubClient::new();
+    {
+        let mut state = github.state.lock().unwrap();
+        // No model:* label for issue 301
+        state
+            .issue_labels
+            .insert(301, vec!["agent:ready".to_string()]);
+    }
+    let config = test_config();
+    let mut polling = setup_polling_with_github(github, config);
+
+    // Insert issue with existing model = Some("opus")
+    let issue = Issue {
+        id: 0,
+        github_issue_number: 301,
+        state: State::DesignRunning,
+        design_pr_number: None,
+        impl_pr_number: None,
+        worktree_path: Some("/tmp/wt/301".into()),
+        retry_count: 0,
+        current_pid: None,
+        error_message: None,
+        feature_name: None,
+        model: Some("opus".to_string()),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    let issue_id = polling
+        .issue_repo_ref()
+        .save(&issue)
+        .await
+        .expect("save");
+
+    // Run one cycle
+    polling.run_cycle().await.expect("cycle");
+
+    // Verify model was cleared to None
+    let updated = polling
+        .issue_repo_ref()
+        .find_by_id(issue_id)
+        .await
+        .expect("find")
+        .expect("exists");
+    assert!(
+        updated.model.is_none(),
+        "model should be cleared when label is removed"
+    );
+
+    polling.graceful_shutdown().await;
+}
+
+// Model tracking runner that captures which model was passed to spawn
+struct ModelCapturingRunner {
+    captured_model: Arc<Mutex<Option<String>>>,
+}
+
+impl ModelCapturingRunner {
+    fn new() -> (Self, Arc<Mutex<Option<String>>>) {
+        let captured = Arc::new(Mutex::new(None));
+        (
+            Self {
+                captured_model: Arc::clone(&captured),
+            },
+            captured,
+        )
+    }
+}
+
+impl ClaudeCodeRunner for ModelCapturingRunner {
+    fn spawn(
+        &self,
+        _prompt: &str,
+        _working_dir: &Path,
+        _json_schema: Option<&str>,
+        model: &str,
+    ) -> Result<std::process::Child> {
+        *self.captured_model.lock().unwrap() = Some(model.to_string());
+        use std::process::{Command, Stdio};
+        Command::new("sleep")
+            .arg("60")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(Into::into)
+    }
+}
+
+#[tokio::test]
+async fn step7_uses_issue_model_when_set() {
+    let db = SqliteConnection::open_in_memory().expect("open");
+    db.init_schema().expect("init");
+    let repo = SqliteIssueRepository::new(db);
+    let github = MockGitHubClient::new();
+    // Configure labels so step1 doesn't clear the model
+    github
+        .state
+        .lock()
+        .unwrap()
+        .issue_labels
+        .insert(400, vec!["model:opus".to_string()]);
+    let mut config = test_config();
+    config.model = "haiku".to_string();
+    let exec_log = MockExecutionLogRepository;
+    let worktree = MockGitWorktree;
+    let (runner, captured) = ModelCapturingRunner::new();
+
+    // Insert issue with model = Some("opus")
+    let issue = Issue {
+        id: 0,
+        github_issue_number: 400,
+        state: State::DesignRunning,
+        design_pr_number: None,
+        impl_pr_number: None,
+        worktree_path: Some("/tmp/wt/400".into()),
+        retry_count: 0,
+        current_pid: None,
+        error_message: None,
+        feature_name: None,
+        model: Some("opus".to_string()),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    repo.save(&issue).await.expect("save");
+
+    let mut polling = PollingUseCase::new(github, repo, exec_log, runner, worktree, config);
+    polling.run_cycle().await.expect("cycle");
+
+    let model = captured.lock().unwrap().clone();
+    assert_eq!(model.as_deref(), Some("opus"), "should use issue model");
+
+    polling.graceful_shutdown().await;
+}
+
+#[tokio::test]
+async fn step7_falls_back_to_config_model_when_issue_model_none() {
+    let db = SqliteConnection::open_in_memory().expect("open");
+    db.init_schema().expect("init");
+    let repo = SqliteIssueRepository::new(db);
+    let github = MockGitHubClient::new();
+    let mut config = test_config();
+    config.model = "haiku".to_string();
+    let exec_log = MockExecutionLogRepository;
+    let worktree = MockGitWorktree;
+    let (runner, captured) = ModelCapturingRunner::new();
+
+    let issue = Issue {
+        id: 0,
+        github_issue_number: 401,
+        state: State::DesignRunning,
+        design_pr_number: None,
+        impl_pr_number: None,
+        worktree_path: Some("/tmp/wt/401".into()),
+        retry_count: 0,
+        current_pid: None,
+        error_message: None,
+        feature_name: None,
+        model: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    repo.save(&issue).await.expect("save");
+
+    let mut polling = PollingUseCase::new(github, repo, exec_log, runner, worktree, config);
+    polling.run_cycle().await.expect("cycle");
+
+    let model = captured.lock().unwrap().clone();
+    assert_eq!(
+        model.as_deref(),
+        Some("haiku"),
+        "should fall back to config model"
+    );
+
+    polling.graceful_shutdown().await;
+}
+
+#[tokio::test]
+async fn step7_defaults_to_sonnet_when_both_unset() {
+    let db = SqliteConnection::open_in_memory().expect("open");
+    db.init_schema().expect("init");
+    let repo = SqliteIssueRepository::new(db);
+    let github = MockGitHubClient::new();
+    let mut config = test_config();
+    config.model = String::new(); // empty config model
+    let exec_log = MockExecutionLogRepository;
+    let worktree = MockGitWorktree;
+    let (runner, captured) = ModelCapturingRunner::new();
+
+    let issue = Issue {
+        id: 0,
+        github_issue_number: 402,
+        state: State::DesignRunning,
+        design_pr_number: None,
+        impl_pr_number: None,
+        worktree_path: Some("/tmp/wt/402".into()),
+        retry_count: 0,
+        current_pid: None,
+        error_message: None,
+        feature_name: None,
+        model: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    repo.save(&issue).await.expect("save");
+
+    let mut polling = PollingUseCase::new(github, repo, exec_log, runner, worktree, config);
+    polling.run_cycle().await.expect("cycle");
+
+    let model = captured.lock().unwrap().clone();
+    assert_eq!(
+        model.as_deref(),
+        Some("sonnet"),
+        "should default to sonnet when both issue model and config model are unset"
+    );
+
+    polling.graceful_shutdown().await;
 }

@@ -94,4 +94,9 @@ pub trait GitHubClient: Send + Sync {
         &self,
         issue_number: u64,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
+
+    fn get_issue_labels(
+        &self,
+        issue_number: u64,
+    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
 }

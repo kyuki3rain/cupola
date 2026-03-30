@@ -25,7 +25,7 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db.conn().lock().expect("mutex poisoned");
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, created_at, updated_at
+                        worktree_path, retry_count, current_pid, error_message, feature_name, model, created_at, updated_at
                  FROM issues WHERE id = ?1",
             )?;
             let issue = stmt
@@ -44,7 +44,7 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db.conn().lock().expect("mutex poisoned");
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, created_at, updated_at
+                        worktree_path, retry_count, current_pid, error_message, feature_name, model, created_at, updated_at
                  FROM issues WHERE github_issue_number = ?1",
             )?;
             let issue = stmt
@@ -63,7 +63,7 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db.conn().lock().expect("mutex poisoned");
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, created_at, updated_at
+                        worktree_path, retry_count, current_pid, error_message, feature_name, model, created_at, updated_at
                  FROM issues WHERE state NOT IN ('completed', 'cancelled')",
             )?;
             let issues = stmt
@@ -82,7 +82,7 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db.conn().lock().expect("mutex poisoned");
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, created_at, updated_at
+                        worktree_path, retry_count, current_pid, error_message, feature_name, model, created_at, updated_at
                  FROM issues WHERE state IN ('design_running', 'design_fixing', 'implementation_running', 'implementation_fixing')",
             )?;
             let issues = stmt
@@ -102,8 +102,8 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db.conn().lock().expect("mutex poisoned");
             conn.execute(
                 "INSERT INTO issues (github_issue_number, state, design_pr_number, impl_pr_number,
-                                     worktree_path, retry_count, current_pid, error_message, feature_name)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                                     worktree_path, retry_count, current_pid, error_message, feature_name, model)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 rusqlite::params![
                     issue.github_issue_number,
                     state_to_str(&issue.state),
@@ -114,6 +114,7 @@ impl IssueRepository for SqliteIssueRepository {
                     issue.current_pid,
                     issue.error_message,
                     issue.feature_name,
+                    issue.model,
                 ],
             )
             .context("save issue failed")?;
@@ -146,8 +147,9 @@ impl IssueRepository for SqliteIssueRepository {
             conn.execute(
                 "UPDATE issues SET state = ?1, design_pr_number = ?2, impl_pr_number = ?3,
                                    worktree_path = ?4, retry_count = ?5, current_pid = ?6,
-                                   error_message = ?7, feature_name = ?8, updated_at = datetime('now')
-                 WHERE id = ?9",
+                                   error_message = ?7, feature_name = ?8, model = ?9,
+                                   updated_at = datetime('now')
+                 WHERE id = ?10",
                 rusqlite::params![
                     state_to_str(&issue.state),
                     issue.design_pr_number,
@@ -157,6 +159,7 @@ impl IssueRepository for SqliteIssueRepository {
                     issue.current_pid,
                     issue.error_message,
                     issue.feature_name,
+                    issue.model,
                     issue.id,
                 ],
             )
@@ -226,8 +229,8 @@ pub fn str_to_state(s: &str) -> State {
 
 fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
     let state_str: String = row.get(2)?;
-    let created_str: String = row.get(10)?;
-    let updated_str: String = row.get(11)?;
+    let created_str: String = row.get(11)?;
+    let updated_str: String = row.get(12)?;
 
     Ok(Issue {
         id: row.get(0)?,
@@ -240,6 +243,7 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
         current_pid: row.get(7)?,
         error_message: row.get(8)?,
         feature_name: row.get(9)?,
+        model: row.get(10)?,
         created_at: parse_sqlite_datetime(&created_str),
         updated_at: parse_sqlite_datetime(&updated_str),
     })
@@ -275,6 +279,7 @@ mod tests {
             current_pid: None,
             error_message: None,
             feature_name: None,
+            model: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -395,6 +400,25 @@ mod tests {
         assert_eq!(found.retry_count, 0);
         assert!(found.current_pid.is_none());
         assert!(found.error_message.is_none());
+    }
+
+    #[tokio::test]
+    async fn save_and_update_model() {
+        let (_db, repo) = setup();
+        let mut issue = new_issue(100);
+        issue.model = Some("opus".to_string());
+
+        let id = repo.save(&issue).await.expect("save");
+        let found = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert_eq!(found.model.as_deref(), Some("opus"));
+
+        // Update model to None
+        let mut updated = found;
+        updated.model = None;
+        repo.update(&updated).await.expect("update");
+
+        let found2 = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert!(found2.model.is_none());
     }
 
     #[test]

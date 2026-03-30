@@ -156,10 +156,41 @@ where
             }
         }
 
-        // Detect closed issues
+        // Detect closed issues and update model labels for active issues
         match self.issue_repo.find_active().await {
             Ok(active_issues) => {
                 for issue in &active_issues {
+                    // Re-check labels and update model in DB if changed
+                    match self.github.get_issue_labels(issue.github_issue_number).await {
+                        Ok(labels) => {
+                            let new_model = Self::extract_model_from_labels(&labels);
+                            if new_model != issue.model {
+                                let mut updated = issue.clone();
+                                updated.model = new_model.clone();
+                                if let Err(e) = self.issue_repo.update(&updated).await {
+                                    tracing::warn!(
+                                        issue_number = issue.github_issue_number,
+                                        error = %e,
+                                        "failed to update model from label"
+                                    );
+                                } else {
+                                    tracing::info!(
+                                        issue_number = issue.github_issue_number,
+                                        model = ?new_model,
+                                        "updated model from label"
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                issue_number = issue.github_issue_number,
+                                error = %e,
+                                "failed to get issue labels, keeping previous model"
+                            );
+                        }
+                    }
+
                     match self.github.is_issue_open(issue.github_issue_number).await {
                         Ok(false) => {
                             // For review_waiting states, check if PR was merged first.
@@ -527,9 +558,12 @@ where
                 OutputSchemaKind::Fixing => Some(FIXING_SCHEMA),
             };
 
+            let resolved_model =
+                Self::resolve_model(issue.model.as_deref(), &self.config.model);
+
             match self
                 .claude_runner
-                .spawn(&session_config.prompt, wt, schema, &self.config.model)
+                .spawn(&session_config.prompt, wt, schema, resolved_model)
             {
                 Ok(child) => {
                     let pid = child.id();
@@ -748,6 +782,25 @@ where
         }
     }
 
+    /// model:* パターンのラベルを抽出し、最初に見つかった値を返す
+    fn extract_model_from_labels(labels: &[String]) -> Option<String> {
+        labels
+            .iter()
+            .find(|l| l.starts_with("model:"))
+            .map(|l| l["model:".len()..].to_string())
+    }
+
+    /// Issue モデル → Config モデル → "sonnet" の優先順位でモデル名を解決する
+    fn resolve_model<'a>(issue_model: Option<&'a str>, config_model: &'a str) -> &'a str {
+        if let Some(m) = issue_model {
+            return m;
+        }
+        if !config_model.is_empty() {
+            return config_model;
+        }
+        "sonnet"
+    }
+
     /// Access the issue repository (for testing).
     pub fn issue_repo_ref(&self) -> &I {
         &self.issue_repo
@@ -843,5 +896,62 @@ mod tests {
         let base = "main".to_string();
         assert_eq!(head, "cupola/42/main");
         assert_eq!(base, "main");
+    }
+
+    // === Task 4.1: extract_model_from_labels tests ===
+
+    fn make_labels(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn extract_model(ls: &[String]) -> Option<String> {
+        ls.iter()
+            .find(|l| l.starts_with("model:"))
+            .map(|l| l["model:".len()..].to_string())
+    }
+
+    #[test]
+    fn extract_model_returns_some_for_model_label() {
+        let result = extract_model(&make_labels(&["model:opus", "agent:ready"]));
+        assert_eq!(result.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn extract_model_returns_first_when_multiple() {
+        let result = extract_model(&make_labels(&["agent:ready", "model:haiku", "model:opus"]));
+        assert_eq!(result.as_deref(), Some("haiku"));
+    }
+
+    #[test]
+    fn extract_model_returns_none_when_no_model_label() {
+        let result = extract_model(&make_labels(&["agent:ready", "bug"]));
+        assert!(result.is_none());
+    }
+
+    // === Task 4.1: resolve_model tests ===
+
+    fn resolve(issue_model: Option<&str>, config_model: &str) -> String {
+        if let Some(m) = issue_model {
+            return m.to_string();
+        }
+        if !config_model.is_empty() {
+            return config_model.to_string();
+        }
+        "sonnet".to_string()
+    }
+
+    #[test]
+    fn resolve_model_prefers_issue_model() {
+        assert_eq!(resolve(Some("opus"), "haiku"), "opus");
+    }
+
+    #[test]
+    fn resolve_model_falls_back_to_config() {
+        assert_eq!(resolve(None, "haiku"), "haiku");
+    }
+
+    #[test]
+    fn resolve_model_defaults_to_sonnet() {
+        assert_eq!(resolve(None, ""), "sonnet");
     }
 }

@@ -62,4 +62,8 @@ impl GitHubClient for GitHubClientImpl {
     async fn close_issue(&self, issue_number: u64) -> Result<()> {
         self.rest.close_issue(issue_number).await
     }
+
+    async fn get_issue_labels(&self, issue_number: u64) -> Result<Vec<String>> {
+        self.rest.get_issue_labels(issue_number).await
+    }
 }

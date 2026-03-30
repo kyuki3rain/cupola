@@ -217,6 +217,7 @@ mod tests {
             current_pid: None,
             error_message: None,
             feature_name: None,
+            model: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };

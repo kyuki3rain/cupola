@@ -53,7 +53,8 @@ impl SqliteConnection {
                 created_at          TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
                 error_message       TEXT,
-                feature_name        TEXT
+                feature_name        TEXT,
+                model               TEXT
             );
 
             CREATE TABLE IF NOT EXISTS execution_log (
@@ -74,6 +75,9 @@ impl SqliteConnection {
 
         // Migration: add feature_name column for existing databases
         let _ = conn.execute_batch("ALTER TABLE issues ADD COLUMN feature_name TEXT;");
+
+        // Migration: add model column for existing databases
+        let _ = conn.execute_batch("ALTER TABLE issues ADD COLUMN model TEXT;");
 
         Ok(())
     }
@@ -118,5 +122,61 @@ mod tests {
         let db = SqliteConnection::open_in_memory().expect("should open");
         db.init_schema().expect("first init");
         db.init_schema().expect("second init should succeed");
+    }
+
+    #[test]
+    fn migration_adds_model_column_to_existing_db() {
+        let db = SqliteConnection::open_in_memory().expect("should open");
+        let conn = db.conn().lock().expect("mutex");
+
+        // Create a legacy issues table without model column
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS issues (
+                id                  INTEGER PRIMARY KEY,
+                github_issue_number INTEGER UNIQUE NOT NULL,
+                state               TEXT NOT NULL DEFAULT 'idle',
+                design_pr_number    INTEGER,
+                impl_pr_number      INTEGER,
+                worktree_path       TEXT,
+                retry_count         INTEGER NOT NULL DEFAULT 0,
+                current_pid         INTEGER,
+                created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+                error_message       TEXT,
+                feature_name        TEXT
+            );",
+        )
+        .expect("create legacy table");
+
+        // Insert existing row before migration
+        conn.execute(
+            "INSERT INTO issues (github_issue_number, state) VALUES (1, 'idle')",
+            [],
+        )
+        .expect("insert");
+
+        drop(conn);
+
+        // Run migration
+        db.init_schema().expect("migration should succeed");
+
+        // Verify model column exists and existing record has NULL model
+        let conn = db.conn().lock().expect("mutex");
+        let model: Option<String> = conn
+            .query_row(
+                "SELECT model FROM issues WHERE github_issue_number = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query");
+        assert!(model.is_none(), "existing record should have NULL model");
+    }
+
+    #[test]
+    fn migration_model_column_is_idempotent() {
+        let db = SqliteConnection::open_in_memory().expect("should open");
+        // Running init_schema twice should not fail even if model column already exists
+        db.init_schema().expect("first init");
+        db.init_schema().expect("second init should succeed (idempotent)");
     }
 }
