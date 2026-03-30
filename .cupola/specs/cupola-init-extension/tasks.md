@@ -8,7 +8,7 @@
   - _Requirements: 2.1, 2.2_
 
 - [ ] 1.2 (P) steering テンプレートコピー機能を実装する
-  - テンプレートディレクトリ（settings/templates/steering/）の存在を確認し、不在時はスキップしてログ出力する
+  - テンプレートディレクトリ（.cupola/settings/templates/steering/）の存在を確認し、不在時はスキップしてログ出力する
   - steering ディレクトリが空の場合のみテンプレートファイルをコピーする
   - steering ディレクトリにファイルが既に存在する場合はスキップする
   - _Requirements: 3.1, 3.2, 3.3_
