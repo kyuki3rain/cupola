@@ -178,9 +178,7 @@ fn build_fixing_prompt(
     }
 
     if causes.contains(&FixingProblemKind::Conflict) {
-        instructions.push(
-            "PR の base ブランチを取り込んでconflictを解消してください".to_string(),
-        );
+        instructions.push("PR の base ブランチを取り込んでconflictを解消してください".to_string());
     }
 
     let instructions_text = if instructions.is_empty() {
@@ -402,7 +400,10 @@ mod tests {
         );
         assert!(!session.prompt.contains("review_threads.json"));
         assert!(!session.prompt.contains("ci_errors.txt"));
-        assert!(!session.prompt.contains("origin/main"), "should not hard-code origin/default_branch");
+        assert!(
+            !session.prompt.contains("origin/main"),
+            "should not hard-code origin/default_branch"
+        );
         assert!(session.prompt.contains("base ブランチ"));
         assert!(session.prompt.contains("conflict"));
     }
@@ -419,7 +420,10 @@ mod tests {
             build_session_config(State::DesignFixing, 42, &config, Some(85), None, &causes);
         assert!(session.prompt.contains("review_threads.json"));
         assert!(session.prompt.contains("ci_errors.txt"));
-        assert!(!session.prompt.contains("origin/main"), "should not hard-code origin/default_branch");
+        assert!(
+            !session.prompt.contains("origin/main"),
+            "should not hard-code origin/default_branch"
+        );
         assert!(session.prompt.contains("base ブランチ"));
     }
 

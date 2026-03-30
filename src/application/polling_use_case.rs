@@ -672,7 +672,9 @@ where
                                     default_branch: base_branch,
                                 }
                             }
-                            _ => unreachable!("Conflict cause set only for design/implementation fixing states"),
+                            _ => unreachable!(
+                                "Conflict cause set only for design/implementation fixing states"
+                            ),
                         };
                         write_conflict_info_input(wt, &info)?;
                     }
@@ -1165,12 +1167,20 @@ mod tests {
         }
     }
 
-    type TestUseCase = PollingUseCase<MockGitHub, MockIssueRepo, NoopExecLogRepo, NoopClaudeRunner, NoopWorktree>;
+    type TestUseCase =
+        PollingUseCase<MockGitHub, MockIssueRepo, NoopExecLogRepo, NoopClaudeRunner, NoopWorktree>;
 
     fn make_uc(github: MockGitHub, repo: MockIssueRepo) -> TestUseCase {
         let config =
             Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
-        PollingUseCase::new(github, repo, NoopExecLogRepo, NoopClaudeRunner, NoopWorktree, config)
+        PollingUseCase::new(
+            github,
+            repo,
+            NoopExecLogRepo,
+            NoopClaudeRunner,
+            NoopWorktree,
+            config,
+        )
     }
 
     fn review_waiting_issue(state: State, pr_num: u64) -> Issue {
@@ -1221,7 +1231,10 @@ mod tests {
         let mut uc = make_uc(github, repo);
         let mut events = vec![];
         uc.step4_pr_monitoring(&mut events).await;
-        assert!(events.is_empty(), "no events when mergeable is None and no other issues");
+        assert!(
+            events.is_empty(),
+            "no events when mergeable is None and no other issues"
+        );
         assert!(updated.lock().unwrap().is_empty());
     }
 
@@ -1237,8 +1250,16 @@ mod tests {
         assert!(matches!(events[0], (1, Event::UnresolvedThreadsDetected)));
         let updates = updated.lock().unwrap();
         assert_eq!(updates.len(), 1);
-        assert!(updates[0].fixing_causes.contains(&FixingProblemKind::CiFailure));
-        assert!(!updates[0].fixing_causes.contains(&FixingProblemKind::Conflict));
+        assert!(
+            updates[0]
+                .fixing_causes
+                .contains(&FixingProblemKind::CiFailure)
+        );
+        assert!(
+            !updates[0]
+                .fixing_causes
+                .contains(&FixingProblemKind::Conflict)
+        );
     }
 
     #[tokio::test]
@@ -1251,8 +1272,16 @@ mod tests {
         uc.step4_pr_monitoring(&mut events).await;
         let updates = updated.lock().unwrap();
         assert_eq!(updates.len(), 1);
-        assert!(updates[0].fixing_causes.contains(&FixingProblemKind::Conflict));
-        assert!(!updates[0].fixing_causes.contains(&FixingProblemKind::CiFailure));
+        assert!(
+            updates[0]
+                .fixing_causes
+                .contains(&FixingProblemKind::Conflict)
+        );
+        assert!(
+            !updates[0]
+                .fixing_causes
+                .contains(&FixingProblemKind::CiFailure)
+        );
     }
 
     #[tokio::test]
