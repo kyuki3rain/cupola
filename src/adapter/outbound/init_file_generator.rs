@@ -153,8 +153,16 @@ impl InitFileGenerator {
                 return Ok(false);
             }
             // 既存の行末スタイルを検出し、同じ改行コードで追記する
-            let line_ending = if content.contains("\r\n") { "\r\n" } else { "\n" };
-            let separator = if content.ends_with('\n') { "" } else { line_ending };
+            let line_ending = if content.contains("\r\n") {
+                "\r\n"
+            } else {
+                "\n"
+            };
+            let separator = if content.ends_with('\n') {
+                ""
+            } else {
+                line_ending
+            };
             let entries = GITIGNORE_ENTRIES.replace('\n', line_ending);
             let new_content = format!("{content}{separator}{entries}");
             std::fs::write(&gitignore_path, new_content).with_context(|| {
@@ -251,7 +259,11 @@ mod tests {
         let result = generator.copy_steering_templates().expect("copy");
         assert!(result, "should return true when copy is performed");
 
-        let dest = tmp.path().join(".cupola").join("steering").join("product.md");
+        let dest = tmp
+            .path()
+            .join(".cupola")
+            .join("steering")
+            .join("product.md");
         assert!(dest.exists(), "product.md should be copied");
         let content = fs::read_to_string(&dest).expect("read");
         assert_eq!(content, "# Product");
@@ -276,7 +288,10 @@ mod tests {
         fs::write(steering_dir.join("existing.md"), "existing").expect("write existing");
 
         let result = generator.copy_steering_templates().expect("copy");
-        assert!(!result, "should return false when steering has existing files");
+        assert!(
+            !result,
+            "should return false when steering has existing files"
+        );
 
         // 既存ファイルが残っていること
         assert!(steering_dir.join("existing.md").exists());
@@ -335,7 +350,10 @@ mod tests {
         assert!(result, "should return true when entries are appended");
 
         let content = fs::read_to_string(&gitignore_path).expect("read");
-        assert!(content.contains("node_modules/"), "existing content preserved");
+        assert!(
+            content.contains("node_modules/"),
+            "existing content preserved"
+        );
         assert!(content.contains(GITIGNORE_MARKER), "cupola marker added");
     }
 }
