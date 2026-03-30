@@ -18,7 +18,7 @@
   - `build_implementation_prompt`（L117-157）: `Closes #{issue_number} を含めること` と明示的に指示（L151）
   - `fallback_pr_body`（L61-68）: 設計 PR → `Related: #N`、実装 PR → `Closes #N` と正しく分岐済み
 - **Implications**:
-  - `build_design_prompt` に `Related #{issue_number}` の使用を明示的に指示し、`Closes` を使用しないよう制約を追加する必要がある
+  - `build_design_prompt` に `Related: #{issue_number}` の使用を明示的に指示し、`Closes` を使用しないよう制約を追加する必要がある
   - `fallback_pr_body` は変更不要（既に正しい）
   - `build_implementation_prompt` は変更不要（既に `Closes` を明示）
 
@@ -27,14 +27,14 @@
 - **Findings**:
   - GitHub は `Closes`, `Fixes`, `Resolves` などのキーワード + `#N` で Issue を自動 close する
   - `Related` はこれらのキーワードに含まれないため、自動 close を発生させない
-- **Implications**: `Related #N` を使用することで設計 PR マージ時の自動 close を確実に防止できる
+- **Implications**: `Related: #N` を使用することで設計 PR マージ時の自動 close を確実に防止できる
 
 ## Design Decisions
 
 ### Decision: 設計プロンプトに `Related` 指示を追加
 - **Context**: 設計 PR の body に `Closes` が含まれると Issue が自動 close される
 - **Alternatives Considered**:
-  1. プロンプトに `Related #N` を含めるよう指示を追加する
+  1. プロンプトに `Related: #N` を含めるよう指示を追加する
   2. PR body のポストプロセスで `Closes` を `Related` に置換する
 - **Selected Approach**: プロンプトに指示を追加する（選択肢 1）
 - **Rationale**: 最もシンプルで、既存の `build_implementation_prompt` と同じパターン（L151）を踏襲できる

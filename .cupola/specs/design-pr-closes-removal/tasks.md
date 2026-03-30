@@ -2,7 +2,7 @@
 
 - [ ] 1. 設計プロンプトに Issue 参照フォーマットの指示を追加する
 - [ ] 1.1 設計プロンプトの PR body 出力指示に `Related` の使用と `Closes` の禁止を追加する
-  - `output-schema への出力` セクションの `pr_body` 指示に `Related #{issue_number}` を含める旨を追加する
+  - `output-schema への出力` セクションの `pr_body` 指示に `Related: #{issue_number}` を含める旨を追加する
   - `制約事項` セクションに `Closes` を PR body に含めない旨の制約を追加する
   - _Requirements: 1.1, 1.2, 1.3_
 

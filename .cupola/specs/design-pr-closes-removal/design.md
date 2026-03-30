@@ -2,14 +2,14 @@
 
 ## Overview
 
-**Purpose**: 設計 PR の body から `Closes #N` を除外し、`Related #N` のみを使用することで、設計 PR マージ時の Issue 自動 close を防止する。
+**Purpose**: 設計 PR の body から `Closes #N` を除外し、`Related: #N` のみを使用することで、設計 PR マージ時の Issue 自動 close を防止する。
 
 **Users**: Cupola を使用する開発者。設計 PR と実装 PR の Issue ライフサイクルを適切に管理するために利用する。
 
 **Impact**: `build_design_prompt` が生成するプロンプトテンプレートに `Related` の使用指示を追加し、`Closes` の使用を禁止する制約を追加する。
 
 ### Goals
-- 設計 PR の body で `Related #N` を使用し、`Closes #N` を含めない
+- 設計 PR の body で `Related: #N` を使用し、`Closes #N` を含めない
 - 実装 PR の body は現状通り `Closes #N` を維持する
 - 既存の `fallback_pr_body` の動作は変更しない
 
@@ -36,7 +36,7 @@
 
 | Requirement | Summary | Components | Interfaces | Flows |
 |-------------|---------|------------|------------|-------|
-| 1.1 | 設計プロンプトで `Related #N` を使用 | `build_design_prompt` | なし | なし |
+| 1.1 | 設計プロンプトで `Related: #N` を使用 | `build_design_prompt` | なし | なし |
 | 1.2 | 設計 PR body に `Closes` を含めない | `build_design_prompt` | なし | なし |
 | 1.3 | 設計 PR マージ時に Issue を自動 close しない | `build_design_prompt` | なし | なし |
 | 2.1 | 実装プロンプトで `Closes #N` を維持 | `build_implementation_prompt` | なし | なし |
@@ -59,7 +59,7 @@
 | Requirements | 1.1, 1.2, 1.3 |
 
 **Responsibilities & Constraints**
-- PR body の `output-schema への出力` セクションに `Related #{issue_number}` を含める指示を追加する
+- PR body の `output-schema への出力` セクションに `Related: #{issue_number}` を含める指示を追加する
 - `制約事項` セクションに `Closes` を使用しない旨の制約を追加する
 
 **Implementation Notes**
