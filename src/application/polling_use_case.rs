@@ -163,7 +163,7 @@ where
                     // Re-check labels and update model in DB if changed
                     match self.github.get_issue_labels(issue.github_issue_number).await {
                         Ok(labels) => {
-                            let new_model = Self::extract_model_from_labels(&labels);
+                            let new_model = extract_model_from_labels(&labels);
                             if new_model != issue.model {
                                 let mut updated = issue.clone();
                                 updated.model = new_model.clone();
@@ -559,7 +559,7 @@ where
             };
 
             let resolved_model =
-                Self::resolve_model(issue.model.as_deref(), &self.config.model);
+                resolve_model(issue.model.as_deref(), &self.config.model);
 
             match self
                 .claude_runner
@@ -782,25 +782,6 @@ where
         }
     }
 
-    /// model:* パターンのラベルを抽出し、最初に見つかった値を返す
-    fn extract_model_from_labels(labels: &[String]) -> Option<String> {
-        labels
-            .iter()
-            .find(|l| l.starts_with("model:"))
-            .map(|l| l["model:".len()..].to_string())
-    }
-
-    /// Issue モデル → Config モデル → "sonnet" の優先順位でモデル名を解決する
-    fn resolve_model<'a>(issue_model: Option<&'a str>, config_model: &'a str) -> &'a str {
-        if let Some(m) = issue_model {
-            return m;
-        }
-        if !config_model.is_empty() {
-            return config_model;
-        }
-        "sonnet"
-    }
-
     /// Access the issue repository (for testing).
     pub fn issue_repo_ref(&self) -> &I {
         &self.issue_repo
@@ -862,6 +843,29 @@ where
     }
 }
 
+/// model:* パターンのラベルを抽出し、最初に見つかった値を返す（空文字は無視）
+fn extract_model_from_labels(labels: &[String]) -> Option<String> {
+    labels.iter().find_map(|l| {
+        let model = l.strip_prefix("model:")?.trim();
+        if model.is_empty() { None } else { Some(model.to_string()) }
+    })
+}
+
+/// Issue モデル → Config モデル → "sonnet" の優先順位でモデル名を解決する
+fn resolve_model<'a>(issue_model: Option<&'a str>, config_model: &'a str) -> &'a str {
+    if let Some(m) = issue_model {
+        let trimmed = m.trim();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+    let config_trimmed = config_model.trim();
+    if !config_trimmed.is_empty() {
+        return config_trimmed;
+    }
+    "sonnet"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -904,54 +908,51 @@ mod tests {
         names.iter().map(|s| s.to_string()).collect()
     }
 
-    fn extract_model(ls: &[String]) -> Option<String> {
-        ls.iter()
-            .find(|l| l.starts_with("model:"))
-            .map(|l| l["model:".len()..].to_string())
-    }
-
     #[test]
     fn extract_model_returns_some_for_model_label() {
-        let result = extract_model(&make_labels(&["model:opus", "agent:ready"]));
+        let result = extract_model_from_labels(&make_labels(&["model:opus", "agent:ready"]));
         assert_eq!(result.as_deref(), Some("opus"));
     }
 
     #[test]
     fn extract_model_returns_first_when_multiple() {
-        let result = extract_model(&make_labels(&["agent:ready", "model:haiku", "model:opus"]));
+        let result =
+            extract_model_from_labels(&make_labels(&["agent:ready", "model:haiku", "model:opus"]));
         assert_eq!(result.as_deref(), Some("haiku"));
     }
 
     #[test]
     fn extract_model_returns_none_when_no_model_label() {
-        let result = extract_model(&make_labels(&["agent:ready", "bug"]));
+        let result = extract_model_from_labels(&make_labels(&["agent:ready", "bug"]));
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn extract_model_returns_none_for_empty_model_label() {
+        let result = extract_model_from_labels(&make_labels(&["model:", "agent:ready"]));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn extract_model_trims_whitespace() {
+        let result = extract_model_from_labels(&make_labels(&["model:  opus  "]));
+        assert_eq!(result.as_deref(), Some("opus"));
     }
 
     // === Task 4.1: resolve_model tests ===
 
-    fn resolve(issue_model: Option<&str>, config_model: &str) -> String {
-        if let Some(m) = issue_model {
-            return m.to_string();
-        }
-        if !config_model.is_empty() {
-            return config_model.to_string();
-        }
-        "sonnet".to_string()
-    }
-
     #[test]
     fn resolve_model_prefers_issue_model() {
-        assert_eq!(resolve(Some("opus"), "haiku"), "opus");
+        assert_eq!(resolve_model(Some("opus"), "haiku"), "opus");
     }
 
     #[test]
     fn resolve_model_falls_back_to_config() {
-        assert_eq!(resolve(None, "haiku"), "haiku");
+        assert_eq!(resolve_model(None, "haiku"), "haiku");
     }
 
     #[test]
     fn resolve_model_defaults_to_sonnet() {
-        assert_eq!(resolve(None, ""), "sonnet");
+        assert_eq!(resolve_model(None, ""), "sonnet");
     }
 }

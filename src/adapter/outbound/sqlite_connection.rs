@@ -74,12 +74,31 @@ impl SqliteConnection {
         .context("failed to initialize SQLite schema")?;
 
         // Migration: add feature_name column for existing databases
-        let _ = conn.execute_batch("ALTER TABLE issues ADD COLUMN feature_name TEXT;");
+        Self::run_add_column_migration(&conn, "feature_name TEXT")?;
 
         // Migration: add model column for existing databases
-        let _ = conn.execute_batch("ALTER TABLE issues ADD COLUMN model TEXT;");
+        Self::run_add_column_migration(&conn, "model TEXT")?;
 
         Ok(())
+    }
+
+    /// `ALTER TABLE issues ADD COLUMN <column_def>` を実行し、
+    /// "duplicate column name" エラーのみ無視してそれ以外は伝播する。
+    fn run_add_column_migration(conn: &Connection, column_def: &str) -> Result<()> {
+        let sql = format!("ALTER TABLE issues ADD COLUMN {column_def};");
+        match conn.execute_batch(&sql) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("duplicate column name") {
+                    Ok(())
+                } else {
+                    Err(anyhow::anyhow!(e).context(format!(
+                        "failed to add column '{column_def}' to issues table"
+                    )))
+                }
+            }
+        }
     }
 
     pub fn conn(&self) -> &Arc<Mutex<Connection>> {
