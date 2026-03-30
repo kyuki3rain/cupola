@@ -244,12 +244,12 @@ tracing::info!(
 ## Testing Strategy
 
 ### Unit Tests
-- `TransitionUseCase::apply()` で状態遷移後に INFO ログが出力されることを、`tracing_subscriber::fmt::TestWriter` など既存のテスト用ユーティリティを用いて検証
+- `TransitionUseCase::apply()` で状態遷移が期待通りに行われ、INFO レベルのログ出力呼び出しが追加されていても既存の振る舞いが変わらないことを検証（ログ内容のフィールド単位での厳密な検証は行わない）
 - `State` enum の `Display` 実装（または `Debug`）が期待する文字列を返すことを検証
 
 ### Integration Tests
-- `PollingUseCase` の既存テストに対し、`tracing_subscriber::fmt::TestWriter` でログ出力を確認
-- 各イベント（PR 作成、fixing 完了、プロセス終了）のフローで、`tracing_subscriber::fmt::TestWriter` で取得したログに期待するフィールドが含まれることを検証
+- `PollingUseCase` の既存テストを INFO ログ追加後もパスさせることで、状態遷移や PR 作成・fixing 完了・プロセス終了といったフロー全体が既存どおり動作することを確認（テストでは主にビジネスロジックの結果を検証し、ログ内容の厳密なフィールド検証は行わない）
+- 必要に応じてログ出力の有無やメッセージの大まかな傾向を確認するが、`tracing_subscriber::fmt::TestWriter` を用いた詳細なフィールド検証は本設計の範囲外とする
 
 ### E2E Tests
 - `cupola run` を INFO ログレベルで実行し、状態遷移・PR 作成・fixing 完了・プロセス終了の全ログが出力されることを目視確認

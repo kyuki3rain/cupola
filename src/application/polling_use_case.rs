@@ -635,7 +635,7 @@ where
         Ok(pr_number)
     }
 
-    async fn process_fixing_output(&self, _issue: &Issue, stdout: &str) {
+    async fn process_fixing_output(&self, issue: &Issue, stdout: &str) {
         let Some(output) = parse_fixing_output(stdout) else {
             tracing::warn!("failed to parse fixing output, skipping post-processing");
             return;
@@ -667,7 +667,7 @@ where
         }
 
         tracing::info!(
-            issue_number = _issue.github_issue_number,
+            issue_number = issue.github_issue_number,
             thread_count = output.threads.len(),
             "fixing post-processing completed"
         );

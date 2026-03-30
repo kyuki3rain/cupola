@@ -619,11 +619,11 @@ async fn impl_review_waiting_issue_close_without_merge_becomes_cancelled() {
 
 // === INFO ログ出力検証テスト ===
 // tracing::info! はクロスカッティング関心事であり、ログ出力自体は tracing の内部で処理される。
-// 以下のテストでは、ログ追加後も全ての状態遷移パスが正常に動作することを検証する。
+// 以下のテストでは、ログ追加後も代表的な状態遷移パスが正常に動作することを検証する。
 // 実際のログ出力内容は E2E テスト（cupola run）で目視確認する。
 
 #[tokio::test]
-async fn state_transition_log_does_not_break_all_transition_paths() {
+async fn state_transition_log_does_not_break_representative_transition_paths() {
     let (repo, github, config) = setup();
     let worktree = MockGitWorktree;
 

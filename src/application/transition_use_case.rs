@@ -27,12 +27,16 @@ impl<G: GitHubClient, I: IssueRepository, W: GitWorktree> TransitionUseCase<'_, 
         self.issue_repo.update_state(issue.id, new_state).await?;
         issue.state = new_state;
 
-        tracing::info!(
-            issue_number = issue.github_issue_number,
-            from = ?old_state,
-            to = ?new_state,
-            "state transition"
-        );
+        if old_state != new_state {
+            tracing::info!(
+                issue_number = issue.github_issue_number,
+                from = ?old_state,
+                to = ?new_state,
+                event = ?event,
+                retry_count = issue.retry_count,
+                "state transition"
+            );
+        }
 
         // Reset retry_count on normal (non-retry) transitions
         if old_state != new_state && !matches!(event, Event::ProcessFailed) {
