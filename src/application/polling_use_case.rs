@@ -254,10 +254,18 @@ where
         let exited = self.session_mgr.collect_exited();
 
         for session in exited {
-            let issue = match self.issue_repo.find_by_id(session.issue_id).await {
+            let mut issue = match self.issue_repo.find_by_id(session.issue_id).await {
                 Ok(Some(i)) => i,
                 _ => continue,
             };
+
+            // Clear PID in DB
+            if issue.current_pid.is_some() {
+                issue.current_pid = None;
+                if let Err(e) = self.issue_repo.update(&issue).await {
+                    tracing::warn!(issue_id = issue.id, error = %e, "failed to clear PID");
+                }
+            }
 
             // Record execution log
             let log_id = self
@@ -462,6 +470,17 @@ where
         };
 
         for issue in &needing {
+            if let Some(max) = self.config.max_concurrent_sessions
+                && self.session_mgr.count() >= max as usize
+            {
+                tracing::info!(
+                    current = self.session_mgr.count(),
+                    max,
+                    "concurrent session limit reached, skipping remaining issues"
+                );
+                break;
+            }
+
             if self.session_mgr.is_running(issue.id) {
                 continue;
             }
@@ -507,13 +526,22 @@ where
 
             match self.claude_runner.spawn(&session_config.prompt, wt, schema) {
                 Ok(child) => {
+                    let pid = child.id();
                     tracing::info!(
                         issue_id = issue.id,
                         issue_number = issue.github_issue_number,
                         state = ?issue.state,
+                        pid,
                         "spawned Claude Code process"
                     );
                     self.session_mgr.register(issue.id, child);
+
+                    // Persist PID to DB
+                    let mut updated_issue = issue.clone();
+                    updated_issue.current_pid = Some(pid);
+                    if let Err(e) = self.issue_repo.update(&updated_issue).await {
+                        tracing::warn!(issue_id = issue.id, error = %e, "failed to persist PID");
+                    }
                 }
                 Err(e) => {
                     tracing::error!(issue_id = issue.id, error = %e, "failed to spawn Claude Code");
@@ -745,7 +773,7 @@ where
         }
     }
 
-    async fn graceful_shutdown(&mut self) {
+    pub async fn graceful_shutdown(&mut self) {
         tracing::info!("starting graceful shutdown...");
 
         // Send SIGTERM to all (kill in our case)

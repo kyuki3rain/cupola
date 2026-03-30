@@ -2,67 +2,67 @@
 
 ## Architecture
 
-Clean Architecture（4 レイヤー）。依存方向は内向きのみ。
+Clean Architecture (4 layers). Dependencies point inward only.
 
-- **domain**: 純粋ビジネスロジック（State, Event, StateMachine, Issue, Config）。I/O 依存なし
-- **application**: ユースケース + ポート定義（trait）。外部依存は trait で抽象化
-- **adapter**: 外部接続の実装（GitHub API, SQLite, Claude Code, Git）
-- **bootstrap**: DI 配線、設定読み込み、ランタイム起動
+- **domain**: Pure business logic (State, Event, StateMachine, Issue, Config). No I/O dependencies
+- **application**: Use cases + port definitions (traits). External dependencies abstracted via traits
+- **adapter**: External connection implementations (GitHub API, SQLite, Claude Code, Git)
+- **bootstrap**: DI wiring, configuration loading, runtime startup
 
 ## Core Technologies
 
-- **Language**: Rust（Edition 2024）
-- **Runtime**: tokio（非同期ランタイム、シグナルハンドリング）
-- **Storage**: SQLite（rusqlite、WAL モード）
-- **GitHub API**: octocrab（REST）+ reqwest（GraphQL 直接 POST）
+- **Language**: Rust (Edition 2024)
+- **Runtime**: tokio (async runtime, signal handling)
+- **Storage**: SQLite (rusqlite, WAL mode)
+- **GitHub API**: octocrab (REST) + reqwest (direct GraphQL POST)
 
 ## Key Libraries
 
-| 用途 | クレート | パターン |
-|------|---------|---------|
-| CLI | clap（derive） | サブコマンド: run / init / status |
-| GitHub REST | octocrab | personal token 認証 |
-| GitHub GraphQL | reqwest + serde_json | 直接 POST、Value パース |
-| DB | rusqlite | Arc<Mutex<Connection>>、spawn_blocking |
-| ログ | tracing + tracing-appender | 構造化ログ、日付別ファイル出力 |
-| エラー | thiserror（domain/app）+ anyhow（adapter/bootstrap） | レイヤーで使い分け |
+| Purpose | Crate | Pattern |
+|---------|-------|---------|
+| CLI | clap (derive) | Subcommands: run / init / status |
+| GitHub REST | octocrab | Personal token authentication |
+| GitHub GraphQL | reqwest + serde_json | Direct POST, Value parsing |
+| DB | rusqlite | Arc<Mutex<Connection>>, spawn_blocking |
+| Logging | tracing + tracing-appender | Structured logging, date-based file output |
+| Error | thiserror (domain/app) + anyhow (adapter/bootstrap) | Layer-specific usage |
 
 ## Development Standards
 
 ### Type Safety
-- Rust の型システムによる静的保証
-- 全ポートを trait で定義し、実装は adapter に隔離
-- State/Event は enum で網羅的パターンマッチ
+- Static guarantees through Rust's type system
+- All ports defined as traits, implementations isolated in adapters
+- State/Event use enums with exhaustive pattern matching
 
 ### Code Quality
-- `cargo clippy -- -D warnings`（全警告をエラー扱い）
-- `cargo fmt`（rustfmt による統一フォーマット）
+- `cargo clippy -- -D warnings` (all warnings treated as errors)
+- `cargo fmt` (unified formatting via rustfmt)
 - `[lints.clippy] all = "warn"` in Cargo.toml
 
 ### Testing
-- ユニットテスト: 各モジュール内の `#[cfg(test)]` ブロック
-- 統合テスト: `tests/` ディレクトリ、モック adapter 注入
-- SQLite テストは in-memory DB を使用
+- Unit tests: `#[cfg(test)]` blocks within each module
+- Integration tests: `tests/` directory, mock adapter injection
+- SQLite tests use in-memory DB
 
 ## Development Environment
 
 ### Required Tools
-- Rust stable（devbox 経由、rustup）
-- devbox（Nix ベースの開発環境管理）
+- Rust stable (via devbox, rustup)
+- devbox (Nix-based development environment management)
 
 ### Common Commands
 ```bash
-cargo build          # ビルド
-cargo test           # 全テスト実行
-cargo clippy         # 静的解析
-cargo fmt --check    # フォーマットチェック
-cargo run -- run     # polling ループ開始
-cargo run -- init    # SQLite スキーマ初期化
-cargo run -- status  # Issue 状態一覧
+cargo build          # Build
+cargo test           # Run all tests
+cargo clippy         # Static analysis
+cargo fmt --check    # Format check
+cargo run -- run     # Start polling loop
+cargo run -- init    # Initialize SQLite schema
+cargo run -- status  # List Issue states
 ```
 
 ## Key Technical Decisions
 
-- **std::process vs tokio::process**: polling ループとの統合が自然な std::process + try_wait() を採用。stdout/stderr は別スレッドで蓄積
-- **単一 GitHubClient trait**: REST/GraphQL の区別をアプリケーション層から隠蔽。facade パターンで合成
-- **イベントバッチ適用**: polling サイクル内で全イベントを収集し、IssueClosed を最優先で一括適用
+- **std::process vs tokio::process**: Adopted std::process + try_wait() for natural integration with the polling loop. stdout/stderr accumulated in separate threads
+- **Single GitHubClient trait**: Hides REST/GraphQL distinction from the application layer. Composed using the facade pattern
+- **Event batch application**: Collects all events within a polling cycle and applies them in batch, prioritizing IssueClosed

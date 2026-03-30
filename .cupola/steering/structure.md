@@ -2,46 +2,46 @@
 
 ## Organization Philosophy
 
-Clean Architecture のレイヤー分離。`src/` 配下を domain / application / adapter / bootstrap の 4 ディレクトリに分割し、依存方向を内向きに制約する。
+Layer separation following Clean Architecture. The `src/` directory is divided into 4 subdirectories — domain / application / adapter / bootstrap — with dependencies constrained to point inward only.
 
 ## Directory Patterns
 
 ### Domain Layer (`src/domain/`)
-**Purpose**: 純粋ビジネスロジック。フレームワーク依存なし
-**Contains**: State enum, Event enum, StateMachine（純粋関数）, Issue エンティティ, Config 値オブジェクト
-**Rule**: I/O なし。derive マクロ（serde, thiserror）のみ許可
+**Purpose**: Pure business logic. No framework dependencies
+**Contains**: State enum, Event enum, StateMachine (pure functions), Issue entity, Config value object
+**Rule**: No I/O. Only derive macros (serde, thiserror) are permitted
 
 ### Application Layer (`src/application/`)
-**Purpose**: ユースケースとポート（trait）定義
-**Contains**: PollingUseCase, TransitionUseCase, SessionManager, RetryPolicy, prompt/io ヘルパー
-**Subdir**: `port/` — 外部依存の trait 定義（GitHubClient, IssueRepository, ClaudeCodeRunner 等）
-**Rule**: domain に依存。adapter の具象型を import しない
+**Purpose**: Use cases and port (trait) definitions
+**Contains**: PollingUseCase, TransitionUseCase, SessionManager, RetryPolicy, prompt/io helpers
+**Subdir**: `port/` — trait definitions for external dependencies (GitHubClient, IssueRepository, ClaudeCodeRunner, etc.)
+**Rule**: Depends on domain. Must not import concrete types from adapter
 
 ### Adapter Layer (`src/adapter/`)
-**Purpose**: 外部接続の実装
+**Purpose**: External connection implementations
 **Subdirs**:
-- `inbound/` — CLI（clap）
+- `inbound/` — CLI (clap)
 - `outbound/` — GitHub REST/GraphQL, SQLite, Claude Code, Git worktree
 
-**Rule**: application の trait を実装する。domain にも依存可
+**Rule**: Implements traits from application. May also depend on domain
 
 ### Bootstrap Layer (`src/bootstrap/`)
-**Purpose**: DI 配線、設定読み込み、ランタイム起動
-**Contains**: app.rs（エントリ）, config_loader.rs, logging.rs
-**Rule**: 全レイヤーの具象型を知る唯一の場所
+**Purpose**: DI wiring, configuration loading, runtime startup
+**Contains**: app.rs (entry point), config_loader.rs, logging.rs
+**Rule**: The only place that knows all concrete types across all layers
 
 ## Naming Conventions
 
-- **ファイル**: snake_case（`github_rest_client.rs`）
-- **型**: UpperCamelCase（`GitHubClientImpl`, `PollingUseCase`）
-- **関数**: snake_case（`find_by_issue_number`, `build_session_config`）
-- **定数**: SCREAMING_SNAKE_CASE（`PR_CREATION_SCHEMA`）
-- **ポート trait**: 能力を表す名前（`GitHubClient`, `IssueRepository`, `ClaudeCodeRunner`）
-- **アダプター**: 技術名 + 役割（`OctocrabRestClient`, `SqliteIssueRepository`, `GitWorktreeManager`）
+- **Files**: snake_case (`github_rest_client.rs`)
+- **Types**: UpperCamelCase (`GitHubClientImpl`, `PollingUseCase`)
+- **Functions**: snake_case (`find_by_issue_number`, `build_session_config`)
+- **Constants**: SCREAMING_SNAKE_CASE (`PR_CREATION_SCHEMA`)
+- **Port traits**: Named after capabilities (`GitHubClient`, `IssueRepository`, `ClaudeCodeRunner`)
+- **Adapters**: Technology name + role (`OctocrabRestClient`, `SqliteIssueRepository`, `GitWorktreeManager`)
 
 ## Code Organization Principles
 
-- **1 ファイル 1 責務**: State は state.rs、Event は event.rs に分離
-- **mod.rs は re-export のみ**: ロジックを含まない
-- **テストはモジュール内**: `#[cfg(test)] mod tests` を各ファイル末尾に配置
-- **統合テストは `tests/`**: モック adapter を定義し、ユースケースをエンドツーエンド検証
+- **One file, one responsibility**: State in state.rs, Event in event.rs — separated
+- **mod.rs is re-export only**: Contains no logic
+- **Tests within modules**: `#[cfg(test)] mod tests` placed at the end of each file
+- **Integration tests in `tests/`**: Define mock adapters and verify use cases end-to-end

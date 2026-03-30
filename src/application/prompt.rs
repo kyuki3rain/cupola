@@ -103,14 +103,15 @@ Issue の内容は .cupola/inputs/issue.md を参照してください。
 PR の作成はシステム側で行います。以下の情報を出力してください。
 
 - pr_title: 設計 PR のタイトル。"Design: <Issue の要約>" の形式
-- pr_body: 設計 PR の body。{language} で記述すること
+- pr_body: 設計 PR の body。{language} で記述すること。Related: #{issue_number} を含めること
 - feature_name: cc-sdd の feature name（spec-init で生成した .cupola/specs/ 配下のディレクトリ名）
 
 ## 制約事項
 
 - 成果物はすべて {language} で記述すること
 - GitHub API（gh コマンド含む）は使用しないこと
-- PR の作成は行わないこと（システム側で行います）"#
+- PR の作成は行わないこと（システム側で行います）
+- PR body で Issue を自動 close するキーワードは使用しないこと（設計 PR は中間成果物のため）"#
     )
 }
 
@@ -277,6 +278,42 @@ mod tests {
     fn pr_creation_schema_is_valid_json() {
         let _: serde_json::Value =
             serde_json::from_str(PR_CREATION_SCHEMA).expect("should be valid JSON");
+    }
+
+    #[test]
+    fn design_prompt_contains_related_instruction() {
+        let config = test_config();
+        let session = build_session_config(State::DesignRunning, 42, &config, None, None);
+        assert!(
+            session.prompt.contains("Related: #42"),
+            "design prompt should instruct to use 'Related: #N'"
+        );
+    }
+
+    #[test]
+    fn design_prompt_does_not_contain_closes() {
+        let config = test_config();
+        let session = build_session_config(State::DesignRunning, 42, &config, None, None);
+        assert!(
+            !session.prompt.contains("Closes"),
+            "design prompt should not contain 'Closes'"
+        );
+    }
+
+    #[test]
+    fn implementation_prompt_contains_closes() {
+        let config = test_config();
+        let session = build_session_config(
+            State::ImplementationRunning,
+            42,
+            &config,
+            None,
+            Some("my-feature"),
+        );
+        assert!(
+            session.prompt.contains("Closes #42"),
+            "implementation prompt should contain 'Closes #42'"
+        );
     }
 
     #[test]

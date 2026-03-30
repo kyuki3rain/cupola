@@ -5,6 +5,9 @@ use anyhow::Result;
 
 use cupola::adapter::outbound::sqlite_connection::SqliteConnection;
 use cupola::adapter::outbound::sqlite_issue_repository::SqliteIssueRepository;
+use cupola::application::polling_use_case::PollingUseCase;
+use cupola::application::port::claude_code_runner::ClaudeCodeRunner;
+use cupola::application::port::execution_log_repository::ExecutionLogRepository;
 use cupola::application::port::git_worktree::GitWorktree;
 use cupola::application::port::github_client::{
     GitHubClient, GitHubIssue, GitHubIssueDetail, GitHubPr, ReviewThread,
@@ -13,6 +16,7 @@ use cupola::application::port::issue_repository::IssueRepository;
 use cupola::application::transition_use_case::{TransitionUseCase, prioritize_events};
 use cupola::domain::config::Config;
 use cupola::domain::event::Event;
+use cupola::domain::execution_log::ExecutionLog;
 use cupola::domain::issue::Issue;
 use cupola::domain::state::State;
 
@@ -684,4 +688,202 @@ async fn state_transition_log_does_not_break_representative_transition_paths() {
         .await
         .expect("fail");
     assert_eq!(issue3.state, State::DesignRunning);
+}
+
+// === Concurrent Session Limit Tests ===
+
+struct MockClaudeCodeRunner;
+
+impl ClaudeCodeRunner for MockClaudeCodeRunner {
+    fn spawn(
+        &self,
+        _prompt: &str,
+        _working_dir: &Path,
+        _json_schema: Option<&str>,
+    ) -> Result<std::process::Child> {
+        use std::process::{Command, Stdio};
+        Command::new("sleep")
+            .arg("60")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(Into::into)
+    }
+}
+
+struct MockExecutionLogRepository;
+
+impl ExecutionLogRepository for MockExecutionLogRepository {
+    async fn record_start(&self, _issue_id: i64, _state: State) -> Result<i64> {
+        Ok(0)
+    }
+    async fn record_finish(
+        &self,
+        _log_id: i64,
+        _exit_code: Option<i32>,
+        _structured_output: Option<&str>,
+        _error_message: Option<&str>,
+    ) -> Result<()> {
+        Ok(())
+    }
+    async fn find_by_issue(&self, _issue_id: i64) -> Result<Vec<ExecutionLog>> {
+        Ok(vec![])
+    }
+}
+
+type TestPollingUseCase = PollingUseCase<
+    MockGitHubClient,
+    SqliteIssueRepository,
+    MockExecutionLogRepository,
+    MockClaudeCodeRunner,
+    MockGitWorktree,
+>;
+
+fn setup_polling(config: Config) -> TestPollingUseCase {
+    let db = SqliteConnection::open_in_memory().expect("open");
+    db.init_schema().expect("init");
+    let repo = SqliteIssueRepository::new(db);
+    let github = MockGitHubClient::new();
+    let exec_log = MockExecutionLogRepository;
+    let claude_runner = MockClaudeCodeRunner;
+    let worktree = MockGitWorktree;
+
+    PollingUseCase::new(github, repo, exec_log, claude_runner, worktree, config)
+}
+
+#[tokio::test]
+async fn concurrent_session_limit_restricts_spawning() {
+    let mut config = test_config();
+    config.max_concurrent_sessions = Some(2);
+
+    let mut polling = setup_polling(config);
+
+    // Create 3 issues in DesignRunning state with worktree paths
+    for i in 1..=3u64 {
+        let issue = Issue {
+            id: 0,
+            github_issue_number: i,
+            state: State::DesignRunning,
+            design_pr_number: None,
+            impl_pr_number: None,
+            worktree_path: Some(format!("/tmp/wt/{i}")),
+            retry_count: 0,
+            current_pid: None,
+            error_message: None,
+            feature_name: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        polling.issue_repo_ref().save(&issue).await.expect("save");
+    }
+
+    // Run one cycle
+    let _ = polling.run_cycle().await;
+
+    // Check that only 2 processes were spawned (via current_pid in DB)
+    let issues = polling
+        .issue_repo_ref()
+        .find_needing_process()
+        .await
+        .expect("find");
+    let spawned_count = issues.iter().filter(|i| i.current_pid.is_some()).count();
+    assert_eq!(
+        spawned_count, 2,
+        "should have spawned exactly 2 processes with limit of 2"
+    );
+
+    // Clean up spawned processes
+    polling.graceful_shutdown().await;
+}
+
+#[tokio::test]
+async fn no_limit_spawns_all_processes() {
+    let config = test_config(); // max_concurrent_sessions = None
+
+    let mut polling = setup_polling(config);
+
+    // Create 3 issues in DesignRunning state
+    for i in 1..=3u64 {
+        let issue = Issue {
+            id: 0,
+            github_issue_number: i,
+            state: State::DesignRunning,
+            design_pr_number: None,
+            impl_pr_number: None,
+            worktree_path: Some(format!("/tmp/wt/{i}")),
+            retry_count: 0,
+            current_pid: None,
+            error_message: None,
+            feature_name: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        polling.issue_repo_ref().save(&issue).await.expect("save");
+    }
+
+    let _ = polling.run_cycle().await;
+
+    let issues = polling
+        .issue_repo_ref()
+        .find_needing_process()
+        .await
+        .expect("find");
+    let spawned_count = issues.iter().filter(|i| i.current_pid.is_some()).count();
+    assert_eq!(
+        spawned_count, 3,
+        "should have spawned all 3 processes with no limit"
+    );
+
+    polling.graceful_shutdown().await;
+}
+
+#[test]
+fn config_validation_rejects_zero() {
+    let mut config = test_config();
+    config.max_concurrent_sessions = Some(0);
+    assert!(config.validate().is_err());
+}
+
+#[tokio::test]
+async fn session_count_decreases_after_process_exit() {
+    use cupola::application::session_manager::SessionManager;
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+
+    let mut mgr = SessionManager::new();
+    assert_eq!(mgr.count(), 0);
+
+    // Spawn 2 short-lived and 1 long-lived process
+    let echo1 = Command::new("echo")
+        .arg("a")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    let echo2 = Command::new("echo")
+        .arg("b")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    let sleep = Command::new("sleep")
+        .arg("60")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+
+    mgr.register(1, echo1);
+    mgr.register(2, echo2);
+    mgr.register(3, sleep);
+    assert_eq!(mgr.count(), 3);
+
+    // Wait for echo processes to finish
+    std::thread::sleep(Duration::from_millis(300));
+
+    let exited = mgr.collect_exited();
+    assert_eq!(exited.len(), 2, "both echo processes should have exited");
+    assert_eq!(mgr.count(), 1, "only sleep process should remain");
+
+    mgr.kill_all();
 }
