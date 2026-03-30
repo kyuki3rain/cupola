@@ -44,9 +44,9 @@ sequenceDiagram
     GWM->>Git: git fetch origin
     Git-->>GWM: success/failure
     GWM-->>PUC: Result
-    PUC->>GW: create(path, branch, origin/default_branch)
+    PUC->>GW: create(path, branch, origin/{default_branch})
     GW->>GWM: create(...)
-    GWM->>Git: git worktree add -b branch path origin/main
+    GWM->>Git: git worktree add -b branch path origin/{default_branch}
     Git-->>GWM: success/failure
     GWM-->>PUC: Result
 ```
