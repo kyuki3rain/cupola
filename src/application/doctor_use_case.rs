@@ -14,7 +14,7 @@ impl DoctorUseCase {
     }
 
     /// 全チェック項目を定められた順序で実行し、結果リストを返す
-    /// 順序: git → claude → gh → agent:ready label → cupola.toml → steering → cupola.db
+    /// 順序: git → claude → gh → agent:ready label → model:* labels → cupola.toml → steering → cupola.db
     pub fn run(&self) -> Vec<CheckResult> {
         let mut results = Vec::new();
 
@@ -36,13 +36,20 @@ impl DoctorUseCase {
             results.push(CheckResult::skipped("agent:ready label"));
         }
 
-        // 5. cupola.toml チェック
+        // 5. model:* ラベルチェック（gh auth 成功時のみ）
+        if gh_passed {
+            results.push(self.check_model_labels());
+        } else {
+            results.push(CheckResult::skipped("model:* labels"));
+        }
+
+        // 6. cupola.toml チェック
         results.push(self.check_cupola_toml());
 
-        // 6. steering ディレクトリチェック
+        // 7. steering ディレクトリチェック
         results.push(self.check_steering());
 
-        // 7. cupola.db チェック
+        // 8. cupola.db チェック
         results.push(self.check_cupola_db());
 
         results
@@ -129,6 +136,27 @@ impl DoctorUseCase {
         }
     }
 
+    fn check_model_labels(&self) -> CheckResult {
+        let output = self
+            .command_runner
+            .run("gh", &["label", "list", "--json", "name"])
+            .unwrap_or_else(
+                |_| crate::application::port::command_runner::CommandOutput {
+                    success: false,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                },
+            );
+        if output.success && output.stdout.contains("\"model:") {
+            CheckResult::pass("model:* labels")
+        } else {
+            CheckResult::fail(
+                "model:* labels",
+                "gh label create model:opus && gh label create model:haiku && gh label create model:sonnet を実行してラベルを作成してください",
+            )
+        }
+    }
+
     fn check_cupola_toml(&self) -> CheckResult {
         let path = Path::new(".cupola/cupola.toml");
         match load_toml(path) {
@@ -180,7 +208,7 @@ mod tests {
             .with_success(
                 "gh",
                 &["label", "list", "--json", "name"],
-                r#"[{"name":"agent:ready"}]"#,
+                r#"[{"name":"agent:ready"},{"name":"model:opus"},{"name":"model:haiku"},{"name":"model:sonnet"}]"#,
             )
     }
 
@@ -191,7 +219,7 @@ mod tests {
 
         // cupola.toml, steering, db のチェックは失敗するが、外部ツールは成功
         let results = use_case.run();
-        assert_eq!(results.len(), 7);
+        assert_eq!(results.len(), 8);
 
         assert_eq!(results[0].name, "git");
         assert!(!results[0].is_failed());
@@ -204,6 +232,9 @@ mod tests {
 
         assert_eq!(results[3].name, "agent:ready label");
         assert!(!results[3].is_failed());
+
+        assert_eq!(results[4].name, "model:* labels");
+        assert!(!results[4].is_failed());
     }
 
     #[test]
@@ -215,7 +246,7 @@ mod tests {
             .with_success(
                 "gh",
                 &["label", "list", "--json", "name"],
-                r#"[{"name":"agent:ready"}]"#,
+                r#"[{"name":"agent:ready"},{"name":"model:opus"}]"#,
             );
         let use_case = DoctorUseCase::new(Box::new(runner));
         let results = use_case.run();
@@ -235,7 +266,7 @@ mod tests {
             .with_success(
                 "gh",
                 &["label", "list", "--json", "name"],
-                r#"[{"name":"agent:ready"}]"#,
+                r#"[{"name":"agent:ready"},{"name":"model:opus"}]"#,
             );
         let use_case = DoctorUseCase::new(Box::new(runner));
         let results = use_case.run();
@@ -267,6 +298,12 @@ mod tests {
             crate::domain::check_result::CheckStatus::Skipped
         );
         assert!(!results[3].is_failed()); // スキップは失敗としてカウントしない
+        assert_eq!(results[4].name, "model:* labels");
+        assert_eq!(
+            results[4].status,
+            crate::domain::check_result::CheckStatus::Skipped
+        );
+        assert!(!results[4].is_failed()); // スキップは失敗としてカウントしない
     }
 
     #[test]
@@ -290,11 +327,36 @@ mod tests {
     }
 
     #[test]
-    fn run_returns_seven_results() {
+    fn model_label_not_found_sets_failure() {
+        let runner = MockCommandRunner::new()
+            .with_success("git", &["--version"], "git version 2.40.0")
+            .with_success("claude", &["--version"], "1.0.0")
+            .with_success("gh", &["auth", "status"], "Logged in")
+            .with_success(
+                "gh",
+                &["label", "list", "--json", "name"],
+                r#"[{"name":"agent:ready"}]"#,
+            );
+        let use_case = DoctorUseCase::new(Box::new(runner));
+        let results = use_case.run();
+
+        assert_eq!(results[4].name, "model:* labels");
+        assert!(results[4].is_failed());
+        assert!(
+            results[4]
+                .remedy
+                .as_deref()
+                .unwrap()
+                .contains("gh label create model:")
+        );
+    }
+
+    #[test]
+    fn run_returns_eight_results() {
         let runner = all_success_runner();
         let use_case = DoctorUseCase::new(Box::new(runner));
         let results = use_case.run();
-        assert_eq!(results.len(), 7);
+        assert_eq!(results.len(), 8);
     }
 
     #[test]
@@ -307,8 +369,9 @@ mod tests {
         assert_eq!(results[1].name, "claude");
         assert_eq!(results[2].name, "gh auth");
         assert_eq!(results[3].name, "agent:ready label");
-        assert_eq!(results[4].name, "cupola.toml");
-        assert_eq!(results[5].name, "steering");
-        assert_eq!(results[6].name, "cupola.db");
+        assert_eq!(results[4].name, "model:* labels");
+        assert_eq!(results[5].name, "cupola.toml");
+        assert_eq!(results[6].name, "steering");
+        assert_eq!(results[7].name, "cupola.db");
     }
 }
