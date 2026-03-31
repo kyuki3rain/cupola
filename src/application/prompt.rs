@@ -95,7 +95,14 @@ Issue の内容は .cupola/inputs/issue.md を参照してください。
 5. タスクを生成する（自動承認）
    /kiro:spec-tasks <feature_name> -y
 
-6. 成果物を commit / push する
+6. commit 前に品質チェックを実行する
+   以下をすべてパスしてから commit すること:
+   1. cargo fmt
+   2. cargo clippy -- -D warnings
+   3. cargo test
+   いずれかが失敗した場合は修正してから再度チェックすること
+
+7. 成果物を commit / push する
    git add .cupola/specs/ .cupola/steering/
    git commit -m "docs: add cc-sdd design for #{issue_number}"
    git push
@@ -129,7 +136,11 @@ fn build_implementation_prompt(
         None => "1. スペックの feature name を確認する\n   ls .cupola/specs/ で feature ディレクトリを特定\n   （複数存在する場合は spec.json の phase が \"tasks-generated\" のものを選択）\n\n2. cc-sdd による実装を実行する\n   /kiro:spec-impl <feature_name>\n   タスクを TDD で順次実行すること".to_string(),
     };
 
-    let push_step = if feature_name.is_some() { "2" } else { "3" };
+    let (quality_check_step, push_step) = if feature_name.is_some() {
+        ("2", "3")
+    } else {
+        ("3", "4")
+    };
 
     format!(
         r#"あなたは自動実装エージェントです。設計書に基づき、cc-sdd による実装を行ってください。
@@ -142,6 +153,13 @@ fn build_implementation_prompt(
 ## 手順
 
 {feature_instruction}
+
+{quality_check_step}. commit 前に品質チェックを実行する
+   以下をすべてパスしてから commit すること:
+   1. cargo fmt
+   2. cargo clippy -- -D warnings
+   3. cargo test
+   いずれかが失敗した場合は修正してから再度チェックすること
 
 {push_step}. 成果物を commit / push する
    最終的に git push
@@ -205,7 +223,14 @@ fn build_fixing_prompt(
 
 2. 必要な修正をコードに反映する
 
-3. 修正を commit / push する
+3. commit 前に品質チェックを実行する
+   以下をすべてパスしてから commit すること:
+   1. cargo fmt
+   2. cargo clippy -- -D warnings
+   3. cargo test
+   いずれかが失敗した場合は修正してから再度チェックすること
+
+4. 修正を commit / push する
    git add -A
    git commit -m "fix: address review comments"
    git push
@@ -431,5 +456,83 @@ mod tests {
     fn fixing_schema_is_valid_json() {
         let _: serde_json::Value =
             serde_json::from_str(FIXING_SCHEMA).expect("should be valid JSON");
+    }
+
+    #[test]
+    fn design_prompt_contains_quality_check() {
+        let config = test_config();
+        let session = build_session_config(State::DesignRunning, 42, &config, None, None);
+        assert!(
+            session.prompt.contains("cargo fmt"),
+            "design prompt should contain 'cargo fmt'"
+        );
+        assert!(
+            session.prompt.contains("cargo clippy -- -D warnings"),
+            "design prompt should contain 'cargo clippy -- -D warnings'"
+        );
+        assert!(
+            session.prompt.contains("cargo test"),
+            "design prompt should contain 'cargo test'"
+        );
+    }
+
+    #[test]
+    fn implementation_prompt_contains_quality_check() {
+        let config = test_config();
+        let session = build_session_config(
+            State::ImplementationRunning,
+            42,
+            &config,
+            None,
+            Some("my-feature"),
+        );
+        assert!(
+            session.prompt.contains("cargo fmt"),
+            "implementation prompt (with feature_name) should contain 'cargo fmt'"
+        );
+        assert!(
+            session.prompt.contains("cargo clippy -- -D warnings"),
+            "implementation prompt (with feature_name) should contain 'cargo clippy -- -D warnings'"
+        );
+        assert!(
+            session.prompt.contains("cargo test"),
+            "implementation prompt (with feature_name) should contain 'cargo test'"
+        );
+    }
+
+    #[test]
+    fn implementation_prompt_without_feature_name_contains_quality_check() {
+        let config = test_config();
+        let session = build_session_config(State::ImplementationRunning, 42, &config, None, None);
+        assert!(
+            session.prompt.contains("cargo fmt"),
+            "implementation prompt (without feature_name) should contain 'cargo fmt'"
+        );
+        assert!(
+            session.prompt.contains("cargo clippy -- -D warnings"),
+            "implementation prompt (without feature_name) should contain 'cargo clippy -- -D warnings'"
+        );
+        assert!(
+            session.prompt.contains("cargo test"),
+            "implementation prompt (without feature_name) should contain 'cargo test'"
+        );
+    }
+
+    #[test]
+    fn fixing_prompt_contains_quality_check() {
+        let config = test_config();
+        let session = build_session_config(State::DesignFixing, 42, &config, Some(85), None);
+        assert!(
+            session.prompt.contains("cargo fmt"),
+            "fixing prompt should contain 'cargo fmt'"
+        );
+        assert!(
+            session.prompt.contains("cargo clippy -- -D warnings"),
+            "fixing prompt should contain 'cargo clippy -- -D warnings'"
+        );
+        assert!(
+            session.prompt.contains("cargo test"),
+            "fixing prompt should contain 'cargo test'"
+        );
     }
 }

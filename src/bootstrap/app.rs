@@ -7,17 +7,17 @@ use crate::adapter::outbound::claude_code_process::ClaudeCodeProcess;
 use crate::adapter::outbound::git_worktree_manager::GitWorktreeManager;
 use crate::adapter::outbound::github_client_impl::GitHubClientImpl;
 use crate::adapter::outbound::github_graphql_client::GraphQLClient;
-use crate::adapter::outbound::github_rest_client::{OctocrabRestClient, resolve_github_token};
-use crate::adapter::outbound::process_command_runner::ProcessCommandRunner;
+use crate::adapter::outbound::github_rest_client::OctocrabRestClient;
 use crate::adapter::outbound::sqlite_connection::SqliteConnection;
 use crate::adapter::outbound::sqlite_execution_log_repository::SqliteExecutionLogRepository;
 use crate::adapter::outbound::sqlite_issue_repository::SqliteIssueRepository;
-use crate::application::doctor_use_case::DoctorUseCase;
+use crate::application::doctor_use_case::{CheckStatus, DoctorUseCase};
+use crate::application::init_use_case::InitUseCase;
 use crate::application::polling_use_case::PollingUseCase;
 use crate::application::port::issue_repository::IssueRepository;
 use crate::bootstrap::config_loader::{CliOverrides, load_toml};
 use crate::bootstrap::logging::init_logging;
-use crate::domain::check_result::CheckStatus;
+use crate::bootstrap::toml_config_loader::TomlConfigLoader;
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
@@ -56,7 +56,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             db.init_schema()?;
 
             // Resolve GitHub token
-            let token = resolve_github_token()?;
+            let token = gh_token::get()?;
 
             // Build adapters
             let rest = OctocrabRestClient::new(token.clone(), cfg.owner.clone(), cfg.repo.clone())?;
@@ -81,38 +81,65 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Init => {
-            let db_path = Path::new(".cupola/cupola.db");
-            if let Some(parent) = db_path.parent() {
-                std::fs::create_dir_all(parent).context("failed to create .cupola directory")?;
-            }
-            let db = SqliteConnection::open(db_path)?;
-            db.init_schema()?;
-            println!("SQLite schema initialized at {}", db_path.display());
+            let base_dir = std::env::current_dir().context("failed to get current directory")?;
+            let uc = InitUseCase::new(base_dir);
+            let report = uc.run()?;
+
+            println!("cupola init completed:");
+            println!(
+                "  database: {}",
+                if report.db_initialized {
+                    "initialized"
+                } else {
+                    "skipped"
+                }
+            );
+            println!(
+                "  cupola.toml: {}",
+                if report.toml_created {
+                    "created"
+                } else {
+                    "skipped (already exists)"
+                }
+            );
+            println!(
+                "  steering templates: {}",
+                if report.steering_copied {
+                    "copied"
+                } else {
+                    "skipped"
+                }
+            );
+            println!(
+                "  .gitignore: {}",
+                if report.gitignore_updated {
+                    "updated"
+                } else {
+                    "skipped (already has cupola entries)"
+                }
+            );
             Ok(())
         }
 
-        Command::Doctor => {
-            let runner = ProcessCommandRunner;
-            let use_case = DoctorUseCase::new(Box::new(runner));
-            let results = use_case.run();
+        Command::Doctor { config } => {
+            let loader = TomlConfigLoader;
+            let use_case = DoctorUseCase::new(loader);
+            let results = use_case.run(&config);
 
-            let has_failure = results.iter().any(|r| r.is_failed());
-
+            let mut has_failure = false;
             for result in &results {
-                match result.status {
-                    CheckStatus::Pass => println!("✅ {}", result.name),
-                    CheckStatus::Fail => {
-                        println!("❌ {}", result.name);
-                        if let Some(remedy) = &result.remedy {
-                            println!("   → {remedy}");
-                        }
+                match &result.status {
+                    CheckStatus::Ok(msg) => println!("✅ {}: {}", result.name, msg),
+                    CheckStatus::Warn(msg) => println!("⚠️  {}: {}", result.name, msg),
+                    CheckStatus::Fail(msg) => {
+                        println!("❌ {}: {}", result.name, msg);
+                        has_failure = true;
                     }
-                    CheckStatus::Skipped => println!("⏭ {} (skipped)", result.name),
                 }
             }
 
             if has_failure {
-                std::process::exit(1);
+                return Err(anyhow::anyhow!("doctor checks failed"));
             }
             Ok(())
         }

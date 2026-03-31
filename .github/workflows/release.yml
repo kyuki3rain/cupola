@@ -19,6 +19,12 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            apt_packages: gcc-aarch64-linux-gnu libssl-dev:arm64
+            linker: aarch64-linux-gnu-gcc
+            pkg_config_allow_cross: "1"
+            pkg_config_path: /usr/lib/aarch64-linux-gnu/pkgconfig
           - target: aarch64-apple-darwin
             os: macos-latest
           - target: x86_64-apple-darwin
@@ -47,8 +53,19 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Install cross-compilation tools
+        if: matrix.apt_packages
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ matrix.apt_packages }}
+
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker || '' }}
+          PKG_CONFIG_ALLOW_CROSS: ${{ matrix.pkg_config_allow_cross || '' }}
+          PKG_CONFIG_PATH: ${{ matrix.pkg_config_path || '' }}
 
       - name: Package
         run: tar czf cupola-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release cupola
