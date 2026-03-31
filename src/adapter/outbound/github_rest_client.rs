@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use octocrab::Octocrab;
 
 use crate::application::port::github_client::{GitHubIssue, GitHubIssueDetail, GitHubPr};
@@ -148,64 +148,5 @@ impl OctocrabRestClient {
             .with_context(|| format!("failed to close issue #{issue_number}"))?;
 
         Ok(())
-    }
-}
-
-/// Retrieve a GitHub token from `gh auth token` or the `GITHUB_TOKEN` env var.
-pub fn resolve_github_token() -> Result<String> {
-    if let Ok(token) = std::env::var("GITHUB_TOKEN")
-        && !token.is_empty()
-    {
-        return Ok(token);
-    }
-
-    let output = std::process::Command::new("gh")
-        .args(["auth", "token"])
-        .output()
-        .map_err(|e| anyhow!("failed to run `gh auth token`: {e}"))?;
-
-    if !output.status.success() {
-        return Err(anyhow!(
-            "`gh auth token` failed. Set GITHUB_TOKEN or run `gh auth login`."
-        ));
-    }
-
-    let token = String::from_utf8(output.stdout)
-        .context("`gh auth token` output is not valid UTF-8")?
-        .trim()
-        .to_string();
-
-    if token.is_empty() {
-        return Err(anyhow!(
-            "empty token from `gh auth token`. Set GITHUB_TOKEN or run `gh auth login`."
-        ));
-    }
-
-    Ok(token)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resolve_token_from_env() {
-        // Save and restore env
-        let original = std::env::var("GITHUB_TOKEN").ok();
-        // SAFETY: test runs sequentially with --test-threads=1 for env var safety
-        unsafe {
-            std::env::set_var("GITHUB_TOKEN", "test-token-123");
-        }
-
-        let result = resolve_github_token();
-        assert_eq!(result.unwrap(), "test-token-123");
-
-        // Restore
-        unsafe {
-            match original {
-                Some(v) => std::env::set_var("GITHUB_TOKEN", v),
-                None => std::env::remove_var("GITHUB_TOKEN"),
-            }
-        }
     }
 }
