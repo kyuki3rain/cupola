@@ -75,6 +75,11 @@ impl SqliteConnection {
         // Migration: add feature_name column for existing databases
         let _ = conn.execute_batch("ALTER TABLE issues ADD COLUMN feature_name TEXT;");
 
+        // Migration: add fixing_causes column for existing databases
+        let _ = conn.execute_batch(
+            "ALTER TABLE issues ADD COLUMN fixing_causes TEXT NOT NULL DEFAULT '[]';",
+        );
+
         Ok(())
     }
 

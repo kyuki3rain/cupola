@@ -1,24 +1,130 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use octocrab::Octocrab;
 
-use crate::application::port::github_client::{GitHubIssue, GitHubIssueDetail, GitHubPr};
+use crate::application::port::github_client::{
+    GitHubCheckRun, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails,
+};
 
 pub struct OctocrabRestClient {
     octocrab: Octocrab,
     owner: String,
     repo: String,
+    token: String,
+    http_client: reqwest::Client,
 }
 
 impl OctocrabRestClient {
     pub fn new(token: String, owner: String, repo: String) -> Result<Self> {
         let octocrab = Octocrab::builder()
-            .personal_token(token)
+            .personal_token(token.clone())
             .build()
             .context("failed to build octocrab client")?;
+        let http_client = reqwest::Client::builder()
+            .user_agent("cupola/1.0")
+            .build()
+            .context("failed to build reqwest client")?;
         Ok(Self {
             octocrab,
             owner,
             repo,
+            token,
+            http_client,
+        })
+    }
+
+    pub async fn get_ci_check_runs(&self, pr_number: u64) -> Result<Vec<GitHubCheckRun>> {
+        // Step 1: Get PR head SHA
+        let pr = self
+            .octocrab
+            .pulls(&self.owner, &self.repo)
+            .get(pr_number)
+            .await
+            .with_context(|| format!("failed to get PR #{pr_number} for CI check-runs"))?;
+
+        let sha = pr.head.sha.clone();
+
+        // Step 2: GET /repos/{owner}/{repo}/commits/{sha}/check-runs?per_page=100
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/commits/{}/check-runs?per_page=100",
+            self.owner, self.repo, sha
+        );
+
+        let resp = self
+            .http_client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send()
+            .await
+            .with_context(|| format!("failed to call check-runs API for SHA {sha}"))?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "check-runs API returned {}: {}",
+                resp.status(),
+                resp.text().await.unwrap_or_default()
+            ));
+        }
+
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .context("failed to parse check-runs response")?;
+
+        let runs = body["check_runs"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|r| {
+                        let status = r["status"].as_str()?.to_string();
+                        if status != "completed" {
+                            return None;
+                        }
+                        Some(GitHubCheckRun {
+                            id: r["id"].as_u64().unwrap_or(0),
+                            name: r["name"].as_str().unwrap_or("").to_string(),
+                            status,
+                            conclusion: r["conclusion"].as_str().map(str::to_string),
+                            output_summary: r["output"]["summary"]
+                                .as_str()
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_string),
+                            output_text: r["output"]["text"]
+                                .as_str()
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_string),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(runs)
+    }
+
+    pub async fn get_pr_mergeable(&self, pr_number: u64) -> Result<Option<bool>> {
+        let pr = self
+            .octocrab
+            .pulls(&self.owner, &self.repo)
+            .get(pr_number)
+            .await
+            .with_context(|| format!("failed to get PR #{pr_number} for mergeable check"))?;
+
+        Ok(pr.mergeable)
+    }
+
+    pub async fn get_pr_details(&self, pr_number: u64) -> Result<GitHubPrDetails> {
+        let pr = self
+            .octocrab
+            .pulls(&self.owner, &self.repo)
+            .get(pr_number)
+            .await
+            .with_context(|| format!("failed to get PR #{pr_number} details"))?;
+
+        Ok(GitHubPrDetails {
+            merged: pr.merged_at.is_some(),
+            mergeable: pr.mergeable,
         })
     }
 

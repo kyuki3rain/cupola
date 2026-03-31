@@ -1,7 +1,8 @@
 use anyhow::Result;
 
 use crate::application::port::github_client::{
-    GitHubClient, GitHubIssue, GitHubIssueDetail, GitHubPr, ReviewThread,
+    GitHubCheckRun, GitHubClient, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails,
+    ReviewThread,
 };
 
 use super::github_graphql_client::GraphQLClient;
@@ -61,5 +62,17 @@ impl GitHubClient for GitHubClientImpl {
 
     async fn close_issue(&self, issue_number: u64) -> Result<()> {
         self.rest.close_issue(issue_number).await
+    }
+
+    async fn get_ci_check_runs(&self, pr_number: u64) -> Result<Vec<GitHubCheckRun>> {
+        self.rest.get_ci_check_runs(pr_number).await
+    }
+
+    async fn get_pr_mergeable(&self, pr_number: u64) -> Result<Option<bool>> {
+        self.rest.get_pr_mergeable(pr_number).await
+    }
+
+    async fn get_pr_details(&self, pr_number: u64) -> Result<GitHubPrDetails> {
+        self.rest.get_pr_details(pr_number).await
     }
 }
