@@ -79,6 +79,11 @@ impl SqliteConnection {
         // Migration: add model column for existing databases
         Self::run_add_column_migration(&conn, "model TEXT")?;
 
+        // Migration: add fixing_causes column for existing databases
+        let _ = conn.execute_batch(
+            "ALTER TABLE issues ADD COLUMN fixing_causes TEXT NOT NULL DEFAULT '[]';",
+        );
+
         Ok(())
     }
 

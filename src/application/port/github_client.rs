@@ -1,6 +1,24 @@
 use anyhow::Result;
 
 #[derive(Debug, Clone)]
+pub struct GitHubCheckRun {
+    pub id: u64,
+    pub name: String,
+    pub status: String,
+    pub conclusion: Option<String>,
+    /// Corresponds to GitHub Checks API `output.summary`.
+    pub output_summary: Option<String>,
+    /// Corresponds to GitHub Checks API `output.text`.
+    pub output_text: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GitHubPrDetails {
+    pub merged: bool,
+    pub mergeable: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
 pub struct GitHubIssue {
     pub number: u64,
     pub title: String,
@@ -95,8 +113,21 @@ pub trait GitHubClient: Send + Sync {
         issue_number: u64,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 
-    fn get_issue_labels(
+    /// PR の CI check-runs を取得する。status が "completed" のもののみ返す。
+    fn get_ci_check_runs(
         &self,
-        issue_number: u64,
-    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
+        pr_number: u64,
+    ) -> impl std::future::Future<Output = Result<Vec<GitHubCheckRun>>> + Send;
+
+    /// PR の mergeable フィールドを取得する。None は GitHub が計算中を意味する。
+    fn get_pr_mergeable(
+        &self,
+        pr_number: u64,
+    ) -> impl std::future::Future<Output = Result<Option<bool>>> + Send;
+
+    /// PR の merged / mergeable を 1 回の API 呼び出しで取得する。
+    fn get_pr_details(
+        &self,
+        pr_number: u64,
+    ) -> impl std::future::Future<Output = Result<GitHubPrDetails>> + Send;
 }

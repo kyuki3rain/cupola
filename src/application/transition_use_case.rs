@@ -72,19 +72,6 @@ impl<G: GitHubClient, I: IssueRepository, W: GitWorktree> TransitionUseCase<'_, 
             return Ok(existing);
         }
 
-        // Fetch labels to extract model override at creation time
-        let initial_model = self
-            .github
-            .get_issue_labels(issue_number)
-            .await
-            .ok()
-            .and_then(|labels| {
-                labels.into_iter().find_map(|l| {
-                    let model = l.strip_prefix("model:")?.trim().to_string();
-                    if model.is_empty() { None } else { Some(model) }
-                })
-            });
-
         // New issue
         let mut issue = Issue {
             id: 0,
@@ -97,7 +84,8 @@ impl<G: GitHubClient, I: IssueRepository, W: GitWorktree> TransitionUseCase<'_, 
             current_pid: None,
             error_message: None,
             feature_name: None,
-            model: initial_model,
+            fixing_causes: vec![],
+            model: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
