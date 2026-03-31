@@ -231,6 +231,19 @@ impl OctocrabRestClient {
         Ok(())
     }
 
+    pub async fn get_issue_labels(&self, issue_number: u64) -> Result<Vec<String>> {
+        let page = self
+            .octocrab
+            .issues(&self.owner, &self.repo)
+            .list_labels_for_issue(issue_number)
+            .per_page(100)
+            .send()
+            .await
+            .with_context(|| format!("failed to get labels for issue #{issue_number}"))?;
+
+        Ok(page.items.into_iter().map(|l| l.name).collect())
+    }
+
     pub async fn close_issue(&self, issue_number: u64) -> Result<()> {
         self.octocrab
             .issues(&self.owner, &self.repo)

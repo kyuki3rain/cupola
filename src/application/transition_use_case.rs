@@ -85,6 +85,7 @@ impl<G: GitHubClient, I: IssueRepository, W: GitWorktree> TransitionUseCase<'_, 
             error_message: None,
             feature_name: None,
             fixing_causes: vec![],
+            model: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };

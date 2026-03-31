@@ -37,6 +37,7 @@ impl<C: ConfigLoader> DoctorUseCase<C> {
             check_git(),
             check_gh(),
             check_gh_label(),
+            check_model_labels(),
             check_steering(&steering_path),
             check_db(&db_path),
         ]
@@ -187,6 +188,47 @@ fn check_gh_label() -> DoctorCheckResult {
                     name: "agent:ready ラベル".to_string(),
                     status: CheckStatus::Fail(format!("ラベル一覧の取得に失敗しました: {e}")),
                 },
+            }
+        }
+    }
+}
+
+fn check_model_labels() -> DoctorCheckResult {
+    let result = std::process::Command::new("gh")
+        .args(["label", "list", "--json", "name"])
+        .output();
+
+    match result {
+        Err(e) if e.kind() == ErrorKind::NotFound => DoctorCheckResult {
+            name: "model:* ラベル".to_string(),
+            status: CheckStatus::Fail(
+                "gh CLI がインストールされていないため、ラベルを確認できません".to_string(),
+            ),
+        },
+        Err(e) => DoctorCheckResult {
+            name: "model:* ラベル".to_string(),
+            status: CheckStatus::Fail(format!("ラベル一覧の取得に失敗しました: {e}")),
+        },
+        Ok(output) if !output.status.success() => DoctorCheckResult {
+            name: "model:* ラベル".to_string(),
+            status: CheckStatus::Fail(
+                "ラベル一覧の取得に失敗しました。gh の認証状態を確認してください".to_string(),
+            ),
+        },
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.contains("\"model:") {
+                DoctorCheckResult {
+                    name: "model:* ラベル".to_string(),
+                    status: CheckStatus::Ok("model:* ラベルがリポジトリに存在します".to_string()),
+                }
+            } else {
+                DoctorCheckResult {
+                    name: "model:* ラベル".to_string(),
+                    status: CheckStatus::Fail(
+                        "model:* ラベルがリポジトリに存在しません。`gh label create model:opus && gh label create model:haiku && gh label create model:sonnet` を実行してください".to_string(),
+                    ),
+                }
             }
         }
     }
@@ -465,8 +507,8 @@ mod tests {
 
         // toml check should be Ok (mock returns Ok)
         assert!(matches!(results[0].status, CheckStatus::Ok(_)));
-        // 6 checks should be returned
-        assert_eq!(results.len(), 6);
+        // 7 checks should be returned (toml, git, gh, agent:ready, model:*, steering, db)
+        assert_eq!(results.len(), 7);
     }
 
     #[test]

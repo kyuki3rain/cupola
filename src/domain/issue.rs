@@ -15,6 +15,7 @@ pub struct Issue {
     pub current_pid: Option<u32>,
     pub error_message: Option<String>,
     pub feature_name: Option<String>,
+    pub model: Option<String>,
     pub fixing_causes: Vec<FixingProblemKind>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

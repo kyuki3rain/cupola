@@ -26,7 +26,7 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db.conn().lock().expect("mutex poisoned");
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name,
+                        worktree_path, retry_count, current_pid, error_message, feature_name, model,
                         fixing_causes, created_at, updated_at
                  FROM issues WHERE id = ?1",
             )?;
@@ -46,7 +46,7 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db.conn().lock().expect("mutex poisoned");
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name,
+                        worktree_path, retry_count, current_pid, error_message, feature_name, model,
                         fixing_causes, created_at, updated_at
                  FROM issues WHERE github_issue_number = ?1",
             )?;
@@ -66,7 +66,7 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db.conn().lock().expect("mutex poisoned");
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name,
+                        worktree_path, retry_count, current_pid, error_message, feature_name, model,
                         fixing_causes, created_at, updated_at
                  FROM issues WHERE state NOT IN ('completed', 'cancelled')",
             )?;
@@ -86,7 +86,7 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db.conn().lock().expect("mutex poisoned");
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name,
+                        worktree_path, retry_count, current_pid, error_message, feature_name, model,
                         fixing_causes, created_at, updated_at
                  FROM issues WHERE state IN ('design_running', 'design_fixing', 'implementation_running', 'implementation_fixing')",
             )?;
@@ -109,9 +109,9 @@ impl IssueRepository for SqliteIssueRepository {
                 .context("failed to serialize fixing_causes")?;
             conn.execute(
                 "INSERT INTO issues (github_issue_number, state, design_pr_number, impl_pr_number,
-                                     worktree_path, retry_count, current_pid, error_message, feature_name,
+                                     worktree_path, retry_count, current_pid, error_message, feature_name, model,
                                      fixing_causes)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 rusqlite::params![
                     issue.github_issue_number,
                     state_to_str(&issue.state),
@@ -122,6 +122,7 @@ impl IssueRepository for SqliteIssueRepository {
                     issue.current_pid,
                     issue.error_message,
                     issue.feature_name,
+                    issue.model,
                     fixing_causes_json,
                 ],
             )
@@ -157,9 +158,9 @@ impl IssueRepository for SqliteIssueRepository {
             conn.execute(
                 "UPDATE issues SET state = ?1, design_pr_number = ?2, impl_pr_number = ?3,
                                    worktree_path = ?4, retry_count = ?5, current_pid = ?6,
-                                   error_message = ?7, feature_name = ?8, fixing_causes = ?9,
-                                   updated_at = datetime('now')
-                 WHERE id = ?10",
+                                   error_message = ?7, feature_name = ?8, model = ?9,
+                                   fixing_causes = ?10, updated_at = datetime('now')
+                 WHERE id = ?11",
                 rusqlite::params![
                     state_to_str(&issue.state),
                     issue.design_pr_number,
@@ -169,6 +170,7 @@ impl IssueRepository for SqliteIssueRepository {
                     issue.current_pid,
                     issue.error_message,
                     issue.feature_name,
+                    issue.model,
                     fixing_causes_json,
                     issue.id,
                 ],
@@ -194,6 +196,7 @@ impl IssueRepository for SqliteIssueRepository {
                      current_pid = NULL,
                      error_message = NULL,
                      feature_name = NULL,
+                     model = NULL,
                      updated_at = datetime('now')
                  WHERE id = ?1",
                 [id],
@@ -239,9 +242,9 @@ pub fn str_to_state(s: &str) -> State {
 
 fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
     let state_str: String = row.get(2)?;
-    let fixing_causes_json: String = row.get(10).unwrap_or_else(|_| "[]".to_string());
-    let created_str: String = row.get(11)?;
-    let updated_str: String = row.get(12)?;
+    let fixing_causes_json: String = row.get(11).unwrap_or_else(|_| "[]".to_string());
+    let created_str: String = row.get(12)?;
+    let updated_str: String = row.get(13)?;
 
     let fixing_causes: Vec<FixingProblemKind> =
         serde_json::from_str(&fixing_causes_json).unwrap_or_else(|e| {
@@ -260,6 +263,7 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
         current_pid: row.get(7)?,
         error_message: row.get(8)?,
         feature_name: row.get(9)?,
+        model: row.get(10)?,
         fixing_causes,
         created_at: parse_sqlite_datetime(&created_str),
         updated_at: parse_sqlite_datetime(&updated_str),
@@ -297,6 +301,7 @@ mod tests {
             error_message: None,
             feature_name: None,
             fixing_causes: vec![],
+            model: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

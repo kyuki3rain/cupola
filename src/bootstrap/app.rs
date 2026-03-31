@@ -245,6 +245,7 @@ mod tests {
             error_message: None,
             feature_name: None,
             fixing_causes: vec![],
+            model: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
