@@ -461,7 +461,7 @@ mod tests {
     #[test]
     fn design_prompt_contains_quality_check() {
         let config = test_config();
-        let session = build_session_config(State::DesignRunning, 42, &config, None, None);
+        let session = build_session_config(State::DesignRunning, 42, &config, None, None, &[]);
         assert!(
             session.prompt.contains("cargo fmt"),
             "design prompt should contain 'cargo fmt'"
@@ -485,6 +485,7 @@ mod tests {
             &config,
             None,
             Some("my-feature"),
+            &[],
         );
         assert!(
             session.prompt.contains("cargo fmt"),
@@ -503,7 +504,8 @@ mod tests {
     #[test]
     fn implementation_prompt_without_feature_name_contains_quality_check() {
         let config = test_config();
-        let session = build_session_config(State::ImplementationRunning, 42, &config, None, None);
+        let session =
+            build_session_config(State::ImplementationRunning, 42, &config, None, None, &[]);
         assert!(
             session.prompt.contains("cargo fmt"),
             "implementation prompt (without feature_name) should contain 'cargo fmt'"
@@ -521,7 +523,7 @@ mod tests {
     #[test]
     fn fixing_prompt_contains_quality_check() {
         let config = test_config();
-        let session = build_session_config(State::DesignFixing, 42, &config, Some(85), None);
+        let session = build_session_config(State::DesignFixing, 42, &config, Some(85), None, &[]);
         assert!(
             session.prompt.contains("cargo fmt"),
             "fixing prompt should contain 'cargo fmt'"
