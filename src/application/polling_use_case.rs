@@ -90,8 +90,7 @@ where
         self.recover_on_startup().await;
 
         let mut tick = interval(Duration::from_secs(self.config.polling_interval_secs));
-        let mut sigterm = signal::unix::signal(SignalKind::terminate())
-            .expect("failed to register SIGTERM handler");
+        let mut sigterm = signal::unix::signal(SignalKind::terminate())?;
 
         loop {
             tokio::select! {
@@ -934,8 +933,10 @@ where
         }
 
         // Delete PID file if in daemon mode
-        if let Some(ref pid_file) = self.pid_file {
-            let _ = pid_file.delete_pid();
+        if let Some(ref pid_file) = self.pid_file
+            && let Err(e) = pid_file.delete_pid()
+        {
+            tracing::warn!(error = %e, "failed to delete PID file during graceful shutdown");
         }
 
         tracing::info!("graceful shutdown complete");

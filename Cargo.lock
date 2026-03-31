@@ -263,7 +263,6 @@ dependencies = [
  "chrono",
  "clap",
  "gh-token",
- "libc",
  "nix",
  "octocrab",
  "reqwest",

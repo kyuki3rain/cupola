@@ -31,6 +31,14 @@ impl PidFilePort for PidFileManager {
             .trim()
             .parse::<u32>()
             .map_err(|e| PidFileError::InvalidContent(e.to_string()))?;
+        // PID 0 signals the process group; PIDs > i32::MAX wrap to negative values
+        // when cast to i32, which would send signals to unintended targets.
+        if pid == 0 || pid > i32::MAX as u32 {
+            return Err(PidFileError::InvalidContent(format!(
+                "PID {pid} is out of valid range (1..={})",
+                i32::MAX
+            )));
+        }
         Ok(Some(pid))
     }
 
@@ -72,7 +80,8 @@ mod tests {
 
     #[test]
     fn read_pid_returns_none_when_file_absent() {
-        let path = std::env::temp_dir().join("cupola_test_nonexistent.pid");
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("nonexistent.pid");
         let mgr = PidFileManager::new(path);
         let result = mgr.read_pid().expect("read");
         assert!(result.is_none());
@@ -93,7 +102,8 @@ mod tests {
 
     #[test]
     fn delete_pid_ok_when_file_absent() {
-        let path = std::env::temp_dir().join("cupola_test_delete_nonexistent.pid");
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("nonexistent_delete.pid");
         let mgr = PidFileManager::new(path);
         mgr.delete_pid()
             .expect("delete should succeed even if absent");
@@ -101,18 +111,41 @@ mod tests {
 
     #[test]
     fn is_process_alive_returns_true_for_self() {
-        let path = std::env::temp_dir().join("cupola_test_alive.pid");
-        let mgr = PidFileManager::new(path);
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let mgr = PidFileManager::new(dir.path().join("alive.pid"));
         let my_pid = std::process::id();
         assert!(mgr.is_process_alive(my_pid));
     }
 
     #[test]
     fn is_process_alive_returns_false_for_invalid_pid() {
-        let path = std::env::temp_dir().join("cupola_test_dead.pid");
-        let mgr = PidFileManager::new(path);
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let mgr = PidFileManager::new(dir.path().join("dead.pid"));
         // u32::MAX as i32 is -1, which targets all processes — use a specific large invalid PID
         // PID 0 would signal the whole process group; use u32::MAX - 1 which is an invalid PID
         assert!(!mgr.is_process_alive(2_147_483_647)); // i32::MAX, very unlikely to be valid
+    }
+
+    #[test]
+    fn read_pid_rejects_zero() {
+        let tmp = NamedTempFile::new().expect("temp file");
+        std::fs::write(tmp.path(), "0\n").expect("write");
+        let mgr = manager_from_tempfile(&tmp);
+        assert!(matches!(
+            mgr.read_pid(),
+            Err(PidFileError::InvalidContent(_))
+        ));
+    }
+
+    #[test]
+    fn read_pid_rejects_overflow() {
+        let tmp = NamedTempFile::new().expect("temp file");
+        // i32::MAX + 1 = 2147483648
+        std::fs::write(tmp.path(), "2147483648\n").expect("write");
+        let mgr = manager_from_tempfile(&tmp);
+        assert!(matches!(
+            mgr.read_pid(),
+            Err(PidFileError::InvalidContent(_))
+        ));
     }
 }

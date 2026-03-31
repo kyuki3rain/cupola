@@ -28,6 +28,10 @@ pub enum Command {
         /// Run as a background daemon
         #[arg(short = 'd', long)]
         daemon: bool,
+
+        /// Internal: run as the daemon child process (do not use directly)
+        #[arg(long, hide = true)]
+        daemon_child: bool,
     },
     /// Stop the background daemon
     Stop {
@@ -61,6 +65,7 @@ mod tests {
                 log_level,
                 config,
                 daemon,
+                ..
             } => {
                 assert!(polling_interval_secs.is_none());
                 assert!(log_level.is_none());
@@ -89,6 +94,7 @@ mod tests {
                 log_level,
                 config,
                 daemon,
+                ..
             } => {
                 assert_eq!(polling_interval_secs, Some(30));
                 assert_eq!(log_level.as_deref(), Some("debug"));
