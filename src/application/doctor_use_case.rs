@@ -220,9 +220,7 @@ fn check_model_labels() -> DoctorCheckResult {
             if stdout.contains("\"model:") {
                 DoctorCheckResult {
                     name: "model:* ラベル".to_string(),
-                    status: CheckStatus::Ok(
-                        "model:* ラベルがリポジトリに存在します".to_string(),
-                    ),
+                    status: CheckStatus::Ok("model:* ラベルがリポジトリに存在します".to_string()),
                 }
             } else {
                 DoctorCheckResult {
