@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 
@@ -8,6 +9,7 @@ use crate::adapter::outbound::git_worktree_manager::GitWorktreeManager;
 use crate::adapter::outbound::github_client_impl::GitHubClientImpl;
 use crate::adapter::outbound::github_graphql_client::GraphQLClient;
 use crate::adapter::outbound::github_rest_client::OctocrabRestClient;
+use crate::adapter::outbound::pid_file_manager::PidFileManager;
 use crate::adapter::outbound::sqlite_connection::SqliteConnection;
 use crate::adapter::outbound::sqlite_execution_log_repository::SqliteExecutionLogRepository;
 use crate::adapter::outbound::sqlite_issue_repository::SqliteIssueRepository;
@@ -15,69 +17,58 @@ use crate::application::doctor_use_case::{CheckStatus, DoctorUseCase};
 use crate::application::init_use_case::InitUseCase;
 use crate::application::polling_use_case::PollingUseCase;
 use crate::application::port::issue_repository::IssueRepository;
+use crate::application::stop_use_case::StopUseCase;
 use crate::bootstrap::config_loader::{CliOverrides, load_toml};
 use crate::bootstrap::logging::init_logging;
 use crate::bootstrap::toml_config_loader::TomlConfigLoader;
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Run {
+        Command::Start {
             polling_interval_secs,
             log_level,
             config,
+            daemon,
         } => {
+            if daemon {
+                start_daemon(config, polling_interval_secs, log_level).await
+            } else {
+                start_foreground(config, polling_interval_secs, log_level).await
+            }
+        }
+
+        Command::Stop { config } => {
             let toml = load_toml(&config)
                 .with_context(|| format!("failed to load config from {}", config.display()))?;
-
             let overrides = CliOverrides {
-                polling_interval_secs,
-                log_level,
+                polling_interval_secs: None,
+                log_level: None,
             };
             let cfg = toml.into_config(&overrides);
-            cfg.validate()
-                .map_err(|e| anyhow::anyhow!("config validation failed: {e}"))?;
 
-            // Initialize logging (hold guard for app lifetime)
-            let _guard = init_logging(cfg.log_level, cfg.log_dir.as_deref());
+            let config_dir = config
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_path_buf();
+            let pid_file_manager = PidFileManager::new(config_dir.join("cupola.pid"));
+            let stop_use_case = StopUseCase::new(pid_file_manager, Duration::from_secs(30));
 
-            tracing::info!(
-                owner = %cfg.owner,
-                repo = %cfg.repo,
-                polling_interval = cfg.polling_interval_secs,
-                "starting cupola"
-            );
-
-            // Initialize SQLite
-            let db_path = Path::new(".cupola/cupola.db");
-            if let Some(parent) = db_path.parent() {
-                std::fs::create_dir_all(parent).context("failed to create .cupola directory")?;
+            let _ = cfg; // config used for path resolution above
+            match stop_use_case.execute().await? {
+                crate::application::stop_use_case::StopResult::NotRunning => {
+                    println!("cupola is not running");
+                }
+                crate::application::stop_use_case::StopResult::StalePidCleaned { pid: _ } => {
+                    println!("cleaned up stale PID file");
+                }
+                crate::application::stop_use_case::StopResult::Stopped { pid } => {
+                    println!("stopped cupola (pid={pid})");
+                }
+                crate::application::stop_use_case::StopResult::ForceKilled { pid } => {
+                    println!("force killed cupola (pid={pid})");
+                }
             }
-            let db = SqliteConnection::open(db_path)?;
-            db.init_schema()?;
-
-            // Resolve GitHub token
-            let token = gh_token::get()?;
-
-            // Build adapters
-            let rest = OctocrabRestClient::new(token.clone(), cfg.owner.clone(), cfg.repo.clone())?;
-            let graphql = GraphQLClient::new(token, cfg.owner.clone(), cfg.repo.clone());
-            let github = GitHubClientImpl::new(rest, graphql);
-            let issue_repo = SqliteIssueRepository::new(db.clone());
-            let exec_log_repo = SqliteExecutionLogRepository::new(db);
-            let claude_runner = ClaudeCodeProcess::new("claude");
-            let worktree = GitWorktreeManager::new(".");
-
-            // Build and run polling use case
-            let mut polling = PollingUseCase::new(
-                github,
-                issue_repo,
-                exec_log_repo,
-                claude_runner,
-                worktree,
-                cfg,
-            );
-
-            polling.run().await
+            Ok(())
         }
 
         Command::Init => {
@@ -206,6 +197,189 @@ pub async fn run(cli: Cli) -> Result<()> {
                 }
             }
             Ok(())
+        }
+    }
+}
+
+async fn start_foreground(
+    config: std::path::PathBuf,
+    polling_interval_secs: Option<u64>,
+    log_level: Option<String>,
+) -> Result<()> {
+    let toml = load_toml(&config)
+        .with_context(|| format!("failed to load config from {}", config.display()))?;
+
+    let overrides = CliOverrides {
+        polling_interval_secs,
+        log_level,
+    };
+    let cfg = toml.into_config(&overrides);
+    cfg.validate()
+        .map_err(|e| anyhow::anyhow!("config validation failed: {e}"))?;
+
+    // Initialize logging (hold guard for app lifetime)
+    let _guard = init_logging(cfg.log_level, cfg.log_dir.as_deref());
+
+    tracing::info!(
+        owner = %cfg.owner,
+        repo = %cfg.repo,
+        polling_interval = cfg.polling_interval_secs,
+        "starting cupola"
+    );
+
+    // Initialize SQLite
+    let db_path = Path::new(".cupola/cupola.db");
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent).context("failed to create .cupola directory")?;
+    }
+    let db = SqliteConnection::open(db_path)?;
+    db.init_schema()?;
+
+    // Resolve GitHub token
+    let token = gh_token::get()?;
+
+    // Build adapters
+    let rest = OctocrabRestClient::new(token.clone(), cfg.owner.clone(), cfg.repo.clone())?;
+    let graphql = GraphQLClient::new(token, cfg.owner.clone(), cfg.repo.clone());
+    let github = GitHubClientImpl::new(rest, graphql);
+    let issue_repo = SqliteIssueRepository::new(db.clone());
+    let exec_log_repo = SqliteExecutionLogRepository::new(db);
+    let claude_runner = ClaudeCodeProcess::new("claude");
+    let worktree = GitWorktreeManager::new(".");
+
+    // Build and run polling use case (no PID file in foreground mode)
+    let mut polling = PollingUseCase::new(
+        github,
+        issue_repo,
+        exec_log_repo,
+        claude_runner,
+        worktree,
+        cfg,
+    );
+
+    polling.run().await
+}
+
+async fn start_daemon(
+    config: std::path::PathBuf,
+    polling_interval_secs: Option<u64>,
+    log_level: Option<String>,
+) -> Result<()> {
+    let toml = load_toml(&config)
+        .with_context(|| format!("failed to load config from {}", config.display()))?;
+
+    let overrides = CliOverrides {
+        polling_interval_secs,
+        log_level: log_level.clone(),
+    };
+    let cfg = toml.into_config(&overrides);
+    cfg.validate()
+        .map_err(|e| anyhow::anyhow!("config validation failed: {e}"))?;
+
+    // log_dir must be set for daemon mode (no terminal to log to)
+    if cfg.log_dir.is_none() {
+        return Err(anyhow::anyhow!(
+            "daemon mode requires [log] dir to be set in cupola.toml"
+        ));
+    }
+
+    let config_dir = config
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let pid_file_path = config_dir.join("cupola.pid");
+    let pid_file_manager = PidFileManager::new(pid_file_path.clone());
+
+    // Check for existing running daemon
+    use crate::application::port::pid_file::PidFilePort;
+    match pid_file_manager.read_pid() {
+        Ok(Some(existing_pid)) if pid_file_manager.is_process_alive(existing_pid) => {
+            return Err(anyhow::anyhow!(
+                "cupola daemon is already running (pid={existing_pid})"
+            ));
+        }
+        Ok(Some(_)) => {
+            // Stale PID — clean up
+            let _ = pid_file_manager.delete_pid();
+        }
+        Ok(None) => {}
+        Err(e) => {
+            return Err(anyhow::anyhow!("failed to read PID file: {e}"));
+        }
+    }
+
+    // Fork into background
+    use nix::unistd::ForkResult;
+    let fork_result = unsafe { nix::unistd::fork() }.context("fork failed")?;
+
+    match fork_result {
+        ForkResult::Parent { child } => {
+            println!("started cupola daemon (pid={})", child.as_raw());
+            std::process::exit(0);
+        }
+        ForkResult::Child => {
+            // Create new session (detach from terminal)
+            nix::unistd::setsid().context("setsid failed")?;
+
+            // Redirect stdin to /dev/null
+            let devnull = std::fs::OpenOptions::new()
+                .read(true)
+                .open("/dev/null")
+                .context("failed to open /dev/null")?;
+            use std::os::unix::io::IntoRawFd;
+            let null_fd = devnull.into_raw_fd();
+            // SAFETY: null_fd is a valid file descriptor from open("/dev/null"),
+            // and 0 is the stdin file descriptor number.
+            unsafe {
+                libc::dup2(null_fd, 0);
+                libc::close(null_fd);
+            }
+
+            // Write our PID
+            let my_pid = nix::unistd::getpid().as_raw() as u32;
+            pid_file_manager
+                .write_pid(my_pid)
+                .map_err(|e| anyhow::anyhow!("failed to write PID file: {e}"))?;
+
+            // Initialize logging to file
+            let _guard = init_logging(cfg.log_level, cfg.log_dir.as_deref());
+
+            tracing::info!(
+                owner = %cfg.owner,
+                repo = %cfg.repo,
+                pid = my_pid,
+                "starting cupola daemon"
+            );
+
+            // Initialize SQLite
+            let db_path = config_dir.join("cupola.db");
+            let db = SqliteConnection::open(&db_path)?;
+            db.init_schema()?;
+
+            // Resolve GitHub token
+            let token = gh_token::get()?;
+
+            // Build adapters
+            let rest = OctocrabRestClient::new(token.clone(), cfg.owner.clone(), cfg.repo.clone())?;
+            let graphql = GraphQLClient::new(token, cfg.owner.clone(), cfg.repo.clone());
+            let github = GitHubClientImpl::new(rest, graphql);
+            let issue_repo = SqliteIssueRepository::new(db.clone());
+            let exec_log_repo = SqliteExecutionLogRepository::new(db);
+            let claude_runner = ClaudeCodeProcess::new("claude");
+            let worktree = GitWorktreeManager::new(".");
+
+            // Build polling use case with PID file
+            let mut polling = PollingUseCase::new(
+                github,
+                issue_repo,
+                exec_log_repo,
+                claude_runner,
+                worktree,
+                cfg,
+            )
+            .with_pid_file(Box::new(pid_file_manager));
+
+            polling.run().await
         }
     }
 }

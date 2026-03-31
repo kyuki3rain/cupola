@@ -7,4 +7,5 @@ pub mod port;
 pub mod prompt;
 pub mod retry_policy;
 pub mod session_manager;
+pub mod stop_use_case;
 pub mod transition_use_case;

@@ -24,6 +24,7 @@ const GITIGNORE_ENTRIES: &str = r#"# cupola
 .cupola/cupola.db
 .cupola/cupola.db-wal
 .cupola/cupola.db-shm
+.cupola/cupola.pid
 .cupola/logs/
 .cupola/worktrees/
 .cupola/inputs/
