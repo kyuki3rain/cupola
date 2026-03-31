@@ -69,7 +69,7 @@
 
 | オプション | 説明 | 強み | リスク | 備考 |
 |-----------|------|------|--------|------|
-| nix::fork | Unix ネイティブ fork + setsid | 軽量・標準的 | Unix 専用（Windows 非対応）| 現プロジェクトは macOS/Linux 専用のため問題なし |
+| nix::fork | Unix ネイティブ fork + setsid | 軽量・標準的 | Unix 専用（Windows 非対応） | 現プロジェクトは macOS/Linux 専用のため問題なし |
 | std::Command 再実行 | --daemon-child フラグ付きで自身を再起動 | 追加依存なし | 引数の完全な引き渡しが複雑 | 実装が煩雑になる |
 | daemonize クレート | `Daemonize::new().start()` の一行 | シンプル | 追加依存・メンテ状況不明 | nix で十分なため採用見送り |
 
