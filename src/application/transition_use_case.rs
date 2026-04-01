@@ -160,7 +160,7 @@ impl<G: GitHubClient, I: IssueRepository, W: GitWorktree> TransitionUseCase<'_, 
                     "issue_comment.retry_exhausted",
                     locale = &self.config.language,
                     count = issue.retry_count,
-                    error = issue.error_message.as_deref().unwrap_or(&unknown).to_string()
+                    error = issue.error_message.as_deref().unwrap_or(&unknown)
                 );
                 let _ = self.github.close_issue(issue.github_issue_number).await;
                 self.cleanup(issue).await;
