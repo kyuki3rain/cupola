@@ -12,7 +12,7 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Start the polling loop
-    Run {
+    Start {
         /// Polling interval override (seconds)
         #[arg(long)]
         polling_interval_secs: Option<u64>,
@@ -21,6 +21,20 @@ pub enum Command {
         #[arg(long)]
         log_level: Option<String>,
 
+        /// Config file path (default: .cupola/cupola.toml)
+        #[arg(long, default_value = ".cupola/cupola.toml")]
+        config: PathBuf,
+
+        /// Run as a background daemon
+        #[arg(short = 'd', long)]
+        daemon: bool,
+
+        /// Internal: run as the daemon child process (do not use directly)
+        #[arg(long, hide = true)]
+        daemon_child: bool,
+    },
+    /// Stop the background daemon
+    Stop {
         /// Config file path (default: .cupola/cupola.toml)
         #[arg(long, default_value = ".cupola/cupola.toml")]
         config: PathBuf,
@@ -43,27 +57,30 @@ mod tests {
     use clap::Parser;
 
     #[test]
-    fn parse_run_with_defaults() {
-        let cli = Cli::parse_from(["cupola", "run"]);
+    fn parse_start_with_defaults() {
+        let cli = Cli::parse_from(["cupola", "start"]);
         match cli.command {
-            Command::Run {
+            Command::Start {
                 polling_interval_secs,
                 log_level,
                 config,
+                daemon,
+                ..
             } => {
                 assert!(polling_interval_secs.is_none());
                 assert!(log_level.is_none());
                 assert_eq!(config, PathBuf::from(".cupola/cupola.toml"));
+                assert!(!daemon);
             }
-            _ => panic!("expected Run command"),
+            _ => panic!("expected Start command"),
         }
     }
 
     #[test]
-    fn parse_run_with_overrides() {
+    fn parse_start_with_overrides() {
         let cli = Cli::parse_from([
             "cupola",
-            "run",
+            "start",
             "--polling-interval-secs",
             "30",
             "--log-level",
@@ -72,16 +89,63 @@ mod tests {
             "/custom/path.toml",
         ]);
         match cli.command {
-            Command::Run {
+            Command::Start {
                 polling_interval_secs,
                 log_level,
                 config,
+                daemon,
+                ..
             } => {
                 assert_eq!(polling_interval_secs, Some(30));
                 assert_eq!(log_level.as_deref(), Some("debug"));
                 assert_eq!(config, PathBuf::from("/custom/path.toml"));
+                assert!(!daemon);
             }
-            _ => panic!("expected Run command"),
+            _ => panic!("expected Start command"),
+        }
+    }
+
+    #[test]
+    fn parse_start_with_daemon_flag() {
+        let cli = Cli::parse_from(["cupola", "start", "-d"]);
+        match cli.command {
+            Command::Start { daemon, .. } => {
+                assert!(daemon);
+            }
+            _ => panic!("expected Start command"),
+        }
+    }
+
+    #[test]
+    fn parse_start_with_daemon_long_flag() {
+        let cli = Cli::parse_from(["cupola", "start", "--daemon"]);
+        match cli.command {
+            Command::Start { daemon, .. } => {
+                assert!(daemon);
+            }
+            _ => panic!("expected Start command"),
+        }
+    }
+
+    #[test]
+    fn parse_stop_with_defaults() {
+        let cli = Cli::parse_from(["cupola", "stop"]);
+        match cli.command {
+            Command::Stop { config } => {
+                assert_eq!(config, PathBuf::from(".cupola/cupola.toml"));
+            }
+            _ => panic!("expected Stop command"),
+        }
+    }
+
+    #[test]
+    fn parse_stop_with_custom_config() {
+        let cli = Cli::parse_from(["cupola", "stop", "--config", "/custom/path.toml"]);
+        match cli.command {
+            Command::Stop { config } => {
+                assert_eq!(config, PathBuf::from("/custom/path.toml"));
+            }
+            _ => panic!("expected Stop command"),
         }
     }
 

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use tokio::signal;
+use tokio::signal::unix::SignalKind;
 use tokio::time::interval;
 
 use crate::application::io::{
@@ -15,6 +16,7 @@ use crate::application::port::execution_log_repository::ExecutionLogRepository;
 use crate::application::port::git_worktree::GitWorktree;
 use crate::application::port::github_client::GitHubClient;
 use crate::application::port::issue_repository::IssueRepository;
+use crate::application::port::pid_file::PidFilePort;
 use crate::application::prompt::{
     FIXING_SCHEMA, OutputSchemaKind, PR_CREATION_SCHEMA, build_session_config, fallback_pr_body,
     fallback_pr_title,
@@ -44,6 +46,7 @@ where
     session_mgr: SessionManager,
     retry_policy: RetryPolicy,
     config: Config,
+    pid_file: Option<Box<dyn PidFilePort>>,
 }
 
 impl<G, I, E, C, W> PollingUseCase<G, I, E, C, W>
@@ -72,15 +75,22 @@ where
             session_mgr: SessionManager::new(),
             retry_policy,
             config,
+            pid_file: None,
         }
     }
 
-    /// Main polling loop. Runs until SIGINT.
+    pub fn with_pid_file(mut self, pid_file: Box<dyn PidFilePort>) -> Self {
+        self.pid_file = Some(pid_file);
+        self
+    }
+
+    /// Main polling loop. Runs until SIGINT or SIGTERM.
     pub async fn run(&mut self) -> Result<()> {
         // Startup recovery: clear PIDs
         self.recover_on_startup().await;
 
         let mut tick = interval(Duration::from_secs(self.config.polling_interval_secs));
+        let mut sigterm = signal::unix::signal(SignalKind::terminate())?;
 
         loop {
             tokio::select! {
@@ -91,6 +101,10 @@ where
                 }
                 _ = signal::ctrl_c() => {
                     tracing::info!("received SIGINT, shutting down...");
+                    break;
+                }
+                _ = sigterm.recv() => {
+                    tracing::info!("received SIGTERM, shutting down...");
                     break;
                 }
             }
@@ -916,6 +930,13 @@ where
                 break;
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+
+        // Delete PID file if in daemon mode
+        if let Some(ref pid_file) = self.pid_file
+            && let Err(e) = pid_file.delete_pid()
+        {
+            tracing::warn!(error = %e, "failed to delete PID file during graceful shutdown");
         }
 
         tracing::info!("graceful shutdown complete");
