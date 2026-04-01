@@ -34,7 +34,7 @@
   - 現在: `#[command(name = "cupola", about = "GitHub Issue-driven automation agent")]`
   - 変更後: `#[command(name = "cupola", about = "GitHub Issue-driven automation agent", version)]`
   - 既存のサブコマンドやフラグへの影響なし
-- **Implications**: 破壊的変更なし。テストは `Cli::parse_from(["cupola", "--version"])` が panic しないことを確認する。
+- **Implications**: 破壊的変更なし。テストは `Cli::try_parse_from(["cupola", "--version"])` を使い、`ErrorKind::DisplayVersion` が返ることを確認する（`parse_from` は `process::exit` を呼ぶためテストには不適切）。
 
 ## Architecture Pattern Evaluation
 

@@ -114,6 +114,6 @@ graph TB
 
 - `Cli::try_parse_from(["cupola", "--version"])` が `Err` を返す（clap は version フラグを `ErrorKind::DisplayVersion` として扱う）ことを確認
 - `Cli::try_parse_from(["cupola", "-V"])` が同様に `ErrorKind::DisplayVersion` を返すことを確認
-- エラーメッセージに `"cupola"` と `"0.1.0"` が含まれることを確認
+- エラーメッセージに `"cupola"` と `env!("CARGO_PKG_VERSION")` の値が含まれることを確認（バージョン文字列をハードコードするとバージョン更新時にテストが壊れるため）
 
 > clap 4.x では `--version` / `-V` の処理結果は `clap::error::ErrorKind::DisplayVersion` として `try_parse_from` から返却される。`assert` はエラー種別とメッセージ内容で行う。
