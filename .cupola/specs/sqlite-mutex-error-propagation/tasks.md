@@ -33,8 +33,8 @@
 
 - [ ] 4. 品質確認
 - [ ] 4.1 静的解析とテストの実行
-  - `cargo clippy -- -D warnings` を実行し、警告・エラーが0件であることを確認する
-  - `cargo fmt --check` を実行し、フォーマット違反がないことを確認する
-  - `cargo test` を実行し、全テストがパスすることを確認する
+  - `RUSTFLAGS="-D warnings" cargo clippy --all-targets` を実行し、警告・エラーが0件であることを確認する
+  - `cargo fmt -- --check` を実行し、フォーマット違反がないことを確認する
+  - `cargo test --lib -- --test-threads=1` を実行し、全テストがパスすることを確認する
   - テストコード内の `.expect()` が変更されていないことを確認する（`sqlite_connection.rs` L124, L154, L188）
   - _Requirements: 3.1, 3.2, 4.1, 4.2, 4.3_
