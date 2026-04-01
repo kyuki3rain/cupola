@@ -10,7 +10,7 @@
   - `## [Unreleased]` セクションを先頭に追加する（将来の変更記録用）
   - `## [0.1.0] - 2026-04-01` セクションを追加する
   - `### Added` サブセクションに以下の8機能を箇条書きで記載する：GitHub Issue 検知と cc-sdd による設計自動生成、設計/実装 PR の自動作成、Review thread への自動修正・返信・resolve、CI 失敗・conflict の自動検知と修正、同時実行数制限（max_concurrent_sessions）、モデル指定（cupola.toml + Issue ラベル）、`cupola doctor` / `cupola init` コマンド、Graceful shutdown
-  - ファイル末尾に `[0.1.0]: https://github.com/kyuki3rain/cupola/releases/tag/v0.1.0` の比較リンクを追加する
+  - ファイル末尾に `[0.1.0]: https://github.com/kyuki3rain/cupola/releases/tag/v0.1.0` のタグリンクを追加する
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
 
 - [ ] 2. Cargo.toml パッケージメタデータの追加
@@ -27,15 +27,15 @@
 - [ ] 3. ビルド・品質チェックの実行と確認
 - [ ] 3.1 cargo fmt を実行してコードフォーマットの差分がないことを確認する
   - `cargo fmt` を実行してフォーマットを適用する
-  - `cargo fmt --check` がゼロ差分で通ることを確認する
+  - `cargo fmt -- --check` がゼロ差分で通ることを確認する
   - _Requirements: 3.4_
 
 - [ ] 3.2 cargo clippy を実行して警告がゼロであることを確認する
-  - `cargo clippy -- -D warnings` を実行する
+  - `RUSTFLAGS="-D warnings" cargo clippy --all-targets` を実行する（CI と同一の設定）
   - 警告・エラーがゼロであることを確認する
   - _Requirements: 3.3_
 
 - [ ] 3.3 cargo build と cargo test を実行してリグレッションがないことを確認する
   - `cargo build` がエラーなく完了することを確認する
-  - `cargo test` が全テストパスすることを確認する
+  - `cargo test --lib -- --test-threads=1` が全テストパスすることを確認する
   - _Requirements: 3.1, 3.2_
