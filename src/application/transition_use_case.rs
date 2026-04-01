@@ -1,4 +1,5 @@
 use anyhow::Result;
+use rust_i18n::t;
 
 use crate::application::port::git_worktree::GitWorktree;
 use crate::application::port::github_client::GitHubClient;
@@ -119,14 +120,26 @@ impl<G: GitHubClient, I: IssueRepository, W: GitWorktree> TransitionUseCase<'_, 
                     self.worktree.pull(wt_path)?;
                 }
                 self.github
-                    .comment_on_issue(issue.github_issue_number, "実装を開始します")
+                    .comment_on_issue(
+                        issue.github_issue_number,
+                        &t!(
+                            "issue_comment.implementation_starting",
+                            locale = &self.config.language
+                        ),
+                    )
                     .await?;
             }
 
             // Completed
             (State::Completed, _) => {
                 self.github
-                    .comment_on_issue(issue.github_issue_number, "全工程が完了しました")
+                    .comment_on_issue(
+                        issue.github_issue_number,
+                        &t!(
+                            "issue_comment.all_completed",
+                            locale = &self.config.language
+                        ),
+                    )
                     .await?;
                 let _ = self.github.close_issue(issue.github_issue_number).await;
                 self.cleanup(issue).await;
@@ -137,15 +150,23 @@ impl<G: GitHubClient, I: IssueRepository, W: GitWorktree> TransitionUseCase<'_, 
                 self.cleanup(issue).await;
                 let _ = self
                     .github
-                    .comment_on_issue(issue.github_issue_number, "cleanup を実行しました")
+                    .comment_on_issue(
+                        issue.github_issue_number,
+                        &t!("issue_comment.cleanup_done", locale = &self.config.language),
+                    )
                     .await;
             }
 
             (State::Cancelled, Event::RetryExhausted) => {
-                let msg = format!(
-                    "リトライ上限に到達しました（{} 回）。cleanup を実行しました。\n\nエラー: {}",
-                    issue.retry_count,
-                    issue.error_message.as_deref().unwrap_or("不明")
+                let unknown = t!(
+                    "issue_comment.unknown_error",
+                    locale = &self.config.language
+                );
+                let msg = t!(
+                    "issue_comment.retry_exhausted",
+                    locale = &self.config.language,
+                    count = issue.retry_count,
+                    error = issue.error_message.as_deref().unwrap_or(&unknown)
                 );
                 let _ = self.github.close_issue(issue.github_issue_number).await;
                 self.cleanup(issue).await;

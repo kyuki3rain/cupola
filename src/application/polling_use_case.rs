@@ -2,6 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Result;
+use rust_i18n::t;
 use tokio::signal;
 use tokio::signal::unix::SignalKind;
 use tokio::time::interval;
@@ -263,7 +264,15 @@ where
         issue.worktree_path = Some(wt_path);
         self.issue_repo.update(issue).await?;
 
-        self.github.comment_on_issue(n, "設計を開始します").await?;
+        self.github
+            .comment_on_issue(
+                n,
+                &t!(
+                    "issue_comment.design_starting",
+                    locale = &self.config.language
+                ),
+            )
+            .await?;
 
         Ok(())
     }
