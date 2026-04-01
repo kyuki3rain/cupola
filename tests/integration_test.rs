@@ -1135,3 +1135,135 @@ fn version_short_flag_exits_with_zero_and_matches_long() {
         "-V and --version should produce identical stdout"
     );
 }
+
+// === i18n: English language setting tests ===
+
+#[tokio::test]
+async fn english_config_posts_english_comments() {
+    let db = cupola::adapter::outbound::sqlite_connection::SqliteConnection::open_in_memory()
+        .expect("open");
+    db.init_schema().expect("init");
+    let repo = cupola::adapter::outbound::sqlite_issue_repository::SqliteIssueRepository::new(db);
+    let github = MockGitHubClient::new();
+    let mut config = Config::default_with_repo("owner".into(), "repo".into(), "main".into());
+    config.language = "en".to_string();
+    let worktree = MockGitWorktree;
+
+    let uc = TransitionUseCase {
+        github: &github,
+        issue_repo: &repo,
+        worktree: &worktree,
+        config: &config,
+    };
+
+    let mut issue = uc.handle_issue_detected(200).await.expect("detect");
+    issue.worktree_path = Some("/tmp/wt".into());
+    repo.update(&issue).await.expect("update");
+    uc.apply(&mut issue, &Event::InitializationCompleted)
+        .await
+        .expect("init");
+
+    // DesignPrMerged → ImplementationRunning: should post English comment
+    issue.design_pr_number = Some(201);
+    repo.update(&issue).await.expect("update");
+    uc.apply(&mut issue, &Event::ProcessCompletedWithPr)
+        .await
+        .expect("design done");
+    uc.apply(&mut issue, &Event::DesignPrMerged)
+        .await
+        .expect("merged");
+
+    let gh_state = github.state.lock().unwrap();
+    assert!(
+        gh_state
+            .comments
+            .iter()
+            .any(|(n, msg)| *n == 200 && msg.contains("Starting implementation")),
+        "Expected English 'Starting implementation' comment"
+    );
+}
+
+#[tokio::test]
+async fn unknown_locale_falls_back_to_english() {
+    let db = cupola::adapter::outbound::sqlite_connection::SqliteConnection::open_in_memory()
+        .expect("open");
+    db.init_schema().expect("init");
+    let repo = cupola::adapter::outbound::sqlite_issue_repository::SqliteIssueRepository::new(db);
+    let github = MockGitHubClient::new();
+    let mut config = Config::default_with_repo("owner".into(), "repo".into(), "main".into());
+    config.language = "zh".to_string(); // unsupported locale → fallback to en
+    let worktree = MockGitWorktree;
+
+    let uc = TransitionUseCase {
+        github: &github,
+        issue_repo: &repo,
+        worktree: &worktree,
+        config: &config,
+    };
+
+    let mut issue = uc.handle_issue_detected(300).await.expect("detect");
+    issue.worktree_path = Some("/tmp/wt".into());
+    repo.update(&issue).await.expect("update");
+    uc.apply(&mut issue, &Event::InitializationCompleted)
+        .await
+        .expect("init");
+
+    issue.design_pr_number = Some(301);
+    repo.update(&issue).await.expect("update");
+    uc.apply(&mut issue, &Event::ProcessCompletedWithPr)
+        .await
+        .expect("design done");
+    uc.apply(&mut issue, &Event::DesignPrMerged)
+        .await
+        .expect("merged");
+
+    let gh_state = github.state.lock().unwrap();
+    // Fallback to English
+    assert!(
+        gh_state
+            .comments
+            .iter()
+            .any(|(n, msg)| *n == 300 && msg.contains("Starting implementation")),
+        "Expected fallback English comment for unknown locale"
+    );
+}
+
+#[tokio::test]
+async fn english_config_retry_exhausted_posts_english() {
+    let db = cupola::adapter::outbound::sqlite_connection::SqliteConnection::open_in_memory()
+        .expect("open");
+    db.init_schema().expect("init");
+    let repo = cupola::adapter::outbound::sqlite_issue_repository::SqliteIssueRepository::new(db);
+    let github = MockGitHubClient::new();
+    let mut config = Config::default_with_repo("owner".into(), "repo".into(), "main".into());
+    config.language = "en".to_string();
+    let worktree = MockGitWorktree;
+
+    let uc = TransitionUseCase {
+        github: &github,
+        issue_repo: &repo,
+        worktree: &worktree,
+        config: &config,
+    };
+
+    let mut issue = uc.handle_issue_detected(400).await.expect("detect");
+    issue.worktree_path = Some("/tmp/wt".into());
+    repo.update(&issue).await.expect("update");
+    uc.apply(&mut issue, &Event::InitializationCompleted)
+        .await
+        .expect("init");
+
+    uc.apply(&mut issue, &Event::RetryExhausted)
+        .await
+        .expect("exhausted");
+    assert_eq!(issue.state, State::Cancelled);
+
+    let gh_state = github.state.lock().unwrap();
+    assert!(
+        gh_state
+            .comments
+            .iter()
+            .any(|(n, msg)| *n == 400 && msg.contains("Retry limit reached")),
+        "Expected English retry exhausted comment"
+    );
+}

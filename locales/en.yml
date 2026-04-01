@@ -1,0 +1,7 @@
+issue_comment:
+  design_starting: "Starting design"
+  implementation_starting: "Starting implementation"
+  all_completed: "All processes completed"
+  cleanup_done: "Cleanup executed"
+  retry_exhausted: "Retry limit reached (%{count} times). Cleanup executed.\n\nError: %{error}"
+  unknown_error: "unknown"
