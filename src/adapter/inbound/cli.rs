@@ -3,7 +3,11 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(name = "cupola", about = "GitHub Issue-driven automation agent")]
+#[command(
+    name = "cupola",
+    about = "GitHub Issue-driven automation agent",
+    version
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -181,5 +185,36 @@ mod tests {
             }
             _ => panic!("expected Doctor command"),
         }
+    }
+
+    #[test]
+    fn version_long_flag_returns_display_version() {
+        let err = Cli::try_parse_from(["cupola", "--version"])
+            .expect_err("--version should not parse successfully");
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cupola"),
+            "message should contain 'cupola': {msg}"
+        );
+        assert!(
+            msg.contains(env!("CARGO_PKG_VERSION")),
+            "message should contain version '{}': {msg}",
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+
+    #[test]
+    fn version_short_flag_returns_display_version() {
+        let err =
+            Cli::try_parse_from(["cupola", "-V"]).expect_err("-V should not parse successfully");
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
+        let long_err = Cli::try_parse_from(["cupola", "--version"])
+            .expect_err("--version should not parse successfully");
+        assert_eq!(
+            err.to_string(),
+            long_err.to_string(),
+            "-V and --version should produce identical output"
+        );
     }
 }

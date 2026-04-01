@@ -1083,3 +1083,55 @@ async fn initialize_issue_aborts_on_fetch_failure() {
         calls
     );
 }
+
+// === Version flag integration tests ===
+
+#[test]
+fn version_flag_exits_with_zero_and_prints_version() {
+    let bin = env!("CARGO_BIN_EXE_cupola");
+    let output = std::process::Command::new(bin)
+        .arg("--version")
+        .output()
+        .expect("failed to execute cupola binary");
+
+    assert!(
+        output.status.success(),
+        "--version should exit with code 0, got: {:?}",
+        output.status.code()
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("cupola"),
+        "stdout should contain 'cupola': {stdout}"
+    );
+    assert!(
+        stdout.contains(env!("CARGO_PKG_VERSION")),
+        "stdout should contain version '{}': {stdout}",
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
+#[test]
+fn version_short_flag_exits_with_zero_and_matches_long() {
+    let bin = env!("CARGO_BIN_EXE_cupola");
+
+    let long_out = std::process::Command::new(bin)
+        .arg("--version")
+        .output()
+        .expect("failed to execute cupola --version");
+    let short_out = std::process::Command::new(bin)
+        .arg("-V")
+        .output()
+        .expect("failed to execute cupola -V");
+
+    assert!(
+        short_out.status.success(),
+        "-V should exit with code 0, got: {:?}",
+        short_out.status.code()
+    );
+    assert_eq!(
+        short_out.stdout, long_out.stdout,
+        "-V and --version should produce identical stdout"
+    );
+}
