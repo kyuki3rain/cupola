@@ -13,13 +13,6 @@
   - 使用技術スタック（Rust Edition 2024、devbox、cargo、GitHub Actions）をドキュメント内容に正確に反映する
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 6.1, 6.2_
 
-- [ ] 3. (P) CODE_OF_CONDUCT.md の作成
-  - リポジトリルートに `CODE_OF_CONDUCT.md` を新規作成する
-  - Contributor Covenant v2.1 の公式英語テキストをそのまま使用する
-  - 連絡先プレースホルダー `[INSERT CONTACT METHOD]` をプライベートな連絡手段（メールアドレス等）に置換する（公開 Issue URL は使用しないこと）
-  - その他のプレースホルダーがないことを確認し、公式テキストからの逸脱がないようにする
-  - _Requirements: 3.1, 3.2, 3.3, 3.4_
-
 - [ ] 4. README バッジの追加
 - [ ] 4.1 (P) README.md にバッジを追加
   - `README.md` のタイトル行（`# Cupola`）の直後、既存の `[日本語](./README.ja.md)` 行の前にバッジ行を挿入する
