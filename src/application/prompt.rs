@@ -181,12 +181,15 @@ fn build_fixing_prompt(
     let mut instructions = Vec::new();
 
     if causes.contains(&FixingProblemKind::ReviewComments) {
-        instructions
-            .push("Refer to .cupola/inputs/review_threads.json and address the review comments.".to_string());
+        instructions.push(
+            "Refer to .cupola/inputs/review_threads.json and address the review comments."
+                .to_string(),
+        );
     }
 
     if causes.contains(&FixingProblemKind::CiFailure) {
-        instructions.push("Refer to .cupola/inputs/ci_errors.txt and fix the CI failures.".to_string());
+        instructions
+            .push("Refer to .cupola/inputs/ci_errors.txt and fix the CI failures.".to_string());
     }
 
     if causes.contains(&FixingProblemKind::Conflict) {
