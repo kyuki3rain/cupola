@@ -29,7 +29,7 @@ Cupola is a locally-resident agent that uses GitHub Issues and PRs as its sole i
 - **Conflict auto-fix**: Detects merge conflicts and automatically attempts to resolve them
 - **Model override via Issue labels**: Attach labels like `model:opus` to an Issue to override the Claude model used for that Issue
 - **Concurrent session limit**: Use `max_concurrent_sessions` to cap the number of simultaneously running agent sessions
-- **Prerequisites check**: Run `cupola doctor` to verify that required tools (Claude Code, gh CLI, etc.) are installed and configured
+- **Environment & config check**: Run `cupola doctor` to validate Cupola configuration and GitHub integration (config file, git/gh setup, labels, steering, DB)
 
 ## Prerequisites
 
