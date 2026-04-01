@@ -19,8 +19,8 @@ README.md の全面更新（v0.1.0 リリース向け）。キャッチコピー
 
 #### 受け入れ条件
 
-1. The README shall display "Issue-driven local agent control plane for spec-driven development." as the tagline immediately following the project title.
-2. When a user reads the top of README.md, the README shall present the tagline before any other description.
+1. The README shall display "Issue-driven local agent control plane for spec-driven development." as the tagline immediately following the Japanese version link line (i.e., after the `[日本語](./README.ja.md)` link that appears directly below the project title).
+2. When a user reads the top of README.md, the README shall present the Japanese version link immediately after the project title, followed by the tagline before any other description.
 
 ---
 
