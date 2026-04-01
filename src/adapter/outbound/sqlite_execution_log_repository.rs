@@ -22,7 +22,10 @@ impl ExecutionLogRepository for SqliteExecutionLogRepository {
         let db = self.db.clone();
         let state_str = state_to_str(&state);
         tokio::task::spawn_blocking(move || {
-            let conn = db.conn().lock().expect("mutex poisoned");
+            let conn = db
+                .conn()
+                .lock()
+                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
             conn.execute(
                 "INSERT INTO execution_log (issue_id, state) VALUES (?1, ?2)",
                 rusqlite::params![issue_id, state_str],
@@ -31,7 +34,7 @@ impl ExecutionLogRepository for SqliteExecutionLogRepository {
             Ok(conn.last_insert_rowid())
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
     }
 
     async fn record_finish(
@@ -45,7 +48,10 @@ impl ExecutionLogRepository for SqliteExecutionLogRepository {
         let structured_output = structured_output.map(String::from);
         let error_message = error_message.map(String::from);
         tokio::task::spawn_blocking(move || {
-            let conn = db.conn().lock().expect("mutex poisoned");
+            let conn = db
+                .conn()
+                .lock()
+                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
             conn.execute(
                 "UPDATE execution_log
                  SET finished_at = datetime('now'), exit_code = ?1,
@@ -57,13 +63,16 @@ impl ExecutionLogRepository for SqliteExecutionLogRepository {
             Ok(())
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
     }
 
     async fn find_by_issue(&self, issue_id: i64) -> Result<Vec<ExecutionLog>> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = db.conn().lock().expect("mutex poisoned");
+            let conn = db
+                .conn()
+                .lock()
+                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
             let mut stmt = conn.prepare(
                 "SELECT id, issue_id, state, started_at, finished_at,
                         exit_code, structured_output, error_message
@@ -91,7 +100,7 @@ impl ExecutionLogRepository for SqliteExecutionLogRepository {
             Ok(logs)
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
     }
 }
 
