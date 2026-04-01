@@ -36,6 +36,6 @@ Cupola プロジェクトの各ドキュメントでは cc-sdd（仕様駆動開
 #### Acceptance Criteria
 
 1. The プロジェクトドキュメント shall cc-sdd リンクが `https://github.com/gotalab/cc-sdd` を正確に指すことを保証する
-2. The プロジェクトドキュメント shall 各ファイルの既存のインデントス、行構成、文体を維持した状態でリンクを追加する
+2. The プロジェクトドキュメント shall 各ファイルの既存のインデント、行構成、文体を維持した状態でリンクを追加する
 3. When リンクが初出箇所のみに追加された場合, the プロジェクトドキュメント shall 同一ファイル内の後続の cc-sdd 言及はリンクなしのテキストのままとする
 4. The プロジェクトドキュメント shall ソースコード内ファイル（`prompt.rs`、`init_file_generator.rs` 等）にはリンクを追加しない（内部指示・ログのため対象外）
