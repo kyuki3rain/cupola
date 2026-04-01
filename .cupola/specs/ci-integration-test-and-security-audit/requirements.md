@@ -12,8 +12,8 @@
 
 #### 受け入れ基準
 
-1. When CI パイプラインが起動したとき、the CI shall `cargo test --test '*' -- --test-threads=1` を実行し、`tests/` 配下のすべての統合テストを検証する
-2. The CI shall 単体テストステップ（`cargo test --lib`）と統合テストステップ（`cargo test --test '*'`）を独立したステップとして分離する
+1. When CI パイプラインが起動したとき、the CI shall `cargo test --tests -- --test-threads=1` を実行し、`tests/` 配下のすべての統合テストを検証する
+2. The CI shall 単体テストステップ（`cargo test --lib`）と統合テストステップ（`cargo test --tests -- --test-threads=1`）を独立したステップとして分離する
 3. The CI shall 統合テストステップに `--test-threads=1` フラグを付与し、SQLite への同時アクセスによるロック競合を防止する
 4. If 統合テストのいずれかが失敗したとき、the CI shall ジョブ全体を失敗として報告する
 5. The CI shall 統合テストを既存の `check` ジョブと同一の `ubuntu-latest` 環境で実行する
@@ -29,7 +29,7 @@
 1. The CI shall `rustsec/audit-check@v2.0.0` アクションを使用した独立したジョブ `security_audit` を CI ワークフローに追加する
 2. The CI shall `security_audit` ジョブを `ubuntu-latest` で実行し、`actions/checkout@v4` でコードをチェックアウトする
 3. The CI shall `rustsec/audit-check` に `secrets.GITHUB_TOKEN` を渡し、GitHub Checks への結果書き込みを可能にする
-4. The CI shall `security_audit` ジョブに `permissions: issues: write` および `checks: write` を付与する
+4. The CI shall `security_audit` ジョブに `permissions` として `contents: read`, `issues: write`, `checks: write` を付与する（`contents: read` は `actions/checkout` に必要な最小権限）
 5. If `Cargo.lock` がリポジトリにコミットされているとき、the CI shall その `Cargo.lock` を基にアドバイザリチェックを実行する
 6. Where fork からの PR である場合、the CI shall GitHub Checks への書き込みに失敗しても stdout 出力にフォールバックし、ジョブ自体は継続する
 

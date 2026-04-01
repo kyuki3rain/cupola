@@ -9,8 +9,8 @@
 
 - [ ] 1.2 `Integration tests` ステップを `Unit tests` の直後に追加する
   - ステップ名を `Integration tests` とする
-  - コマンドは `cargo test --test '*' -- --test-threads=1` とする
-  - `--test-threads=1` フラグにより SQLite への同時アクセスによるロック競合を防止する
+  - コマンドは `cargo test --tests -- --test-threads=1` とする
+  - `--tests` フラグで `tests/` 配下のすべての統合テストを対象とし、`--test-threads=1` フラグにより SQLite への同時アクセスによるロック競合を防止する
   - このステップは既存の `check` ジョブ内に配置し、`ubuntu-latest` 環境で実行する
   - ステップが失敗した場合、ジョブ全体を失敗として報告するデフォルト動作を維持する
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 3.4_
@@ -18,9 +18,9 @@
 - [ ] 2. `security_audit` ジョブを CI ワークフローに追加する
   - `.github/workflows/ci.yml` に `check` ジョブと並列して実行される新しいジョブ `security_audit` を定義する
   - `name: Security Audit`、`runs-on: ubuntu-latest` を設定する
-  - ジョブスコープに `permissions: issues: write` および `checks: write` を付与し、最小権限の原則を遵守する
-  - ステップ 1: `actions/checkout@v4` でコードをチェックアウトする
-  - ステップ 2: `rustsec/audit-check@v2.0.0` を使って RUSTSEC アドバイザリをチェックする。`with: token: ${{ secrets.GITHUB_TOKEN }}` を渡す
+  - ジョブスコープに `permissions: contents: read`, `issues: write`, `checks: write` を付与し、最小権限の原則を遵守する（`contents: read` は `actions/checkout` に必要）
+  - ステップ 1: `actions/checkout` を既存 CI と同様にコミット SHA でピン留めしてコードをチェックアウトする（例: `actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4`）
+  - ステップ 2: `rustsec/audit-check` もコミット SHA でピン留めして RUSTSEC アドバイザリをチェックする。`with: token: ${{ secrets.GITHUB_TOKEN }}` を渡す（使用する SHA は実装時に確認）
   - `Cargo.lock` がリポジトリにコミット済みであるため、`rustsec/audit-check` はそれを基にアドバイザリを検索する
   - fork PR では `checks: write` 権限が制限されるが、`rustsec/audit-check` が stdout にフォールバックするため、ジョブ自体は継続する
   - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6_

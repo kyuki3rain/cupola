@@ -23,7 +23,7 @@
   - `tests/integration_test.rs` は SQLite を使用（`SqliteConnection`, `SqliteIssueRepository`）
   - Mock アダプタを注入してユースケースを E2E 検証する設計
   - 並列実行時に SQLite ロック競合が発生するため `--test-threads=1` が必要
-- **Implications**: `cargo test --test '*' -- --test-threads=1` で全統合テストを実行できる
+- **Implications**: `cargo test --tests -- --test-threads=1` で全統合テストを実行できる
 
 ### rustsec/audit-check の選定
 
@@ -31,7 +31,7 @@
 - **Sources Consulted**: Issue 本文、GitHub rustsec/audit-check リポジトリ
 - **Findings**:
   - `rustsec/audit-check@v2.0.0` が公式後継
-  - `issues: write` と `checks: write` パーミッションが必要
+  - `contents: read`, `issues: write`, `checks: write` パーミッションが必要（`contents: read` がないと `actions/checkout` が失敗する）
   - fork PR では GitHub Checks への書き込みが制限され、stdout にフォールバックする
   - 将来的な上位互換候補として `cargo-deny` がある（ライセンス・ban・ソースチェックも統合可能）
 - **Implications**: 現時点では `rustsec/audit-check` が最もシンプルな選択肢
