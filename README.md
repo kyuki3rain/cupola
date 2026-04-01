@@ -18,7 +18,7 @@ Issue-driven local agent control plane for spec-driven development.
 
 ## Project Overview
 
-Cupola is a locally-resident agent that uses GitHub Issues and PRs as its sole interface, driving Claude Code + cc-sdd to automate design and implementation. Humans only create Issues, assign labels, and review PRs — Cupola handles everything from design document generation to implementation, review response, and completion cleanup. By leveraging GitHub's existing workflow (Issues + PRs + reviews), Cupola achieves both quality assurance and automation without any dedicated UI.
+Cupola is a locally-resident agent that uses GitHub Issues and PRs as its sole interface, driving Claude Code + [cc-sdd](https://github.com/gotalab/cc-sdd) to automate design and implementation. Humans only create Issues, assign labels, and review PRs — Cupola handles everything from design document generation to implementation, review response, and completion cleanup. By leveraging GitHub's existing workflow (Issues + PRs + reviews), Cupola achieves both quality assurance and automation without any dedicated UI.
 
 **Key Features:**
 

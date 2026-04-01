@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         このテンプレートは cupola に自動設計・実装を依頼するためのものです。
-        cc-sdd の requirements フェーズの入力として使用されます。
+        cc-sdd (https://github.com/gotalab/cc-sdd) の requirements フェーズの入力として使用されます。
         できるだけ具体的に記述してください。
 
   - type: textarea
