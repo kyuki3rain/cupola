@@ -14,12 +14,12 @@
 
 - `cupola logs` コマンドで最新ログファイルの末尾20行を表示する
 - `cupola logs -f` で `tail -f` 相当のリアルタイム追跡を提供する
+- `cupola logs -f` の追跡中にログローテーションが発生した場合、新しいファイルへ自動的に切り替える
 - `cupola.toml` の `log.dir` から自動的にログディレクトリを取得する
 - 既存の CLI 設計パターン（`--config` デフォルト値）との一貫性を保つ
 
 ### Non-Goals
 
-- ログファイルのローテーション追跡（`-f` 中に日付が変わっても新ファイルへの切り替えは行わない）
 - ログのフィルタリング・検索機能
 - 表示行数のカスタマイズ（`-n` オプション）
 - ドメイン層・アプリケーション層の変更
@@ -115,9 +115,16 @@ sequenceDiagram
     Logs->>FS: select latest file, read tail 20 lines
     Logs->>User: initial tail output
     loop 200ms polling until Ctrl+C
-        Logs->>FS: read new bytes from last position
-        alt new content exists
+        Logs->>FS: read_dir(log_dir) — check for newer file
+        alt newer file found (rotation detected)
+            Logs->>Logs: switch current file + reset offset to 0
+            Logs->>FS: read all lines from new file
             Logs->>User: new lines to stdout
+        else no newer file
+            Logs->>FS: read new bytes from last position
+            alt new content exists
+                Logs->>User: new lines to stdout
+            end
         end
     end
     User->>App: Ctrl+C (SIGINT)
@@ -137,6 +144,7 @@ sequenceDiagram
 | 2.1 | `-f` でリアルタイム追跡 | LogsCommandRunner | `run_logs()` | 追跡モードフロー |
 | 2.2 | 新規追記を即座に出力 | LogsCommandRunner | polling loop | 追跡モードフロー |
 | 2.3 | Ctrl+C で安全終了 | LogsCommandRunner | `tokio::signal::ctrl_c()` | 追跡モードフロー |
+| 2.4 | ローテーション検出と新ファイルへの切り替え | LogsCommandRunner | `find_newer_log_file()` | 追跡モードフロー |
 | 3.1 | `log.dir` から設定読み取り | CLI Adapter, app.rs | `load_toml()` | 両フロー |
 | 3.2 | `log.dir` 未設定時エラー | LogsCommandRunner | エラー処理 | エラーフロー |
 | 3.3 | ディレクトリ不在時エラー | LogsCommandRunner | エラー処理 | エラーフロー |
@@ -154,7 +162,7 @@ sequenceDiagram
 | Component | Domain/Layer | Intent | Req Coverage | Key Dependencies | Contracts |
 |-----------|-------------|--------|--------------|-----------------|-----------|
 | CLI Adapter（Logs バリアント） | adapter/inbound | `Command::Logs` 定義、フラグ解析 | 4.1, 4.2, 4.3 | clap (P0) | Service |
-| LogsCommandRunner | bootstrap | ログファイル発見・表示・追跡ロジック | 1.1–3.4 | tokio::fs (P0), tokio::signal (P0) | Service |
+| LogsCommandRunner | bootstrap | ログファイル発見・表示・追跡・ローテーション切り替えロジック | 1.1–3.4, 2.4 | tokio::fs (P0), tokio::signal (P0) | Service |
 
 ---
 
@@ -214,12 +222,15 @@ pub enum Command {
 | Field | Detail |
 |-------|--------|
 | Intent | ログファイルの発見・末尾表示・リアルタイム追跡を行う |
-| Requirements | 1.1, 1.2, 1.3, 2.1, 2.2, 2.3, 3.1, 3.2, 3.3, 3.4 |
+| Requirements | 1.1, 1.2, 1.3, 2.1, 2.2, 2.3, 2.4, 3.1, 3.2, 3.3, 3.4 |
 
 **Responsibilities & Constraints**
 - `log_dir` 内からプレフィックス `cupola.` を持つ最新ファイルを選択する
 - 通常モード: ファイルの末尾20行を stdout に出力して終了する
-- 追跡モード: 末尾20行を出力後、200ms 間隔で新規追記を検出・出力し、SIGINT で終了する
+- 追跡モード: 末尾20行を出力後、200ms 間隔で以下のポーリングを繰り返し、SIGINT で終了する
+  1. `log_dir` を再列挙し、現在追跡中のファイルより新しい日付のファイルが存在するか確認する
+  2. 新しいファイルがあれば → そのファイルに切り替え、offset をリセットして全行を出力する
+  3. 新しいファイルがなければ → 現在のファイルの新規追記を読み込み出力する
 - エラー時は標準エラー出力にメッセージを表示し、非ゼロの終了コードを返す
 - 新規外部クレートを追加しない
 
@@ -250,6 +261,10 @@ fn read_tail_lines(path: &Path, n: usize) -> Result<Vec<String>>;
 
 /// ファイルを offset バイト目から読み込み、新規行と次の offset を返す
 async fn read_new_lines(path: &Path, offset: u64) -> Result<(Vec<String>, u64)>;
+
+/// current_file より新しい日付のログファイルが log_dir に存在すれば、そのパスを返す
+/// ローテーション検出に使用する（ポーリングごとに呼び出す）
+fn find_newer_log_file(log_dir: &Path, current_file: &Path) -> Result<Option<PathBuf>>;
 ```
 
 - Preconditions:
@@ -258,7 +273,8 @@ async fn read_new_lines(path: &Path, offset: u64) -> Result<(Vec<String>, u64)>;
   - `read_new_lines`: ファイルが読み取り可能、`offset` ≤ ファイルサイズ
 - Postconditions:
   - `run_logs(follow=false)`: 末尾20行を stdout に出力し、`Ok(())` で返る
-  - `run_logs(follow=true)`: SIGINT 受信まで出力を継続し、`Ok(())` で返る
+  - `run_logs(follow=true)`: SIGINT 受信まで出力を継続し、ローテーション発生時は新ファイルへ切り替えた上で継続し、`Ok(())` で返る
+  - `find_newer_log_file`: current_file より新しいファイルが存在すればそのパス、なければ `None` を返す
 - Invariants: stdout 出力は改行で終端する
 
 **Implementation Notes**
@@ -272,7 +288,7 @@ async fn read_new_lines(path: &Path, offset: u64) -> Result<(Vec<String>, u64)>;
   - ファイル不在の場合: `"ログファイルが見つかりません: {dir}"` を stderr に出力
 - Risks:
   - `-f` モードで大量ログが高速に書き込まれる場合の出力バッファリング → 出力ごとに `stdout` を明示的に flush する／非バッファリング出力を用いることで対応
-  - 日付をまたいだ際のファイルローテーション追跡は今回のスコープ外
+  - ローテーション検出の遅延: 200ms ポーリングのため、最大 200ms の遅延が生じる → 許容範囲とする
 
 ---
 
@@ -323,6 +339,9 @@ async fn read_new_lines(path: &Path, offset: u64) -> Result<(Vec<String>, u64)>;
 3. `find_latest_log_file`: ファイルが存在しない場合にエラーを返す
 4. `read_tail_lines`: 20行未満のファイルに対してすべての行を返す
 5. `read_tail_lines`: 20行超のファイルに対して末尾20行のみを返す
+6. `find_newer_log_file`: より新しい日付のファイルが存在する場合にそのパスを返す
+7. `find_newer_log_file`: より新しいファイルが存在しない場合に `None` を返す
+8. `find_newer_log_file`: `cupola.` プレフィックスを持たないファイルを除外する
 
 ### Integration Tests
 
@@ -331,5 +350,6 @@ async fn read_new_lines(path: &Path, offset: u64) -> Result<(Vec<String>, u64)>;
 1. 通常モード: 一時ディレクトリにダミーログファイルを作成し、`run_logs(follow=false)` が末尾20行を返すことを確認
 2. エラーハンドリング: `log_dir=None` 時の適切なエラー返却を確認
 3. エラーハンドリング: 空ディレクトリ時の適切なエラー返却を確認
+4. ローテーション切り替え: `-f` 追跡中に新しい日付のファイルを作成した場合、新ファイルへ切り替えて読み込みを継続することを確認
 
 > Note: `-f` モードの追跡動作は非同期かつシグナル依存のため、タイムアウト付きの統合テストで検証する（`tokio::time::timeout` + ファイル書き込みシミュレーション）
