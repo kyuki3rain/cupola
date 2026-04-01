@@ -53,6 +53,15 @@ pub enum Command {
         #[arg(long, default_value = ".cupola/cupola.toml")]
         config: PathBuf,
     },
+    /// Show daemon log output
+    Logs {
+        /// Follow log output in real time (tail -f equivalent)
+        #[arg(short = 'f', long)]
+        follow: bool,
+        /// Config file path (default: .cupola/cupola.toml)
+        #[arg(long, default_value = ".cupola/cupola.toml")]
+        config: PathBuf,
+    },
 }
 
 #[cfg(test)]
@@ -184,6 +193,51 @@ mod tests {
                 assert_eq!(config, PathBuf::from("/custom/path.toml"));
             }
             _ => panic!("expected Doctor command"),
+        }
+    }
+
+    #[test]
+    fn parse_logs_with_defaults() {
+        let cli = Cli::parse_from(["cupola", "logs"]);
+        match cli.command {
+            Command::Logs { follow, config } => {
+                assert!(!follow);
+                assert_eq!(config, PathBuf::from(".cupola/cupola.toml"));
+            }
+            _ => panic!("expected Logs command"),
+        }
+    }
+
+    #[test]
+    fn parse_logs_with_follow_short_flag() {
+        let cli = Cli::parse_from(["cupola", "logs", "-f"]);
+        match cli.command {
+            Command::Logs { follow, .. } => {
+                assert!(follow);
+            }
+            _ => panic!("expected Logs command"),
+        }
+    }
+
+    #[test]
+    fn parse_logs_with_follow_long_flag() {
+        let cli = Cli::parse_from(["cupola", "logs", "--follow"]);
+        match cli.command {
+            Command::Logs { follow, .. } => {
+                assert!(follow);
+            }
+            _ => panic!("expected Logs command"),
+        }
+    }
+
+    #[test]
+    fn parse_logs_with_custom_config() {
+        let cli = Cli::parse_from(["cupola", "logs", "--config", "/custom/path.toml"]);
+        match cli.command {
+            Command::Logs { config, .. } => {
+                assert_eq!(config, PathBuf::from("/custom/path.toml"));
+            }
+            _ => panic!("expected Logs command"),
         }
     }
 

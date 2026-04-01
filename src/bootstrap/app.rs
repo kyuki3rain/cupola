@@ -20,6 +20,7 @@ use crate::application::port::issue_repository::IssueRepository;
 use crate::application::stop_use_case::StopUseCase;
 use crate::bootstrap::config_loader::{CliOverrides, load_toml};
 use crate::bootstrap::logging::init_logging;
+use crate::bootstrap::logs_command::run_logs;
 use crate::bootstrap::toml_config_loader::TomlConfigLoader;
 
 pub async fn run(cli: Cli) -> Result<()> {
@@ -127,6 +128,13 @@ pub async fn run(cli: Cli) -> Result<()> {
                 return Err(anyhow::anyhow!("doctor checks failed"));
             }
             Ok(())
+        }
+
+        Command::Logs { follow, config } => {
+            let toml = load_toml(&config)
+                .with_context(|| format!("failed to load config from {}", config.display()))?;
+            let log_dir = toml.log.and_then(|l| l.dir).map(Into::into);
+            run_logs(log_dir, follow).await
         }
 
         Command::Status => {
