@@ -1,13 +1,13 @@
 # Implementation Plan
 
-- [ ] 1. `check` ジョブへの統合テスト対応
-- [ ] 1.1 既存の `Test` ステップを `Unit tests` にリネームする
+- [x] 1. `check` ジョブへの統合テスト対応
+- [x] 1.1 既存の `Test` ステップを `Unit tests` にリネームする
   - `.github/workflows/ci.yml` の `Test` ステップの `name` を `Unit tests` に変更する
   - コマンド `cargo test --lib -- --test-threads=1` はそのまま維持する
   - `CARGO_TERM_COLOR: always` および `RUSTFLAGS: "-D warnings"` 環境変数が引き続き有効であることを確認する
   - _Requirements: 1.2, 3.1, 3.2, 3.3, 3.5_
 
-- [ ] 1.2 `Integration tests` ステップを `Unit tests` の直後に追加する
+- [x] 1.2 `Integration tests` ステップを `Unit tests` の直後に追加する
   - ステップ名を `Integration tests` とする
   - コマンドは `cargo test --tests -- --test-threads=1` とする
   - `--tests` フラグで `tests/` 配下のすべての統合テストを対象とし、`--test-threads=1` フラグにより SQLite への同時アクセスによるロック競合を防止する
@@ -15,7 +15,7 @@
   - ステップが失敗した場合、ジョブ全体を失敗として報告するデフォルト動作を維持する
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 3.4_
 
-- [ ] 2. `security_audit` ジョブを CI ワークフローに追加する
+- [x] 2. `security_audit` ジョブを CI ワークフローに追加する
   - `.github/workflows/ci.yml` に `check` ジョブと並列して実行される新しいジョブ `security_audit` を定義する
   - `name: Security Audit`、`runs-on: ubuntu-latest` を設定する
   - ジョブスコープに `permissions: contents: read`, `issues: write`, `checks: write` を付与し、最小権限の原則を遵守する（`contents: read` は `actions/checkout` に必要）
