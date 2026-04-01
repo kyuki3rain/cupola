@@ -6,7 +6,7 @@
 
 **Purpose**: この変更により、cupola が Rust 以外の言語で書かれたプロジェクトの Issue も正しく処理できるようになる。
 **Users**: cupola を利用する開発者（特に Rust 以外のプロジェクトに cupola を適用するケース）。
-**Impact**: プロンプト文字列の内容が変更される。既存の Rust プロジェクト向けには動作が変わらない（各プロジェクトの CLAUDE.md に cargo コマンドが記載されているため）。
+**Impact**: プロンプト文字列の内容が変更される。必要に応じて各プロジェクトの AGENTS.md / CLAUDE.md に品質チェック手順を記載できるため、Rust プロジェクトでも同等の運用が可能。
 
 ### Goals
 - design / implementation / fixing 各プロンプトから言語固有コマンドを完全に除去する
