@@ -453,12 +453,12 @@ mod tests {
         let config = test_config();
         let session = build_session_config(State::DesignRunning, 42, &config, None, None, &[]);
         assert!(
-            !session.prompt.contains("cargo fmt"),
-            "design prompt should not contain 'cargo fmt'"
+            !session.prompt.contains("cargo"),
+            "design prompt should not contain 'cargo'"
         );
         assert!(
-            session.prompt.contains("AGENTS.md"),
-            "design prompt should contain 'AGENTS.md'"
+            session.prompt.contains(GENERIC_QUALITY_CHECK_INSTRUCTION),
+            "design prompt should contain GENERIC_QUALITY_CHECK_INSTRUCTION"
         );
     }
 
@@ -474,12 +474,12 @@ mod tests {
             &[],
         );
         assert!(
-            !session.prompt.contains("cargo fmt"),
-            "implementation prompt (with feature_name) should not contain 'cargo fmt'"
+            !session.prompt.contains("cargo"),
+            "implementation prompt (with feature_name) should not contain 'cargo'"
         );
         assert!(
-            session.prompt.contains("AGENTS.md"),
-            "implementation prompt (with feature_name) should contain 'AGENTS.md'"
+            session.prompt.contains(GENERIC_QUALITY_CHECK_INSTRUCTION),
+            "implementation prompt (with feature_name) should contain GENERIC_QUALITY_CHECK_INSTRUCTION"
         );
     }
 
@@ -489,12 +489,12 @@ mod tests {
         let session =
             build_session_config(State::ImplementationRunning, 42, &config, None, None, &[]);
         assert!(
-            !session.prompt.contains("cargo fmt"),
-            "implementation prompt (without feature_name) should not contain 'cargo fmt'"
+            !session.prompt.contains("cargo"),
+            "implementation prompt (without feature_name) should not contain 'cargo'"
         );
         assert!(
-            session.prompt.contains("AGENTS.md"),
-            "implementation prompt (without feature_name) should contain 'AGENTS.md'"
+            session.prompt.contains(GENERIC_QUALITY_CHECK_INSTRUCTION),
+            "implementation prompt (without feature_name) should contain GENERIC_QUALITY_CHECK_INSTRUCTION"
         );
     }
 
@@ -503,12 +503,12 @@ mod tests {
         let config = test_config();
         let session = build_session_config(State::DesignFixing, 42, &config, Some(85), None, &[]);
         assert!(
-            !session.prompt.contains("cargo fmt"),
-            "fixing prompt should not contain 'cargo fmt'"
+            !session.prompt.contains("cargo"),
+            "fixing prompt should not contain 'cargo'"
         );
         assert!(
-            session.prompt.contains("AGENTS.md"),
-            "fixing prompt should contain 'AGENTS.md'"
+            session.prompt.contains(GENERIC_QUALITY_CHECK_INSTRUCTION),
+            "fixing prompt should contain GENERIC_QUALITY_CHECK_INSTRUCTION"
         );
     }
 }
