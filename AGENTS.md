@@ -1,4 +1,4 @@
 # Quality Check
 
-commit 前にプロジェクトの品質チェック（フォーマット、リント、テスト等）を実行し、全てパスしてから commit すること。失敗した場合は修正して再チェックすること。
-具体的なチェックコマンドは各リポジトリの設定やドキュメントに従うこと。
+Before committing, run the project's quality checks (formatting, linting, tests, etc.) and ensure all pass before committing. If any check fails, fix the issues and re-run.
+Follow the configuration and documentation of each repository for the specific check commands.
