@@ -1,6 +1,6 @@
 # Product Overview
 
-A locally-resident agent that uses GitHub Issues and PRs as the sole interface, driving Claude Code + cc-sdd to automate design and implementation. Humans only create Issues, assign labels, and review PRs — everything from design document generation to implementation, review response, and completion cleanup is automated.
+A locally-resident agent that uses GitHub Issues and PRs as the sole interface, driving Claude Code + [cc-sdd](https://github.com/gotalab/cc-sdd) to automate design and implementation. Humans only create Issues, assign labels, and review PRs — everything from design document generation to implementation, review response, and completion cleanup is automated.
 
 ## Core Capabilities
 

@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Automated design generation from GitHub Issues using cc-sdd
+- Automated design generation from GitHub Issues using [cc-sdd](https://github.com/gotalab/cc-sdd)
 - Automatic creation of design/implementation PRs
 - Automated fixes, replies, and resolution for review threads
 - Automated detection and fixing of CI failures and conflicts
