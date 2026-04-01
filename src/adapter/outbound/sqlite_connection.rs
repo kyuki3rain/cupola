@@ -39,7 +39,10 @@ impl SqliteConnection {
     }
 
     pub fn init_schema(&self) -> Result<()> {
-        let conn = self.conn.lock().expect("mutex poisoned");
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS issues (
                 id                  INTEGER PRIMARY KEY,

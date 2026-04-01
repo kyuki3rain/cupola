@@ -23,7 +23,10 @@ impl IssueRepository for SqliteIssueRepository {
     async fn find_by_id(&self, id: i64) -> Result<Option<Issue>> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || -> Result<Option<Issue>> {
-            let conn = db.conn().lock().expect("mutex poisoned");
+            let conn = db
+                .conn()
+                .lock()
+                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
                         worktree_path, retry_count, current_pid, error_message, feature_name, model,
@@ -37,13 +40,16 @@ impl IssueRepository for SqliteIssueRepository {
             Ok(issue)
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
     }
 
     async fn find_by_issue_number(&self, issue_number: u64) -> Result<Option<Issue>> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || -> Result<Option<Issue>> {
-            let conn = db.conn().lock().expect("mutex poisoned");
+            let conn = db
+                .conn()
+                .lock()
+                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
                         worktree_path, retry_count, current_pid, error_message, feature_name, model,
@@ -57,13 +63,16 @@ impl IssueRepository for SqliteIssueRepository {
             Ok(issue)
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
     }
 
     async fn find_active(&self) -> Result<Vec<Issue>> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = db.conn().lock().expect("mutex poisoned");
+            let conn = db
+                .conn()
+                .lock()
+                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
                         worktree_path, retry_count, current_pid, error_message, feature_name, model,
@@ -77,13 +86,16 @@ impl IssueRepository for SqliteIssueRepository {
             Ok(issues)
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
     }
 
     async fn find_needing_process(&self) -> Result<Vec<Issue>> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = db.conn().lock().expect("mutex poisoned");
+            let conn = db
+                .conn()
+                .lock()
+                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
                         worktree_path, retry_count, current_pid, error_message, feature_name, model,
@@ -97,14 +109,17 @@ impl IssueRepository for SqliteIssueRepository {
             Ok(issues)
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
     }
 
     async fn save(&self, issue: &Issue) -> Result<i64> {
         let issue = issue.clone();
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = db.conn().lock().expect("mutex poisoned");
+            let conn = db
+                .conn()
+                .lock()
+                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
             let fixing_causes_json = serde_json::to_string(&issue.fixing_causes)
                 .context("failed to serialize fixing_causes")?;
             conn.execute(
@@ -130,13 +145,16 @@ impl IssueRepository for SqliteIssueRepository {
             Ok(conn.last_insert_rowid())
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
     }
 
     async fn update_state(&self, id: i64, state: State) -> Result<()> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = db.conn().lock().expect("mutex poisoned");
+            let conn = db
+                .conn()
+                .lock()
+                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
             conn.execute(
                 "UPDATE issues SET state = ?1, updated_at = datetime('now') WHERE id = ?2",
                 rusqlite::params![state_to_str(&state), id],
@@ -145,14 +163,17 @@ impl IssueRepository for SqliteIssueRepository {
             Ok(())
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
     }
 
     async fn update(&self, issue: &Issue) -> Result<()> {
         let issue = issue.clone();
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = db.conn().lock().expect("mutex poisoned");
+            let conn = db
+                .conn()
+                .lock()
+                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
             let fixing_causes_json = serde_json::to_string(&issue.fixing_causes)
                 .context("failed to serialize fixing_causes")?;
             conn.execute(
@@ -179,13 +200,16 @@ impl IssueRepository for SqliteIssueRepository {
             Ok(())
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
     }
 
     async fn reset_for_restart(&self, id: i64) -> Result<()> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = db.conn().lock().expect("mutex poisoned");
+            let conn = db
+                .conn()
+                .lock()
+                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
             conn.execute(
                 "UPDATE issues
                  SET state = 'idle',
@@ -205,7 +229,7 @@ impl IssueRepository for SqliteIssueRepository {
             Ok(())
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
     }
 }
 
