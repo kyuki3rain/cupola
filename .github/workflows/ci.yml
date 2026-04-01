@@ -27,5 +27,8 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets
 
-      - name: Test
+      - name: Unit tests
         run: cargo test --lib -- --test-threads=1
+
+      - name: Integration tests
+        run: cargo test --tests -- --test-threads=1
