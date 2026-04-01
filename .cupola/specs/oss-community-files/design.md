@@ -48,10 +48,12 @@ graph TB
     subgraph DotGithub
         DEPENDABOT[.github/dependabot.yml]
         CI_YML[.github/workflows/ci.yml 既存]
+        RELEASE_YML[.github/workflows/release.yml 既存]
+        WORKFLOWS[.github/workflows/*.yml（Actions 定義）]
     end
     README_EN -->|CI badge URL| CI_YML
     README_JA -->|CI badge URL| CI_YML
-    DEPENDABOT -->|monitors| CI_YML
+    DEPENDABOT -->|monitors| WORKFLOWS
 ```
 
 **Architecture Integration**:
@@ -282,5 +284,5 @@ updates:
 - **dependabot.yml**: YAML 構文が正しいこと。GitHub リポジトリの Security タブで Dependabot が認識されること
 
 ### CI 統合テスト
-- GitHub Actions CI が dependabot.yml を受け付けること（YAML lint）
+- dependabot.yml の検証は GitHub Actions CI では行わない（GitHub UI 上で Dependabot 設定として認識されることを手動確認）
 - 既存の `ci.yml` が正常実行されること（バッジ URL の前提）
