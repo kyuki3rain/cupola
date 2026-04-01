@@ -18,7 +18,7 @@ Issue-driven local agent control plane for spec-driven development.
 
 ## Project Overview
 
-Cupola is a locally-resident agent that uses GitHub Issues and PRs as its sole interface, driving Claude Code + cc-sdd to automate design and implementation. Humans only create Issues, assign labels, and review PRs — Cupola handles everything from design document generation to implementation, review response, and completion cleanup. By leveraging GitHub's existing workflow (Issues + PRs + reviews), Cupola achieves both quality assurance and automation without any dedicated UI.
+Cupola is a locally-resident agent that uses GitHub Issues and PRs as its sole interface, driving Claude Code + [cc-sdd](https://github.com/gotalab/cc-sdd) to automate design and implementation. Humans only create Issues, assign labels, and review PRs — Cupola handles everything from design document generation to implementation, review response, and completion cleanup. By leveraging GitHub's existing workflow (Issues + PRs + reviews), Cupola achieves both quality assurance and automation without any dedicated UI.
 
 **Key Features:**
 
@@ -41,7 +41,7 @@ Cupola is a locally-resident agent that uses GitHub Issues and PRs as its sole i
 | Git | Version control | — |
 | devbox | Development environment management | Nix-based |
 
-**[cc-sdd](https://github.com/gotalab/cc-sdd) (spec-driven development)** is a specification-driven development methodology that progressively advances through requirements definition, design, task decomposition, and implementation. Cupola internally drives cc-sdd to automatically generate requirements, design, and tasks from Issue content before proceeding with implementation.
+**cc-sdd (spec-driven development)** is a specification-driven development methodology that progressively advances through requirements definition, design, task decomposition, and implementation. Cupola internally drives cc-sdd to automatically generate requirements, design, and tasks from Issue content before proceeding with implementation.
 
 When using devbox, run `devbox shell` at the repository root to set up all required tools (Rust, etc.) at once.
 

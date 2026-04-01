@@ -19,14 +19,14 @@
 - ソースコードファイル（`prompt.rs`, `init_file_generator.rs` 等）へのリンク追加
 - 各ファイル内の初出以降の cc-sdd 言及へのリンク追加
 - cc-sdd の説明文や内容の変更
-- 新規ファイルの作成
+- 本番コード用の新規ソースコードファイルの作成
 
 ## Requirements Traceability
 
 | Requirement | Summary | 対象ファイル | 変更形式 |
 |-------------|---------|------------|---------|
-| 1.1 | README.md にリンク追加 | `README.md` L44 | Markdown リンク |
-| 1.2 | README.ja.md にリンク追加 | `README.ja.md` L44 | Markdown リンク |
+| 1.1 | README.md にリンク追加 | `README.md` L21 | Markdown リンク |
+| 1.2 | README.ja.md にリンク追加 | `README.ja.md` L21 | Markdown リンク |
 | 1.3 | CHANGELOG.md にリンク追加 | `CHANGELOG.md` L14 | Markdown リンク |
 | 1.4 | steering/product.md にリンク追加 | `.cupola/steering/product.md` L3 | Markdown リンク |
 | 2.1 | cupola-task.yml に URL 追記 | `.github/ISSUE_TEMPLATE/cupola-task.yml` L10 | プレーンテキスト URL |
@@ -84,31 +84,27 @@ graph TB
 
 | ファイル | 変更種別 | 対応要件 | 変更内容 |
 |---------|---------|---------|---------|
-| `README.md` | 文字列置換 | 1.1, 3.1, 3.2, 3.3 | `**cc-sdd (spec-driven development)**` → `**[cc-sdd](https://github.com/gotalab/cc-sdd) (spec-driven development)**` |
-| `README.ja.md` | 文字列置換 | 1.2, 3.1, 3.2, 3.3 | `**cc-sdd（仕様駆動開発）**` → `**[cc-sdd](https://github.com/gotalab/cc-sdd)（仕様駆動開発）**` |
+| `README.md` | 文字列置換 | 1.1, 3.1, 3.2, 3.3 | `Claude Code + cc-sdd to` → `Claude Code + [cc-sdd](https://github.com/gotalab/cc-sdd) to`（L21、初出箇所） |
+| `README.ja.md` | 文字列置換 | 1.2, 3.1, 3.2, 3.3 | `Claude Code と cc-sdd を活用し` → `Claude Code と [cc-sdd](https://github.com/gotalab/cc-sdd) を活用し`（L21、初出箇所） |
 | `CHANGELOG.md` | 文字列置換 | 1.3, 3.1, 3.2, 3.3 | `using cc-sdd` → `using [cc-sdd](https://github.com/gotalab/cc-sdd)` |
 | `.cupola/steering/product.md` | 文字列置換 | 1.4, 3.1, 3.2, 3.3 | `Claude Code + cc-sdd to` → `Claude Code + [cc-sdd](https://github.com/gotalab/cc-sdd) to` |
 | `.github/ISSUE_TEMPLATE/cupola-task.yml` | 文字列置換 | 2.1, 2.2, 3.1, 3.2 | `cc-sdd の requirements フェーズ` → `cc-sdd (https://github.com/gotalab/cc-sdd) の requirements フェーズ` |
 
 #### ファイル別変更詳細
 
-**README.md** (L44):
+**README.md** (L21):
 
-変更前:
-```
-**cc-sdd (spec-driven development)** は、要件定義・設計・タスク分解・実装を段階的に進める仕様駆動の開発手法です。
-```
-※ 実際には英語: `**cc-sdd (spec-driven development)**`
+変更前: `Claude Code + cc-sdd to automate design and implementation`
+変更後: `Claude Code + [cc-sdd](https://github.com/gotalab/cc-sdd) to automate design and implementation`
 
-変更後:
-```
-**[cc-sdd](https://github.com/gotalab/cc-sdd) (spec-driven development)**
-```
+（L25 の `cc-sdd to automatically generate` および L44 の `cc-sdd (spec-driven development)` は初出以降のため変更しない）
 
-**README.ja.md** (L44):
+**README.ja.md** (L21):
 
-変更前: `**cc-sdd（仕様駆動開発）**`
-変更後: `**[cc-sdd](https://github.com/gotalab/cc-sdd)（仕様駆動開発）**`
+変更前: `Claude Code と cc-sdd を活用し設計から実装までを自動化する`
+変更後: `Claude Code と [cc-sdd](https://github.com/gotalab/cc-sdd) を活用し設計から実装までを自動化する`
+
+（L25 の `cc-sdd を使って` および L44 の `cc-sdd（仕様駆動開発）` は初出以降のため変更しない）
 
 **CHANGELOG.md** (L14):
 

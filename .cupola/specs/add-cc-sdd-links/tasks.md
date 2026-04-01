@@ -10,15 +10,15 @@
 
 - [x] 1. Markdown ドキュメントへの cc-sdd リンク追加
 - [x] 1.1 (P) README.md の cc-sdd 初出箇所にリンクを追加する
-  - `README.md` L44 の `**cc-sdd (spec-driven development)**` を `**[cc-sdd](https://github.com/gotalab/cc-sdd) (spec-driven development)**` に変更する
-  - 変更は L44 の1箇所のみであり、それ以降の cc-sdd 言及は変更しない
-  - 周辺の太字記法 `**` および括弧がそのまま維持されていることを確認する
+  - `README.md` L21 の `Claude Code + cc-sdd to` を `Claude Code + [cc-sdd](https://github.com/gotalab/cc-sdd) to` に変更する
+  - 変更は L21 の1箇所のみであり、L25 や L44 等それ以降の cc-sdd 言及は変更しない
+  - 周辺の文脈（`+` 記号、スペース）がそのまま維持されていることを確認する
   - _Requirements: 1.1, 3.1, 3.2, 3.3_
 
 - [x] 1.2 (P) README.ja.md の cc-sdd 初出箇所にリンクを追加する
-  - `README.ja.md` L44 の `**cc-sdd（仕様駆動開発）**` を `**[cc-sdd](https://github.com/gotalab/cc-sdd)（仕様駆動開発）**` に変更する
-  - 変更は L44 の1箇所のみであり、それ以降の cc-sdd 言及は変更しない
-  - 日本語の全角括弧（）がリンク記法の外側に維持されていることを確認する
+  - `README.ja.md` L21 の `Claude Code と cc-sdd を活用し` を `Claude Code と [cc-sdd](https://github.com/gotalab/cc-sdd) を活用し` に変更する
+  - 変更は L21 の1箇所のみであり、L25 や L44 等それ以降の cc-sdd 言及は変更しない
+  - 日本語の文脈（前後の「と」「を」）がそのまま維持されていることを確認する
   - _Requirements: 1.2, 3.1, 3.2, 3.3_
 
 - [x] 1.3 (P) CHANGELOG.md の cc-sdd 初出箇所にリンクを追加する

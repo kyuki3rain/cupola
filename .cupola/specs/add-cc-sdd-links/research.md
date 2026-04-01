@@ -21,8 +21,8 @@
 - **Context**: cc-sdd が言及されている箇所と現在の記法を把握するために調査
 - **Sources Consulted**: 各ファイルを直接参照
 - **Findings**:
-  - `README.md` L44: `**cc-sdd (spec-driven development)**` — インライン強調テキスト
-  - `README.ja.md` L44: `**cc-sdd（仕様駆動開発）**` — インライン強調テキスト
+  - `README.md` L21: `Claude Code + cc-sdd to automate design and implementation` — Project Overview の本文（初出箇所）。L25 や L44 にも言及あり
+  - `README.ja.md` L21: `Claude Code と cc-sdd を活用し設計から実装までを自動化する` — プロジェクト概要の本文（初出箇所）。L25 や L44 にも言及あり
   - `CHANGELOG.md` L14: `using cc-sdd` — Changelog エントリの文中
   - `.github/ISSUE_TEMPLATE/cupola-task.yml` L10: `cc-sdd の requirements フェーズ` — YAML の `value` フィールド内プレーンテキスト
   - `.cupola/steering/product.md` L3: `driving Claude Code + cc-sdd to automate design and implementation` — 英文散文の一部
@@ -42,7 +42,7 @@
 | Option | Description | Strengths | Risks / Limitations | Notes |
 |--------|-------------|-----------|---------------------|-------|
 | Markdown リンク形式 | `[cc-sdd](URL)` | GitHub 上で即座にリンクとして表示される | YAML 等の非 Markdown コンテキストには不適 | Markdown ファイルに適用 |
-| プレーンテキスト URL 形式 | `cc-sdd (URL)` | 全ファイル形式で安全に表示される | クリック不可（プレーンテキスト） | YAML ファイルに適用 |
+| プレーンテキスト URL 形式 | `cc-sdd (URL)` | 全ファイル形式で安全に表示される | クリック可否はレンダリングコンテキスト依存（プレーンテキストとして扱われる場合あり） | YAML ファイルに適用 |
 
 ## Design Decisions
 
