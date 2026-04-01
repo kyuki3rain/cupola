@@ -11,11 +11,11 @@
 ### Goals
 - design / implementation / fixing 各プロンプトから言語固有コマンドを完全に除去する
 - 汎用的な品質チェック指示（AGENTS.md / CLAUDE.md 参照）を統一文言で 3 関数に適用する
+- リポジトリルートに AGENTS.md を新規作成し、cupola プロジェクト（Rust）向けの品質チェック手順を記載する
 - 関連テストを新仕様に合わせて更新し、全テストをパスさせる
 
 ### Non-Goals
 - プロンプト関数のシグネチャや呼び出し側の変更
-- AGENTS.md / CLAUDE.md の内容の規定
 - 他の言語向け品質チェックコマンドのハードコード追加
 
 ## Architecture

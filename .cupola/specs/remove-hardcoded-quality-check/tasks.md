@@ -20,14 +20,20 @@
   - ステップ番号（3. 品質チェック → 4. commit）の整合性を維持する
   - _Requirements: 3.1, 3.2, 3.3_
 
-## Task 5: テストの更新
-- [ ] 5.1 以下の旧テスト（cargo コマンド存在アサート）を削除する
+## Task 5: AGENTS.md の作成
+- [ ] 5.1 リポジトリルート（`/AGENTS.md`）に AGENTS.md を新規作成する
+  - commit 前に `cargo fmt` / `cargo clippy -- -D warnings` / `cargo test` を実行し、全てパスしてから commit すること、失敗した場合は修正して再チェックすること、を記載する
+  - Claude Code はこのファイルを自動で読み込むため、プロンプト側の汎用指示と連携する
+  - _Requirements: 1.2, 2.2, 3.2_
+
+## Task 6: テストの更新
+- [ ] 6.1 以下の旧テスト（cargo コマンド存在アサート）を削除する
   - `design_prompt_contains_quality_check`
   - `implementation_prompt_contains_quality_check`
   - `implementation_prompt_without_feature_name_contains_quality_check`
   - `fixing_prompt_contains_quality_check`
   - _Requirements: 4.1_
-- [ ] 5.2 以下の新テストを追加する
+- [ ] 6.2 以下の新テストを追加する
   - `design_prompt_generic_quality_check`: design プロンプトが `cargo fmt` を含まず AGENTS.md 参照の汎用指示を含むことを検証
   - `implementation_prompt_generic_quality_check`: implementation プロンプト（feature_name あり）が同様であることを検証
   - `implementation_prompt_without_feature_name_generic_quality_check`: implementation プロンプト（feature_name なし）が同様であることを検証
