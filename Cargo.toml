@@ -3,6 +3,11 @@ name = "cupola"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
+description = "A locally-resident agent that automates GitHub Issue-driven development using Claude Code"
+repository = "https://github.com/kyuki3rain/cupola"
+readme = "README.md"
+keywords = ["github", "automation", "agent", "claude", "ci"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 anyhow = "1"
