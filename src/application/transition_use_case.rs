@@ -135,7 +135,10 @@ impl<G: GitHubClient, I: IssueRepository, W: GitWorktree> TransitionUseCase<'_, 
                 self.github
                     .comment_on_issue(
                         issue.github_issue_number,
-                        &t!("issue_comment.all_completed", locale = &self.config.language),
+                        &t!(
+                            "issue_comment.all_completed",
+                            locale = &self.config.language
+                        ),
                     )
                     .await?;
                 let _ = self.github.close_issue(issue.github_issue_number).await;
@@ -155,7 +158,10 @@ impl<G: GitHubClient, I: IssueRepository, W: GitWorktree> TransitionUseCase<'_, 
             }
 
             (State::Cancelled, Event::RetryExhausted) => {
-                let unknown = t!("issue_comment.unknown_error", locale = &self.config.language);
+                let unknown = t!(
+                    "issue_comment.unknown_error",
+                    locale = &self.config.language
+                );
                 let msg = t!(
                     "issue_comment.retry_exhausted",
                     locale = &self.config.language,

@@ -267,7 +267,10 @@ where
         self.github
             .comment_on_issue(
                 n,
-                &t!("issue_comment.design_starting", locale = &self.config.language),
+                &t!(
+                    "issue_comment.design_starting",
+                    locale = &self.config.language
+                ),
             )
             .await?;
 
