@@ -29,7 +29,7 @@ cupola logs コマンドの追加（-f オプション付き）: ログファイ
 #### Acceptance Criteria
 
 1. When `cupola logs -f` コマンドが実行されると、the Cupola CLI shall 最新のログファイルを継続的に監視し、追記された内容をリアルタイムに標準出力へ出力する
-2. While `-f` オプションで追跡中に、the Cupola CLI shall ファイルへの新規追記を検知するたびに即座に出力する
+2. While `-f` オプションで追跡中に、the Cupola CLI shall ファイルへの新規追記を検知するたびに、最大 200ms 以内に標準出力へ出力する
 3. When Ctrl+C シグナル（SIGINT）を受信すると、the Cupola CLI shall リアルタイム追跡を安全に終了し、プロセスを正常終了する
 
 ---
@@ -43,7 +43,7 @@ cupola logs コマンドの追加（-f オプション付き）: ログファイ
 1. The Cupola CLI shall `cupola logs` 実行時に `cupola.toml` の `log.dir` フィールドを参照してログディレクトリを決定する
 2. If `cupola.toml` に `log.dir` が設定されていない場合、the Cupola CLI shall エラーメッセージ「log.dir が cupola.toml に設定されていません」を標準エラー出力に表示し、非ゼロの終了コードで終了する
 3. If `log.dir` で指定されたディレクトリが存在しない場合、the Cupola CLI shall エラーメッセージを標準エラー出力に表示し、非ゼロの終了コードで終了する
-4. If `log.dir` にログファイルが存在しない場合、the Cupola CLI shall エラーメッセージ「ログファイルが見つかりません」を標準エラー出力に表示し、非ゼロの終了コードで終了する
+4. If `log.dir` にログファイルが存在しない場合、the Cupola CLI shall エラーメッセージ「ログファイルが見つかりません: {dir}」を標準エラー出力に表示し、非ゼロの終了コードで終了する
 
 ---
 
