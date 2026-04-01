@@ -2,7 +2,7 @@
 
 [日本語](./README.ja.md)
 
-A locally-resident agent that automates from design to implementation, starting from GitHub Issues.
+Issue-driven local agent control plane for spec-driven development.
 
 ## Table of Contents
 
@@ -13,11 +13,23 @@ A locally-resident agent that automates from design to implementation, starting 
 - [CLI Command Reference](#cli-command-reference)
 - [Configuration Reference](#configuration-reference)
 - [Architecture Overview](#architecture-overview)
+- [Limitations](#limitations)
 - [License](#license)
 
 ## Project Overview
 
 Cupola is a locally-resident agent that uses GitHub Issues and PRs as its sole interface, driving Claude Code + cc-sdd to automate design and implementation. Humans only create Issues, assign labels, and review PRs — Cupola handles everything from design document generation to implementation, review response, and completion cleanup. By leveraging GitHub's existing workflow (Issues + PRs + reviews), Cupola achieves both quality assurance and automation without any dedicated UI.
+
+**Key Features:**
+
+- **Automated design generation**: Detects GitHub Issues and uses cc-sdd to automatically generate requirements, design, and tasks
+- **Automatic PR creation**: Creates design PRs and implementation PRs without manual intervention
+- **Review thread handling**: Automatically fixes, replies, and resolves review threads on PRs
+- **CI failure auto-fix**: Detects CI (GitHub Actions, etc.) failures and automatically attempts to fix them
+- **Conflict auto-fix**: Detects merge conflicts and automatically attempts to resolve them
+- **Model override via Issue labels**: Attach labels like `model:opus` to an Issue to override the Claude model used for that Issue
+- **Concurrent session limit**: Use `max_concurrent_sessions` to cap the number of simultaneously running agent sessions
+- **Environment & config check**: Run `cupola doctor` to validate Cupola configuration and GitHub integration (config file, git/gh setup, labels, steering, DB)
 
 ## Prerequisites
 
@@ -38,8 +50,8 @@ When using devbox, run `devbox shell` at the repository root to set up all requi
 1. Clone the repository
 
    ```bash
-   git clone https://github.com/<owner>/<repo>.git
-   cd <repo>
+   git clone https://github.com/kyuki3rain/cupola.git
+   cd cupola
    ```
 
 2. Enter the development environment (when using devbox)
@@ -83,7 +95,7 @@ When using devbox, run `devbox shell` at the repository root to set up all requi
 7. Start polling
 
    ```bash
-   cupola run
+   cupola start
    ```
 
 ## Usage
@@ -104,7 +116,7 @@ The two-stage review flow (design PR and implementation PR) ensures quality with
 
 ## CLI Command Reference
 
-### `cupola run`
+### `cupola start`
 
 Starts the polling loop and monitors Issues with the `agent:ready` label.
 
@@ -113,13 +125,38 @@ Starts the polling loop and monitors Issues with the `agent:ready` label.
 | `--polling-interval-secs <seconds>` | Override polling interval (seconds) | Value from `cupola.toml` |
 | `--log-level <level>` | Override log level (trace / debug / info / warn / error) | Value from `cupola.toml` |
 | `--config <path>` | Configuration file path | `.cupola/cupola.toml` |
+| `-d`, `--daemon` | Run as a background daemon | false |
 
 ```bash
 # Start with default settings
-cupola run
+cupola start
 
-# Start with custom polling interval and log level
-cupola run --polling-interval-secs 30 --log-level debug
+# Start as a background daemon with custom polling interval
+cupola start --daemon --polling-interval-secs 30
+```
+
+### `cupola stop`
+
+Stops a running background daemon.
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--config <path>` | Configuration file path | `.cupola/cupola.toml` |
+
+```bash
+cupola stop
+```
+
+### `cupola doctor`
+
+Checks that all required tools and configuration are in place.
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--config <path>` | Configuration file path | `.cupola/cupola.toml` |
+
+```bash
+cupola doctor
 ```
 
 ### `cupola init`
@@ -138,6 +175,14 @@ Lists the processing status of all Issues.
 cupola status
 ```
 
+### `cupola --version` / `-V`
+
+Displays the installed version.
+
+```bash
+cupola --version
+```
+
 ## Configuration Reference
 
 The configuration file is located at `.cupola/cupola.toml`.
@@ -151,6 +196,8 @@ The configuration file is located at `.cupola/cupola.toml`.
 | `polling_interval_secs` | u64 | `60` | Polling interval (seconds) |
 | `max_retries` | u32 | `3` | Maximum retry count |
 | `stall_timeout_secs` | u64 | `1800` | Stall detection timeout (seconds) |
+| `max_concurrent_sessions` | u32 (optional) | unlimited | Maximum number of concurrent Cupola sessions |
+| `model` | String | `"sonnet"` | Default Claude model for agent sessions |
 | `[log] level` | String | `"info"` | Log level |
 | `[log] dir` | String | — (optional) | Log output directory |
 
@@ -164,6 +211,8 @@ language = "ja"
 polling_interval_secs = 60
 max_retries = 3
 stall_timeout_secs = 1800
+max_concurrent_sessions = 4  # unlimited if omitted
+model = "sonnet"
 
 [log]
 level = "info"
@@ -188,26 +237,34 @@ src/
 ├── main.rs
 ├── lib.rs
 ├── domain/
+│   ├── check_result.rs
 │   ├── config.rs
 │   ├── event.rs
 │   ├── execution_log.rs
+│   ├── fixing_problem_kind.rs
 │   ├── issue.rs
 │   ├── state.rs
 │   └── state_machine.rs
 ├── application/
+│   ├── doctor_use_case.rs
 │   ├── error.rs
+│   ├── init_use_case.rs
 │   ├── io.rs
 │   ├── polling_use_case.rs
 │   ├── prompt.rs
 │   ├── retry_policy.rs
 │   ├── session_manager.rs
+│   ├── stop_use_case.rs
 │   ├── transition_use_case.rs
 │   └── port/
 │       ├── claude_code_runner.rs
+│       ├── command_runner.rs
+│       ├── config_loader.rs
 │       ├── execution_log_repository.rs
 │       ├── git_worktree.rs
 │       ├── github_client.rs
-│       └── issue_repository.rs
+│       ├── issue_repository.rs
+│       └── pid_file.rs
 ├── adapter/
 │   ├── inbound/
 │   │   └── cli.rs
@@ -217,14 +274,23 @@ src/
 │       ├── github_client_impl.rs
 │       ├── github_graphql_client.rs
 │       ├── github_rest_client.rs
+│       ├── init_file_generator.rs
+│       ├── pid_file_manager.rs
+│       ├── process_command_runner.rs
 │       ├── sqlite_connection.rs
 │       ├── sqlite_execution_log_repository.rs
 │       └── sqlite_issue_repository.rs
 └── bootstrap/
     ├── app.rs
     ├── config_loader.rs
-    └── logging.rs
+    ├── logging.rs
+    └── toml_config_loader.rs
 ```
+
+## Limitations
+
+- **Review comment scope**: Only PR review threads (`review_thread`) are supported. Top-level PR review comments (PR-level comments without a thread) are not handled.
+- **Quality check commands**: Quality check commands that Cupola runs must be defined in the target repository's `AGENTS.md` or `CLAUDE.md`.
 
 ## License
 
