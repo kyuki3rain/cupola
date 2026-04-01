@@ -147,14 +147,13 @@ impl SqliteConnection {
 
 ```rust
 // IssueRepository トレイト（変更なし）
-#[async_trait]
-impl IssueRepository for SqliteIssueRepository {
+pub trait IssueRepository: Send + Sync {
     async fn find_by_id(&self, id: i64) -> anyhow::Result<Option<Issue>>;
-    async fn find_by_issue_number(&self, number: i64) -> anyhow::Result<Option<Issue>>;
+    async fn find_by_issue_number(&self, number: u64) -> anyhow::Result<Option<Issue>>;
     async fn find_active(&self) -> anyhow::Result<Vec<Issue>>;
     async fn find_needing_process(&self) -> anyhow::Result<Vec<Issue>>;
-    async fn save(&self, issue: &Issue) -> anyhow::Result<()>;
-    async fn update_state(&self, id: i64, state: &State) -> anyhow::Result<()>;
+    async fn save(&self, issue: &Issue) -> anyhow::Result<i64>;
+    async fn update_state(&self, id: i64, state: State) -> anyhow::Result<()>;
     async fn update(&self, issue: &Issue) -> anyhow::Result<()>;
     async fn reset_for_restart(&self, id: i64) -> anyhow::Result<()>;
 }
@@ -198,10 +197,15 @@ impl IssueRepository for SqliteIssueRepository {
 
 ```rust
 // ExecutionLogRepository トレイト（変更なし）
-#[async_trait]
-impl ExecutionLogRepository for SqliteExecutionLogRepository {
-    async fn record_start(&self, issue_id: i64, session_id: &str) -> anyhow::Result<()>;
-    async fn record_finish(&self, issue_id: i64, success: bool) -> anyhow::Result<()>;
+pub trait ExecutionLogRepository: Send + Sync {
+    async fn record_start(&self, issue_id: i64, state: State) -> anyhow::Result<i64>;
+    async fn record_finish(
+        &self,
+        log_id: i64,
+        exit_code: Option<i32>,
+        structured_output: Option<&str>,
+        error_message: Option<&str>,
+    ) -> anyhow::Result<()>;
     async fn find_by_issue(&self, issue_id: i64) -> anyhow::Result<Vec<ExecutionLog>>;
 }
 ```
