@@ -78,4 +78,4 @@
 
 1. When `cargo test` を実行したとき、the Cupola shall すべてのテストがエラーなく通過する。
 2. When `transition_use_case.rs` または `polling_use_case.rs` のテストが GitHub Issue コメント文字列を検証しているとき、the Cupola shall テスト内の期待値を i18n 化後の正しい文字列（または `t!()` マクロ経由の結果）に合わせて更新する。
-3. When `cargo clippy -- -D warnings` を実行したとき、the Cupola shall すべての Clippy 警告がエラーなく通過する。
+3. When `RUSTFLAGS=-D warnings cargo clippy --all-targets` を実行したとき、the Cupola shall すべての Clippy 警告がエラーなく通過する。

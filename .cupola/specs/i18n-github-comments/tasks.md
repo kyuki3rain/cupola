@@ -58,11 +58,11 @@
   - _Requirements: 5.1, 5.2_
 
 - [ ] 5.2 cargo clippy で静的解析を通過させる
-  - `cargo clippy -- -D warnings` を実行して警告がゼロであることを確認する
+  - `RUSTFLAGS=-D warnings cargo clippy --all-targets` を実行して警告がゼロであることを確認する
   - `t!()` マクロ展開による新規 Clippy 警告が発生した場合は修正する
   - _Requirements: 5.3_
 
-- [ ]* 5.3 英語設定時の動作を検証するテストを追加する
+- [ ] 5.3 英語設定時の動作を検証するテストを追加する
   - `language = "en"` を設定した場合に英語コメントが投稿されることを検証するテストケースを追加する（未知 locale での英語フォールバック動作も含む）
   - `TransitionUseCase` のモックテストで `en` 設定時の `comment_on_issue` 引数が英語文字列であることをアサートする
   - _Requirements: 4.1, 4.2, 4.3, 4.4_
