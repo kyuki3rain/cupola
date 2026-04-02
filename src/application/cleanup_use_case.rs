@@ -214,6 +214,7 @@ mod tests {
     }
 
     impl MockWorktree {
+        #[allow(clippy::type_complexity)]
         fn new() -> (Self, Arc<Mutex<Vec<String>>>, Arc<Mutex<Vec<String>>>) {
             let removed = Arc::new(Mutex::new(vec![]));
             let deleted = Arc::new(Mutex::new(vec![]));
