@@ -129,6 +129,113 @@ pub async fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
 
+        Command::Logs { config, follow } => {
+            let toml = load_toml(&config)
+                .with_context(|| format!("failed to load config from {}", config.display()))?;
+            let overrides = CliOverrides {
+                polling_interval_secs: None,
+                log_level: None,
+            };
+            let cfg = toml.into_config(&overrides);
+
+            let log_dir = match cfg.log_dir {
+                Some(dir) => dir,
+                None => {
+                    return Err(anyhow::anyhow!("log.dir is not configured in cupola.toml"));
+                }
+            };
+
+            if !log_dir.exists() {
+                return Err(anyhow::anyhow!(
+                    "Log directory not found: {}",
+                    log_dir.display()
+                ));
+            }
+
+            // Find the latest cupola log file
+            let find_latest_log = |dir: &Path| -> Option<std::path::PathBuf> {
+                let mut entries: Vec<_> = std::fs::read_dir(dir)
+                    .ok()?
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        e.file_type().map(|ft| ft.is_file()).unwrap_or(false)
+                            && e.file_name()
+                                .to_str()
+                                .is_some_and(|n| n.starts_with("cupola."))
+                    })
+                    .collect();
+                entries.sort_by_key(|e| e.file_name());
+                entries.last().map(|e| e.path())
+            };
+
+            let log_path = find_latest_log(&log_dir)
+                .ok_or_else(|| anyhow::anyhow!("No log files found in {}", log_dir.display()))?;
+
+            if follow {
+                // tail -f equivalent (blocking — runs in dedicated thread)
+                use std::io::{BufRead, BufReader, Seek, SeekFrom};
+
+                let log_dir_clone = log_dir.clone();
+                tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                    let mut current_path = log_path;
+                    let mut file = std::fs::File::open(&current_path)
+                        .with_context(|| format!("failed to open {}", current_path.display()))?;
+                    file.seek(SeekFrom::End(0))?;
+                    let mut reader = BufReader::new(file);
+                    let mut line = String::new();
+
+                    loop {
+                        match reader.read_line(&mut line) {
+                            Ok(0) => {
+                                std::thread::sleep(Duration::from_millis(200));
+
+                                // Check for log rotation
+                                if let Some(newest) =
+                                    find_latest_log(&log_dir_clone).filter(|p| *p != current_path)
+                                {
+                                    let new_file = std::fs::File::open(&newest)?;
+                                    reader = BufReader::new(new_file);
+                                    current_path = newest;
+                                }
+                            }
+                            Ok(_) => {
+                                print!("{line}");
+                                line.clear();
+                            }
+                            Err(e) => {
+                                return Err(anyhow::anyhow!("failed to read log: {e}"));
+                            }
+                        }
+                    }
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("log follow task failed: {e}"))?
+            } else {
+                // Show last 20 lines using BufRead (memory efficient)
+                use std::collections::VecDeque;
+                use std::io::{BufRead, BufReader};
+
+                let file = std::fs::File::open(&log_path)
+                    .with_context(|| format!("failed to open {}", log_path.display()))?;
+                let reader = BufReader::new(file);
+                let mut tail: VecDeque<String> = VecDeque::with_capacity(21);
+
+                for line in reader.lines() {
+                    let line =
+                        line.with_context(|| format!("failed to read {}", log_path.display()))?;
+                    if tail.len() == 20 {
+                        tail.pop_front();
+                    }
+                    tail.push_back(line);
+                }
+
+                for line in &tail {
+                    println!("{line}");
+                }
+                Ok(())
+            }
+        }
+
         Command::Status => {
             let db_path = Path::new(".cupola/cupola.db");
             if !db_path.exists() {
