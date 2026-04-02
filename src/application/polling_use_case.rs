@@ -661,16 +661,29 @@ where
 
                     if causes.contains(&FixingProblemKind::CiFailure) {
                         let runs = self.github.get_ci_check_runs(pr_num).await?;
-                        let errors: Vec<CiErrorEntry> = runs
+                        let mut errors: Vec<CiErrorEntry> = Vec::new();
+                        for r in runs
                             .into_iter()
                             .filter(|r| r.conclusion.as_deref() == Some("failure"))
-                            .map(|r| CiErrorEntry {
+                        {
+                            let log_lines = match self.github.get_job_logs(r.id).await {
+                                Ok(logs) => extract_error_lines(&logs),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        job_id = r.id,
+                                        error = %e,
+                                        "failed to get job logs, falling back to summary"
+                                    );
+                                    None
+                                }
+                            };
+                            errors.push(CiErrorEntry {
                                 check_run_name: r.name,
                                 conclusion: r.conclusion.unwrap_or_default(),
                                 output_summary: r.output_summary,
-                                output_text: r.output_text,
-                            })
-                            .collect();
+                                output_text: log_lines.or(r.output_text),
+                            });
+                        }
                         write_ci_errors_input(wt, &errors)?;
                     }
 
@@ -952,6 +965,54 @@ where
     }
 }
 
+/// Extract error lines from raw CI job logs.
+/// Strips ANSI color codes and filters for error-related lines.
+fn extract_error_lines(raw_log: &str) -> Option<String> {
+    let lines: Vec<String> = raw_log
+        .lines()
+        .filter(|line| {
+            let clean = strip_ansi(line);
+            clean.contains("error:") || clean.contains("error[") || clean.contains("##[error]")
+        })
+        .filter(|line| {
+            let clean = strip_ansi(line);
+            !clean.contains("curl") && !clean.contains("spurious")
+        })
+        .map(|line| {
+            let s = strip_ansi(line);
+            // Strip timestamp prefix (e.g., "2026-04-02T10:53:01.0418115Z ")
+            if let Some(pos) = s.find(' ').filter(|&p| p > 20) {
+                return s[pos + 1..].to_string();
+            }
+            s
+        })
+        .collect();
+
+    if lines.is_empty() {
+        return None;
+    }
+
+    Some(lines.join("\n"))
+}
+
+/// Strip ANSI escape sequences from a string.
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            for c2 in chars.by_ref() {
+                if c2 == 'm' {
+                    break;
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1080,6 +1141,9 @@ mod tests {
         }
         async fn get_ci_check_runs(&self, _: u64) -> anyhow::Result<Vec<GitHubCheckRun>> {
             Ok(self.check_runs.clone())
+        }
+        async fn get_job_logs(&self, _: u64) -> anyhow::Result<String> {
+            Ok(String::new())
         }
         async fn get_pr_mergeable(&self, _: u64) -> anyhow::Result<Option<bool>> {
             Ok(self.pr_details.mergeable)

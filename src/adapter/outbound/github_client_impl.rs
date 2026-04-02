@@ -68,6 +68,10 @@ impl GitHubClient for GitHubClientImpl {
         self.rest.get_ci_check_runs(pr_number).await
     }
 
+    async fn get_job_logs(&self, job_id: u64) -> Result<String> {
+        self.rest.get_job_logs(job_id).await
+    }
+
     async fn get_pr_mergeable(&self, pr_number: u64) -> Result<Option<bool>> {
         self.rest.get_pr_mergeable(pr_number).await
     }

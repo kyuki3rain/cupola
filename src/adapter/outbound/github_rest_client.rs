@@ -103,6 +103,33 @@ impl OctocrabRestClient {
         Ok(runs)
     }
 
+    pub async fn get_job_logs(&self, job_id: u64) -> Result<String> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/actions/jobs/{}/logs",
+            self.owner, self.repo, job_id
+        );
+
+        let resp = self
+            .http_client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send()
+            .await
+            .with_context(|| format!("failed to get logs for job {job_id}"))?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "job logs API returned {}: {}",
+                resp.status(),
+                resp.text().await.unwrap_or_default()
+            ));
+        }
+
+        resp.text().await.context("failed to read job logs body")
+    }
+
     pub async fn get_pr_mergeable(&self, pr_number: u64) -> Result<Option<bool>> {
         let pr = self
             .octocrab
