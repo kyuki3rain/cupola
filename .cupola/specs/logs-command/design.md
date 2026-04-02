@@ -86,7 +86,7 @@ sequenceDiagram
     User->>Bootstrap: cupola logs [-n N]
     Bootstrap->>LogsUseCase: execute(LogsInput{follow:false, lines:N})
     LogsUseCase->>FsLogFilePort: find_latest_log_file(log_dir)
-    FsLogFilePort->>FS: read_dir, sort desc
+    FsLogFilePort->>FS: read_dir, select max_by(_key)
     FsLogFilePort-->>LogsUseCase: PathBuf
     LogsUseCase->>FsLogFilePort: read_tail(path, lines)
     FsLogFilePort->>FS: open file, seek
@@ -139,7 +139,7 @@ sequenceDiagram
 | 3.1 | 最新ファイル選択ロジック | FsLogFilePort | `find_latest_log_file` | — |
 | 3.2 | 単一ファイル対象 | FsLogFilePort | `find_latest_log_file` | — |
 | 3.3 | デフォルト 20 行表示 | CLI, LogsUseCase | `lines: usize` default 20 | — |
-| 3.4 | `-n <N>` 行数指定 | CLI (Command::Logs) | `lines: Option<usize>` | — |
+| 3.4 | `-n <N>` 行数指定 | CLI (Command::Logs) | `lines: usize` | — |
 | 4.1 | `Command::Logs` variant | CLI adapter/inbound | `Command` enum | — |
 | 4.2 | ユースケースを application 層に配置 | LogsUseCase | `LogsUseCase<P>` | — |
 | 4.3 | `LogFilePort` をポート定義 | Port trait | `LogFilePort` trait | — |
@@ -236,7 +236,7 @@ pub enum LogFileError {
     #[error("log directory not found: {path}")]
     DirNotFound { path: String },
 
-    #[error("no log files found in: {dir}")]
+    #[error("No log files found in {dir}")]
     NoLogFiles { dir: String },
 
     #[error("failed to read log file: {source}")]
