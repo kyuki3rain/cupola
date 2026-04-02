@@ -1,5 +1,8 @@
 # Cupola
 
+[![CI](https://github.com/kyuki3rain/cupola/actions/workflows/ci.yml/badge.svg)](https://github.com/kyuki3rain/cupola/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/kyuki3rain/cupola/blob/main/LICENSE)
+
 [English](./README.md)
 
 Issue 駆動のローカル常駐エージェント。仕様駆動開発のコントロールプレーン。
