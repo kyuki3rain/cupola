@@ -2,22 +2,21 @@
 
 - [ ] 1. ポートトレイトの拡張
 - [ ] 1.1 IssueRepository に Cancelled 状態の Issue を取得するメソッドを追加する
-  - `IssueRepository` トレイトに `find_by_state(state: State) -> Result<Vec<Issue>>` を定義する
+  - `IssueRepository` トレイトに `find_by_state(state: State) -> impl Future<Output = Result<Vec<Issue>>> + Send` を定義する
   - cleanup コマンドが Cancelled Issue を取得するための基盤となる
   - テスト用モックアダプターにも同メソッドを追加する（統合テストファイル内）
   - _Requirements: 5.1_
 
 - [ ] 1.2 (P) GitHubClient に PR の三状態を取得するメソッドを追加する
   - `PrStatus { Open, Closed, Merged }` 列挙型を `github_client.rs` に定義する
-  - `GitHubClient` トレイトに `get_pr_status(pr_number: u64) -> Result<PrStatus>` を定義する
+  - `GitHubClient` トレイトに `get_pr_status(&self, pr_number: u64) -> impl Future<Output = Result<PrStatus>> + Send` を定義する
   - テスト用モックアダプターにも同メソッドを追加する
   - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6_
 
 - [ ] 2. アダプター実装の更新
 - [ ] 2.1 reset_for_restart の SQL をフィールド保持型に修正する
   - `SqliteIssueRepository::reset_for_restart` の UPDATE 文から `design_pr_number`, `impl_pr_number`, `worktree_path`, `feature_name` の NULL 化を削除する
-  - `state='idle'`, `retry_count=0`, `current_pid=NULL`, `error_message=NULL` のみリセットする
-  - `model` は引き続き NULL にリセットしてよい
+  - `state='idle'`, `retry_count=0`, `current_pid=NULL`, `error_message=NULL`, `model=NULL` をリセットする
   - _Requirements: 1.1, 1.2_
 
 - [ ] 2.2 SqliteIssueRepository に find_by_state を実装する

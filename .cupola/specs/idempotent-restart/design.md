@@ -374,7 +374,7 @@ UPDATE issues SET state='idle', design_pr_number=NULL, impl_pr_number=NULL,
 
 -- After:
 UPDATE issues SET state='idle', retry_count=0, current_pid=NULL,
-  error_message=NULL, updated_at=datetime('now') WHERE id=?1
+  error_message=NULL, model=NULL, updated_at=datetime('now') WHERE id=?1
 ```
 
 **find_by_state 追加**
