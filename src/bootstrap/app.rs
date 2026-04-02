@@ -145,7 +145,23 @@ pub async fn run(cli: Cli) -> Result<()> {
             let uc = CleanupUseCase::new(issue_repo, worktree);
             println!("⚠️  daemon が動作中の場合は停止してから cleanup を実行してください");
             let result = uc.execute().await?;
-            result.print_summary();
+            if result.cleaned.is_empty() {
+                println!("対象の Cancelled Issue が見つかりませんでした");
+            } else {
+                println!(
+                    "cleanup 完了: {} 件の Issue を処理しました",
+                    result.cleaned.len()
+                );
+                for item in &result.cleaned {
+                    println!("  Issue #{}", item.issue_number);
+                    if item.worktree_removed {
+                        println!("    ✓ worktree 削除済み");
+                    }
+                    for branch in &item.branches_removed {
+                        println!("    ✓ ブランチ削除: {branch}");
+                    }
+                }
+            }
             Ok(())
         }
 

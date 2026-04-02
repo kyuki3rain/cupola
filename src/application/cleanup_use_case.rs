@@ -144,29 +144,6 @@ impl<I: IssueRepository, W: GitWorktree> CleanupUseCase<I, W> {
     }
 }
 
-impl CleanupResult {
-    pub fn print_summary(&self) {
-        if self.cleaned.is_empty() {
-            println!("対象の Cancelled Issue が見つかりませんでした");
-            return;
-        }
-
-        println!(
-            "cleanup 完了: {} 件の Issue を処理しました",
-            self.cleaned.len()
-        );
-        for item in &self.cleaned {
-            println!("  Issue #{}", item.issue_number);
-            if item.worktree_removed {
-                println!("    ✓ worktree 削除済み");
-            }
-            for branch in &item.branches_removed {
-                println!("    ✓ ブランチ削除: {branch}");
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
