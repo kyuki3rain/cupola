@@ -22,4 +22,8 @@ pub trait IssueRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<()>> + Send;
     fn update(&self, issue: &Issue) -> impl std::future::Future<Output = Result<()>> + Send;
     fn reset_for_restart(&self, id: i64) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn find_by_state(
+        &self,
+        state: State,
+    ) -> impl std::future::Future<Output = Result<Vec<Issue>>> + Send;
 }

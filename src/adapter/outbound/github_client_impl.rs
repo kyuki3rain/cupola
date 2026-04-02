@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::application::port::github_client::{
     GitHubCheckRun, GitHubClient, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails,
-    ReviewThread,
+    PrStatus, ReviewThread,
 };
 
 use super::github_graphql_client::GraphQLClient;
@@ -78,5 +78,9 @@ impl GitHubClient for GitHubClientImpl {
 
     async fn get_pr_details(&self, pr_number: u64) -> Result<GitHubPrDetails> {
         self.rest.get_pr_details(pr_number).await
+    }
+
+    async fn get_pr_status(&self, pr_number: u64) -> Result<PrStatus> {
+        self.rest.get_pr_status(pr_number).await
     }
 }

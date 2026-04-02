@@ -15,7 +15,7 @@ use crate::application::io::{
 use crate::application::port::claude_code_runner::ClaudeCodeRunner;
 use crate::application::port::execution_log_repository::ExecutionLogRepository;
 use crate::application::port::git_worktree::GitWorktree;
-use crate::application::port::github_client::GitHubClient;
+use crate::application::port::github_client::{GitHubClient, PrStatus};
 use crate::application::port::issue_repository::IssueRepository;
 use crate::application::port::pid_file::PidFilePort;
 use crate::application::prompt::{
@@ -254,25 +254,45 @@ where
 
         self.worktree.fetch()?;
 
-        let start_point = format!("origin/{}", self.config.default_branch);
         let wt = Path::new(&wt_path);
-        self.worktree.create(wt, &main_branch, &start_point)?;
-        self.worktree.push(wt, &main_branch)?;
-        self.worktree.create_branch(wt, &design_branch)?;
-        self.worktree.push(wt, &design_branch)?;
+        if self.worktree.exists(wt) {
+            // worktree が既に存在する場合は再作成をスキップし、再開メッセージを投稿する
+            tracing::info!(issue_number = n, worktree = %wt_path, "worktree already exists, reusing");
+            // cleanup が部分失敗して worktree_path が None のまま worktree が残った場合に自己修復する
+            if issue.worktree_path.is_none() {
+                tracing::info!(issue_number = n, worktree = %wt_path, "self-healing: worktree_path was None, restoring from filesystem");
+                issue.worktree_path = Some(wt_path.clone());
+                self.issue_repo.update(issue).await?;
+            }
+            let comment_key = if issue.impl_pr_number.is_some() {
+                "issue_comment.resuming_implementation"
+            } else {
+                "issue_comment.resuming_design"
+            };
+            self.github
+                .comment_on_issue(n, &t!(comment_key, locale = &self.config.language))
+                .await?;
+        } else {
+            // 新規作成フロー
+            let start_point = format!("origin/{}", self.config.default_branch);
+            self.worktree.create(wt, &main_branch, &start_point)?;
+            self.worktree.push(wt, &main_branch)?;
+            self.worktree.create_branch(wt, &design_branch)?;
+            self.worktree.push(wt, &design_branch)?;
 
-        issue.worktree_path = Some(wt_path);
-        self.issue_repo.update(issue).await?;
+            issue.worktree_path = Some(wt_path);
+            self.issue_repo.update(issue).await?;
 
-        self.github
-            .comment_on_issue(
-                n,
-                &t!(
-                    "issue_comment.design_starting",
-                    locale = &self.config.language
-                ),
-            )
-            .await?;
+            self.github
+                .comment_on_issue(
+                    n,
+                    &t!(
+                        "issue_comment.design_starting",
+                        locale = &self.config.language
+                    ),
+                )
+                .await?;
+        }
 
         Ok(())
     }
@@ -567,6 +587,87 @@ where
 
             if self.session_mgr.is_running(issue.id) {
                 continue;
+            }
+
+            // DesignRunning / ImplementationRunning でスポーン前に PR 状態をチェック
+            let pr_number_to_check = match issue.state {
+                State::DesignRunning => issue.design_pr_number,
+                State::ImplementationRunning => issue.impl_pr_number,
+                _ => None,
+            };
+            if let Some(pr_num) = pr_number_to_check {
+                match self.github.get_pr_status(pr_num).await {
+                    Ok(PrStatus::Merged) => {
+                        // Running → ReviewWaiting → Merged の2ステップ遷移
+                        let merge_event = match issue.state {
+                            State::DesignRunning => Event::DesignPrMerged,
+                            State::ImplementationRunning => Event::ImplementationPrMerged,
+                            _ => unreachable!(),
+                        };
+                        tracing::info!(
+                            issue_id = issue.id,
+                            pr_number = pr_num,
+                            "PR already merged, transitioning through ReviewWaiting then merged"
+                        );
+                        let uc = self.transition_uc();
+                        let mut issue_mut = issue.clone();
+                        if let Err(e) = uc
+                            .apply(&mut issue_mut, &Event::ProcessCompletedWithPr)
+                            .await
+                        {
+                            tracing::warn!(
+                                issue_id = issue.id,
+                                pr_number = pr_num,
+                                error = %e,
+                                "failed to apply ProcessCompletedWithPr event during merge transition"
+                            );
+                        } else if let Err(e) = uc.apply(&mut issue_mut, &merge_event).await {
+                            tracing::warn!(
+                                issue_id = issue.id,
+                                pr_number = pr_num,
+                                error = %e,
+                                "failed to apply merge event during merge transition"
+                            );
+                        }
+                        continue;
+                    }
+                    Ok(PrStatus::Open) => {
+                        tracing::info!(
+                            issue_id = issue.id,
+                            pr_number = pr_num,
+                            "PR is still open, firing ProcessCompletedWithPr and skipping spawn"
+                        );
+                        let uc = self.transition_uc();
+                        let mut issue_mut = issue.clone();
+                        if let Err(e) = uc
+                            .apply(&mut issue_mut, &Event::ProcessCompletedWithPr)
+                            .await
+                        {
+                            tracing::warn!(
+                                issue_id = issue.id,
+                                pr_number = pr_num,
+                                error = %e,
+                                "failed to apply ProcessCompletedWithPr event for open PR"
+                            );
+                        }
+                        continue;
+                    }
+                    Ok(PrStatus::Closed) => {
+                        tracing::info!(
+                            issue_id = issue.id,
+                            pr_number = pr_num,
+                            "PR is closed (not merged), proceeding with normal spawn"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            issue_id = issue.id,
+                            pr_number = pr_num,
+                            error = %e,
+                            "failed to check PR status, proceeding with normal spawn (failsafe)"
+                        );
+                    }
+                }
             }
 
             let Some(ref wt_path) = issue.worktree_path else {
@@ -1018,8 +1119,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use crate::application::port::github_client::{
-        GitHubCheckRun, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails, ReviewComment,
-        ReviewThread,
+        GitHubCheckRun, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails, PrStatus,
+        ReviewComment, ReviewThread,
     };
     use crate::domain::config::Config;
     use crate::domain::execution_log::ExecutionLog;
@@ -1056,12 +1157,14 @@ mod tests {
         assert_eq!(base, "main");
     }
 
-    // --- Mocks for step4 tests ---
+    // --- Mocks for step4/step7 tests ---
 
     struct MockGitHub {
         pr_details: GitHubPrDetails,
+        pr_status: PrStatus,
         check_runs: Vec<GitHubCheckRun>,
         threads: Vec<ReviewThread>,
+        comments: Arc<Mutex<Vec<(u64, String)>>>,
     }
 
     impl MockGitHub {
@@ -1070,6 +1173,22 @@ mod tests {
             mergeable: Option<bool>,
             failure_names: Vec<&str>,
             has_threads: bool,
+        ) -> Self {
+            Self::with_pr_status(
+                merged,
+                mergeable,
+                failure_names,
+                has_threads,
+                PrStatus::Closed,
+            )
+        }
+
+        fn with_pr_status(
+            merged: bool,
+            mergeable: Option<bool>,
+            failure_names: Vec<&str>,
+            has_threads: bool,
+            pr_status: PrStatus,
         ) -> Self {
             let check_runs = failure_names
                 .into_iter()
@@ -1097,8 +1216,10 @@ mod tests {
             };
             Self {
                 pr_details: GitHubPrDetails { merged, mergeable },
+                pr_status,
                 check_runs,
                 threads,
+                comments: Arc::new(Mutex::new(vec![])),
             }
         }
     }
@@ -1107,8 +1228,13 @@ mod tests {
         async fn list_ready_issues(&self) -> anyhow::Result<Vec<GitHubIssue>> {
             unimplemented!()
         }
-        async fn get_issue(&self, _: u64) -> anyhow::Result<GitHubIssueDetail> {
-            unimplemented!()
+        async fn get_issue(&self, n: u64) -> anyhow::Result<GitHubIssueDetail> {
+            Ok(GitHubIssueDetail {
+                number: n,
+                title: "Test Issue".to_string(),
+                body: "Test body".to_string(),
+                labels: vec![],
+            })
         }
         async fn is_issue_open(&self, _: u64) -> anyhow::Result<bool> {
             unimplemented!()
@@ -1131,11 +1257,15 @@ mod tests {
         async fn resolve_thread(&self, _: &str) -> anyhow::Result<()> {
             unimplemented!()
         }
-        async fn comment_on_issue(&self, _: u64, _: &str) -> anyhow::Result<()> {
-            unimplemented!()
+        async fn comment_on_issue(&self, issue_number: u64, body: &str) -> anyhow::Result<()> {
+            self.comments
+                .lock()
+                .unwrap()
+                .push((issue_number, body.to_string()));
+            Ok(())
         }
         async fn close_issue(&self, _: u64) -> anyhow::Result<()> {
-            unimplemented!()
+            Ok(())
         }
         async fn get_ci_check_runs(&self, _: u64) -> anyhow::Result<Vec<GitHubCheckRun>> {
             Ok(self.check_runs.clone())
@@ -1148,6 +1278,9 @@ mod tests {
         }
         async fn get_pr_details(&self, _: u64) -> anyhow::Result<GitHubPrDetails> {
             Ok(self.pr_details.clone())
+        }
+        async fn get_pr_status(&self, _: u64) -> anyhow::Result<PrStatus> {
+            Ok(self.pr_status.clone())
         }
     }
 
@@ -1170,8 +1303,8 @@ mod tests {
     }
 
     impl crate::application::port::issue_repository::IssueRepository for MockIssueRepo {
-        async fn find_by_id(&self, _: i64) -> anyhow::Result<Option<Issue>> {
-            unimplemented!()
+        async fn find_by_id(&self, id: i64) -> anyhow::Result<Option<Issue>> {
+            Ok(self.issues.iter().find(|i| i.id == id).cloned())
         }
         async fn find_by_issue_number(&self, _: u64) -> anyhow::Result<Option<Issue>> {
             unimplemented!()
@@ -1180,20 +1313,37 @@ mod tests {
             Ok(self.issues.clone())
         }
         async fn find_needing_process(&self) -> anyhow::Result<Vec<Issue>> {
-            unimplemented!()
+            Ok(self
+                .issues
+                .iter()
+                .filter(|i| i.state.needs_process())
+                .cloned()
+                .collect())
         }
         async fn save(&self, _: &Issue) -> anyhow::Result<i64> {
             unimplemented!()
         }
-        async fn update_state(&self, _: i64, _: State) -> anyhow::Result<()> {
-            unimplemented!()
+        async fn update_state(&self, id: i64, state: State) -> anyhow::Result<()> {
+            if let Some(mut updated_issue) = self.issues.iter().find(|i| i.id == id).cloned() {
+                updated_issue.state = state;
+                self.updated.lock().unwrap().push(updated_issue);
+            }
+            Ok(())
         }
         async fn update(&self, issue: &Issue) -> anyhow::Result<()> {
             self.updated.lock().unwrap().push(issue.clone());
             Ok(())
         }
         async fn reset_for_restart(&self, _: i64) -> anyhow::Result<()> {
-            unimplemented!()
+            Ok(())
+        }
+        async fn find_by_state(&self, state: State) -> anyhow::Result<Vec<Issue>> {
+            Ok(self
+                .issues
+                .iter()
+                .filter(|i| i.state == state)
+                .cloned()
+                .collect())
         }
     }
 
@@ -1227,35 +1377,38 @@ mod tests {
             _: Option<&str>,
             _: &str,
         ) -> anyhow::Result<std::process::Child> {
-            unimplemented!()
+            Err(anyhow::anyhow!("NoopClaudeRunner: spawn not supported"))
         }
     }
 
     struct NoopWorktree;
     impl crate::application::port::git_worktree::GitWorktree for NoopWorktree {
         fn fetch(&self) -> anyhow::Result<()> {
-            unimplemented!()
+            Ok(())
+        }
+        fn exists(&self, _: &Path) -> bool {
+            false
         }
         fn create(&self, _: &Path, _: &str, _: &str) -> anyhow::Result<()> {
-            unimplemented!()
+            Ok(())
         }
         fn remove(&self, _: &Path) -> anyhow::Result<()> {
-            unimplemented!()
+            Ok(())
         }
         fn create_branch(&self, _: &Path, _: &str) -> anyhow::Result<()> {
-            unimplemented!()
+            Ok(())
         }
         fn checkout(&self, _: &Path, _: &str) -> anyhow::Result<()> {
-            unimplemented!()
+            Ok(())
         }
         fn pull(&self, _: &Path) -> anyhow::Result<()> {
-            unimplemented!()
+            Ok(())
         }
         fn push(&self, _: &Path, _: &str) -> anyhow::Result<()> {
-            unimplemented!()
+            Ok(())
         }
         fn delete_branch(&self, _: &str) -> anyhow::Result<()> {
-            unimplemented!()
+            Ok(())
         }
     }
 
@@ -1393,6 +1546,131 @@ mod tests {
         assert!(causes.contains(&FixingProblemKind::Conflict));
         assert!(causes.contains(&FixingProblemKind::ReviewComments));
         assert_eq!(causes.len(), 3);
+    }
+
+    // --- Step7 PR check tests (Task 8.5) ---
+
+    fn design_running_issue_with_pr(pr_num: u64) -> Issue {
+        Issue {
+            id: 1,
+            github_issue_number: 42,
+            state: State::DesignRunning,
+            design_pr_number: Some(pr_num),
+            impl_pr_number: None,
+            worktree_path: Some("/tmp/wt/42".to_string()),
+            retry_count: 0,
+            current_pid: None,
+            error_message: None,
+            feature_name: None,
+            fixing_causes: vec![],
+            model: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn impl_running_issue_with_pr(pr_num: u64) -> Issue {
+        Issue {
+            id: 2,
+            github_issue_number: 43,
+            state: State::ImplementationRunning,
+            design_pr_number: Some(10),
+            impl_pr_number: Some(pr_num),
+            worktree_path: Some("/tmp/wt/43".to_string()),
+            retry_count: 0,
+            current_pid: None,
+            error_message: None,
+            feature_name: None,
+            fixing_causes: vec![],
+            model: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn step7_design_pr_merged_skips_spawn_and_fires_event() {
+        let issue = design_running_issue_with_pr(55);
+        let (repo, updated) = MockIssueRepo::new(vec![issue]);
+        let github = MockGitHub::with_pr_status(false, None, vec![], false, PrStatus::Merged);
+        let mut uc = make_uc(github, repo);
+        uc.step7_spawn_processes().await;
+        // Should have transitioned DesignRunning → DesignReviewWaiting → ImplementationRunning
+        let updates = updated.lock().unwrap();
+        assert!(
+            !updates.is_empty(),
+            "state transition should have been recorded"
+        );
+        // Final state should be ImplementationRunning (or some intermediate state)
+        let states: Vec<State> = updates.iter().map(|u| u.state).collect();
+        assert!(
+            states.contains(&State::DesignReviewWaiting)
+                || states.contains(&State::ImplementationRunning),
+            "should have transitioned through DesignReviewWaiting: {:?}",
+            states
+        );
+    }
+
+    #[tokio::test]
+    async fn step7_design_pr_open_skips_spawn_and_fires_event() {
+        let issue = design_running_issue_with_pr(56);
+        let (repo, updated) = MockIssueRepo::new(vec![issue]);
+        let github = MockGitHub::with_pr_status(false, None, vec![], false, PrStatus::Open);
+        let mut uc = make_uc(github, repo);
+        uc.step7_spawn_processes().await;
+        // Should have fired ProcessCompletedWithPr → DesignReviewWaiting
+        let updates = updated.lock().unwrap();
+        assert!(
+            !updates.is_empty(),
+            "state transition should have been recorded"
+        );
+        let states: Vec<State> = updates.iter().map(|u| u.state).collect();
+        assert!(
+            states.contains(&State::DesignReviewWaiting),
+            "should have transitioned to DesignReviewWaiting: {:?}",
+            states
+        );
+    }
+
+    #[tokio::test]
+    async fn step7_design_pr_closed_does_not_fire_pr_events() {
+        // PR is closed → should attempt normal spawn path (no PR-triggered state changes)
+        let issue = design_running_issue_with_pr(57);
+        let (repo, updated) = MockIssueRepo::new(vec![issue]);
+        let github = MockGitHub::with_pr_status(false, None, vec![], false, PrStatus::Closed);
+        let mut uc = make_uc(github, repo);
+        uc.step7_spawn_processes().await;
+        // No PR-triggered state transitions — spawn may fail (no worktree exists) but that's OK
+        let updates = updated.lock().unwrap();
+        // No ReviewWaiting or ImplementationRunning transitions from PR check
+        assert!(
+            !updates.iter().any(|u| u.state == State::DesignReviewWaiting
+                || u.state == State::ImplementationRunning),
+            "closed PR should not trigger merge transitions: {:?}",
+            updates.iter().map(|u| u.state).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn step7_impl_pr_merged_fires_impl_merged_event() {
+        let issue = impl_running_issue_with_pr(58);
+        let (repo, updated) = MockIssueRepo::new(vec![issue]);
+        let github = MockGitHub::with_pr_status(false, None, vec![], false, PrStatus::Merged);
+        let mut uc = make_uc(github, repo);
+        uc.step7_spawn_processes().await;
+        // Should have transitioned ImplementationRunning → ImplementationReviewWaiting → Completed
+        let updates = updated.lock().unwrap();
+        assert!(
+            !updates.is_empty(),
+            "ImplementationPrMerged transition should be recorded"
+        );
+        let states: Vec<State> = updates.iter().map(|u| u.state).collect();
+        assert!(
+            states.contains(&State::ImplementationReviewWaiting)
+                || states.contains(&State::Completed),
+            "should transition through ImplementationReviewWaiting: {:?}",
+            states
+        );
     }
 
     #[test]

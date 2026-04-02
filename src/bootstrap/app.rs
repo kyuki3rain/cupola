@@ -13,6 +13,7 @@ use crate::adapter::outbound::pid_file_manager::PidFileManager;
 use crate::adapter::outbound::sqlite_connection::SqliteConnection;
 use crate::adapter::outbound::sqlite_execution_log_repository::SqliteExecutionLogRepository;
 use crate::adapter::outbound::sqlite_issue_repository::SqliteIssueRepository;
+use crate::application::cleanup_use_case::CleanupUseCase;
 use crate::application::doctor_use_case::{CheckStatus, DoctorUseCase};
 use crate::application::init_use_case::InitUseCase;
 use crate::application::polling_use_case::PollingUseCase;
@@ -125,6 +126,41 @@ pub async fn run(cli: Cli) -> Result<()> {
 
             if has_failure {
                 return Err(anyhow::anyhow!("doctor checks failed"));
+            }
+            Ok(())
+        }
+
+        Command::Cleanup { config } => {
+            let db_path = config
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("cupola.db");
+            if !db_path.exists() {
+                println!("No database found. Run `cupola init` first.");
+                return Ok(());
+            }
+            let db = SqliteConnection::open(&db_path)?;
+            let issue_repo = SqliteIssueRepository::new(db);
+            let worktree = GitWorktreeManager::new(".");
+            let uc = CleanupUseCase::new(issue_repo, worktree);
+            println!("⚠️  daemon が動作中の場合は停止してから cleanup を実行してください");
+            let result = uc.execute().await?;
+            if result.cleaned.is_empty() {
+                println!("対象の Cancelled Issue が見つかりませんでした");
+            } else {
+                println!(
+                    "cleanup 完了: {} 件の Issue を処理しました",
+                    result.cleaned.len()
+                );
+                for item in &result.cleaned {
+                    println!("  Issue #{}", item.issue_number);
+                    if item.worktree_removed {
+                        println!("    ✓ worktree 削除済み");
+                    }
+                    for branch in &item.branches_removed {
+                        println!("    ✓ ブランチ削除: {branch}");
+                    }
+                }
             }
             Ok(())
         }

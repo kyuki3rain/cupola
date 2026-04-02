@@ -11,7 +11,7 @@ use cupola::application::port::execution_log_repository::ExecutionLogRepository;
 use cupola::application::port::git_worktree::GitWorktree;
 use cupola::application::port::github_client::{
     GitHubCheckRun, GitHubClient, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails,
-    ReviewThread,
+    PrStatus, ReviewThread,
 };
 use cupola::application::port::issue_repository::IssueRepository;
 use cupola::application::transition_use_case::{TransitionUseCase, prioritize_events};
@@ -108,6 +108,13 @@ impl GitHubClient for MockGitHubClient {
             mergeable: Some(true),
         })
     }
+    async fn get_pr_status(&self, pr_number: u64) -> Result<PrStatus> {
+        if self.state.lock().unwrap().merged_prs.contains(&pr_number) {
+            Ok(PrStatus::Merged)
+        } else {
+            Ok(PrStatus::Closed)
+        }
+    }
 }
 
 // === Mock Git Worktree ===
@@ -117,6 +124,9 @@ struct MockGitWorktree;
 impl GitWorktree for MockGitWorktree {
     fn fetch(&self) -> Result<()> {
         Ok(())
+    }
+    fn exists(&self, _p: &Path) -> bool {
+        false
     }
     fn create(&self, _p: &Path, _b: &str, _s: &str) -> Result<()> {
         Ok(())
@@ -949,6 +959,9 @@ impl GitWorktree for TrackingGitWorktree {
         }
         Ok(())
     }
+    fn exists(&self, _p: &Path) -> bool {
+        false
+    }
     fn create(&self, _p: &Path, _b: &str, start_point: &str) -> Result<()> {
         self.call_log
             .lock()
@@ -992,8 +1005,8 @@ async fn initialize_issue_calls_fetch_before_create() {
         config: &config,
     };
 
-    // Issue を Initialized 状態で作成
-    let issue = uc.handle_issue_detected(200).await.expect("detect");
+    // Issue を Initialized 状態で作成（worktree が存在しない番号を使用）
+    let issue = uc.handle_issue_detected(99998).await.expect("detect");
     assert_eq!(issue.state, State::Initialized);
 
     // step2_initialized_recovery を通じて initialize_issue が呼ばれる
@@ -1032,7 +1045,8 @@ async fn initialize_issue_uses_remote_default_branch_as_start_point() {
         config: &config,
     };
 
-    let _issue = uc.handle_issue_detected(201).await.expect("detect");
+    // worktree が存在しない番号を使用
+    let _issue = uc.handle_issue_detected(99997).await.expect("detect");
 
     let exec_log = MockExecutionLogRepository;
     let claude_runner = MockClaudeCodeRunner;
