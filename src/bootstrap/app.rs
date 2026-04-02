@@ -143,6 +143,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             let issue_repo = SqliteIssueRepository::new(db);
             let worktree = GitWorktreeManager::new(".");
             let uc = CleanupUseCase::new(issue_repo, worktree);
+            println!("⚠️  daemon が動作中の場合は停止してから cleanup を実行してください");
             let result = uc.execute().await?;
             result.print_summary();
             Ok(())

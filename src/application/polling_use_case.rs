@@ -258,6 +258,12 @@ where
         if self.worktree.exists(wt) {
             // worktree が既に存在する場合は再作成をスキップし、再開メッセージを投稿する
             tracing::info!(issue_number = n, worktree = %wt_path, "worktree already exists, reusing");
+            // cleanup が部分失敗して worktree_path が None のまま worktree が残った場合に自己修復する
+            if issue.worktree_path.is_none() {
+                tracing::info!(issue_number = n, worktree = %wt_path, "self-healing: worktree_path was None, restoring from filesystem");
+                issue.worktree_path = Some(wt_path.clone());
+                self.issue_repo.update(issue).await?;
+            }
             let comment_key = if issue.impl_pr_number.is_some() {
                 "issue_comment.resuming_implementation"
             } else {
@@ -605,12 +611,23 @@ where
                         );
                         let uc = self.transition_uc();
                         let mut issue_mut = issue.clone();
-                        if let Ok(()) = uc
+                        if let Err(e) = uc
                             .apply(&mut issue_mut, &Event::ProcessCompletedWithPr)
                             .await
-                            .map(|_| ())
                         {
-                            let _ = uc.apply(&mut issue_mut, &merge_event).await;
+                            tracing::warn!(
+                                issue_id = issue.id,
+                                pr_number = pr_num,
+                                error = %e,
+                                "failed to apply ProcessCompletedWithPr event during merge transition"
+                            );
+                        } else if let Err(e) = uc.apply(&mut issue_mut, &merge_event).await {
+                            tracing::warn!(
+                                issue_id = issue.id,
+                                pr_number = pr_num,
+                                error = %e,
+                                "failed to apply merge event during merge transition"
+                            );
                         }
                         continue;
                     }
@@ -622,9 +639,17 @@ where
                         );
                         let uc = self.transition_uc();
                         let mut issue_mut = issue.clone();
-                        let _ = uc
+                        if let Err(e) = uc
                             .apply(&mut issue_mut, &Event::ProcessCompletedWithPr)
-                            .await;
+                            .await
+                        {
+                            tracing::warn!(
+                                issue_id = issue.id,
+                                pr_number = pr_num,
+                                error = %e,
+                                "failed to apply ProcessCompletedWithPr event for open PR"
+                            );
+                        }
                         continue;
                     }
                     Ok(PrStatus::Closed) => {

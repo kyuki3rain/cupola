@@ -30,8 +30,6 @@ impl<I: IssueRepository, W: GitWorktree> CleanupUseCase<I, W> {
     }
 
     pub async fn execute(&self) -> Result<CleanupResult> {
-        println!("⚠️  daemon が動作中の場合は停止してから cleanup を実行してください");
-
         let cancelled_issues = self.issue_repo.find_by_state(State::Cancelled).await?;
 
         if cancelled_issues.is_empty() {
@@ -96,12 +94,47 @@ impl<I: IssueRepository, W: GitWorktree> CleanupUseCase<I, W> {
         }
 
         // 3. DB フィールドの NULL 化
+        // worktree が残ったまま参照だけ失うと復旧不能になるため、
+        // worktree_path は worktree が存在しないことが確認できた場合にのみ消す。
+        let can_cleanup_metadata = match &issue.worktree_path {
+            None => true,
+            Some(wt_path) => {
+                let path = Path::new(wt_path);
+                if !path.exists() {
+                    true
+                } else {
+                    // パスが存在するので、削除に成功した場合のみクリーンアップする
+                    worktree_removed
+                }
+            }
+        };
+
         let mut updated = issue.clone();
-        updated.worktree_path = None;
-        updated.design_pr_number = None;
-        updated.impl_pr_number = None;
-        updated.feature_name = None;
-        self.issue_repo.update(&updated).await?;
+        let mut need_update = false;
+
+        if can_cleanup_metadata {
+            if updated.worktree_path.take().is_some() {
+                need_update = true;
+            }
+            if updated.design_pr_number.take().is_some() {
+                need_update = true;
+            }
+            if updated.impl_pr_number.take().is_some() {
+                need_update = true;
+            }
+            if updated.feature_name.take().is_some() {
+                need_update = true;
+            }
+        } else {
+            tracing::warn!(
+                issue_number = n,
+                "worktree removal failed; skipping metadata cleanup to avoid unrecoverable state"
+            );
+        }
+
+        if need_update {
+            self.issue_repo.update(&updated).await?;
+        }
 
         Ok(CleanedIssue {
             issue_number: n,
@@ -281,18 +314,23 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_removes_worktree_and_branches_for_cancelled_issue() {
-        // Use a path that doesn't exist so worktree.remove isn't actually called on filesystem
-        // Instead we test that the mock records the call
-        let wt_path = "/nonexistent/path/42";
-        let issue = cancelled_issue_with_wt(1, 42, wt_path);
+        // 実在するディレクトリを作成して worktree.remove() が呼ばれることを検証する
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let wt_path = tmp.path().to_string_lossy().to_string();
+        let issue = cancelled_issue_with_wt(1, 42, &wt_path);
         let (repo, updated) = MockIssueRepo::new(vec![issue]);
-        let (worktree, _removed, deleted) = MockWorktree::new();
+        let (worktree, removed, deleted) = MockWorktree::new();
 
         let uc = CleanupUseCase::new(repo, worktree);
         let result = uc.execute().await.expect("execute");
 
         assert_eq!(result.cleaned.len(), 1);
         assert_eq!(result.cleaned[0].issue_number, 42);
+        assert!(result.cleaned[0].worktree_removed);
+
+        // worktree.remove() が呼ばれていること
+        let removed_paths = removed.lock().unwrap();
+        assert!(removed_paths.contains(&wt_path));
 
         // Branches should be deleted
         let branches = deleted.lock().unwrap();
@@ -335,18 +373,23 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_continues_on_worktree_remove_failure() {
-        let wt_path = "/nonexistent/42";
-        let issue = cancelled_issue_with_wt(1, 42, wt_path);
+        // 実在するパスを使い、fail_remove=true でworktree 削除を確実に失敗させる
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let wt_path = tmp.path().to_string_lossy().to_string();
+        let issue = cancelled_issue_with_wt(1, 42, &wt_path);
         let (repo, updated) = MockIssueRepo::new(vec![issue]);
-        // Use a worktree that fails on remove — but the path doesn't exist anyway
-        let (worktree, _, deleted) = MockWorktree::new();
+        let (mut worktree, _, deleted) = MockWorktree::new();
+        worktree.fail_remove = true;
 
         let uc = CleanupUseCase::new(repo, worktree);
         let result = uc.execute().await.expect("execute");
 
-        // Should still succeed and clean up branches + DB
+        // worktree 削除失敗でも処理は継続し、ブランチは削除される
         assert_eq!(result.cleaned.len(), 1);
-        assert!(deleted.lock().unwrap().len() == 2);
-        assert_eq!(updated.lock().unwrap().len(), 1);
+        assert!(!result.cleaned[0].worktree_removed);
+        assert_eq!(deleted.lock().unwrap().len(), 2);
+
+        // worktree が残っているため、メタデータは更新されない
+        assert_eq!(updated.lock().unwrap().len(), 0);
     }
 }
