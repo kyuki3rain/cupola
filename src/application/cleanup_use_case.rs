@@ -223,6 +223,9 @@ mod tests {
         fn fetch(&self) -> Result<()> {
             Ok(())
         }
+        fn exists(&self, _: &Path) -> bool {
+            false
+        }
         fn create(&self, _: &Path, _: &str, _: &str) -> Result<()> {
             Ok(())
         }

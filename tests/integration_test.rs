@@ -122,6 +122,9 @@ impl GitWorktree for MockGitWorktree {
     fn fetch(&self) -> Result<()> {
         Ok(())
     }
+    fn exists(&self, _p: &Path) -> bool {
+        false
+    }
     fn create(&self, _p: &Path, _b: &str, _s: &str) -> Result<()> {
         Ok(())
     }
@@ -952,6 +955,9 @@ impl GitWorktree for TrackingGitWorktree {
             anyhow::bail!("fetch failed: network error");
         }
         Ok(())
+    }
+    fn exists(&self, _p: &Path) -> bool {
+        false
     }
     fn create(&self, _p: &Path, _b: &str, start_point: &str) -> Result<()> {
         self.call_log

@@ -255,7 +255,7 @@ where
         self.worktree.fetch()?;
 
         let wt = Path::new(&wt_path);
-        if wt.exists() {
+        if self.worktree.exists(wt) {
             // worktree が既に存在する場合は再作成をスキップし、再開メッセージを投稿する
             tracing::info!(issue_number = n, worktree = %wt_path, "worktree already exists, reusing");
             let comment_key = if issue.impl_pr_number.is_some() {
@@ -1298,6 +1298,9 @@ mod tests {
     impl crate::application::port::git_worktree::GitWorktree for NoopWorktree {
         fn fetch(&self) -> anyhow::Result<()> {
             Ok(())
+        }
+        fn exists(&self, _: &Path) -> bool {
+            false
         }
         fn create(&self, _: &Path, _: &str, _: &str) -> anyhow::Result<()> {
             Ok(())
