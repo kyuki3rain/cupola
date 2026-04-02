@@ -129,6 +129,101 @@ pub async fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
 
+        Command::Logs { config, follow } => {
+            let toml = load_toml(&config)
+                .with_context(|| format!("failed to load config from {}", config.display()))?;
+            let overrides = CliOverrides {
+                polling_interval_secs: None,
+                log_level: None,
+            };
+            let cfg = toml.into_config(&overrides);
+
+            let log_dir = match cfg.log_dir {
+                Some(dir) => dir,
+                None => {
+                    println!("log.dir is not configured in cupola.toml");
+                    return Ok(());
+                }
+            };
+
+            if !log_dir.exists() {
+                println!("Log directory not found: {}", log_dir.display());
+                return Ok(());
+            }
+
+            // Find the latest log file
+            let mut entries: Vec<_> = std::fs::read_dir(&log_dir)
+                .with_context(|| format!("failed to read log directory: {}", log_dir.display()))?
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+                .collect();
+
+            if entries.is_empty() {
+                println!("No log files found in {}", log_dir.display());
+                return Ok(());
+            }
+
+            entries.sort_by_key(|e| e.file_name());
+            let latest = entries.last().expect("entries is non-empty");
+            let log_path = latest.path();
+
+            if follow {
+                // tail -f equivalent
+                use std::io::{BufRead, BufReader, Seek, SeekFrom};
+
+                let mut file = std::fs::File::open(&log_path)
+                    .with_context(|| format!("failed to open {}", log_path.display()))?;
+
+                // Start from end of file
+                file.seek(SeekFrom::End(0))?;
+                let mut reader = BufReader::new(file);
+                let mut line = String::new();
+
+                loop {
+                    match reader.read_line(&mut line) {
+                        Ok(0) => {
+                            // No new data, wait briefly
+                            std::thread::sleep(Duration::from_millis(200));
+
+                            // Check if a newer log file appeared (rotation)
+                            let mut current_entries: Vec<_> = std::fs::read_dir(&log_dir)
+                                .ok()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|e| e.ok())
+                                .filter(|e| {
+                                    e.file_type().map(|ft| ft.is_file()).unwrap_or(false)
+                                })
+                                .collect();
+                            current_entries.sort_by_key(|e| e.file_name());
+                            if let Some(newest) = current_entries.last().filter(|e| e.path() != log_path) {
+                                // Log rotated — switch to new file
+                                let new_file = std::fs::File::open(newest.path())?;
+                                reader = BufReader::new(new_file);
+                            }
+                        }
+                        Ok(_) => {
+                            print!("{line}");
+                            line.clear();
+                        }
+                        Err(e) => {
+                            return Err(anyhow::anyhow!("failed to read log: {e}"));
+                        }
+                    }
+                }
+            } else {
+                // Show last 20 lines
+                let content = std::fs::read_to_string(&log_path)
+                    .with_context(|| format!("failed to read {}", log_path.display()))?;
+                let lines: Vec<&str> = content.lines().collect();
+                let start = lines.len().saturating_sub(20);
+                for line in &lines[start..] {
+                    println!("{line}");
+                }
+                Ok(())
+            }
+        }
+
         Command::Status => {
             let db_path = Path::new(".cupola/cupola.db");
             if !db_path.exists() {

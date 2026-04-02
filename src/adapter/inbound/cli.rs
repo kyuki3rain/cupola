@@ -53,6 +53,16 @@ pub enum Command {
         #[arg(long, default_value = ".cupola/cupola.toml")]
         config: PathBuf,
     },
+    /// Show log file contents
+    Logs {
+        /// Config file path
+        #[arg(long, default_value = ".cupola/cupola.toml")]
+        config: PathBuf,
+
+        /// Follow log output in real-time (like tail -f)
+        #[arg(short = 'f', long)]
+        follow: bool,
+    },
 }
 
 #[cfg(test)]
@@ -184,6 +194,40 @@ mod tests {
                 assert_eq!(config, PathBuf::from("/custom/path.toml"));
             }
             _ => panic!("expected Doctor command"),
+        }
+    }
+
+    #[test]
+    fn parse_logs_with_defaults() {
+        let cli = Cli::parse_from(["cupola", "logs"]);
+        match cli.command {
+            Command::Logs { config, follow } => {
+                assert_eq!(config, PathBuf::from(".cupola/cupola.toml"));
+                assert!(!follow);
+            }
+            _ => panic!("expected Logs command"),
+        }
+    }
+
+    #[test]
+    fn parse_logs_with_follow_short() {
+        let cli = Cli::parse_from(["cupola", "logs", "-f"]);
+        match cli.command {
+            Command::Logs { follow, .. } => {
+                assert!(follow);
+            }
+            _ => panic!("expected Logs command"),
+        }
+    }
+
+    #[test]
+    fn parse_logs_with_follow_long() {
+        let cli = Cli::parse_from(["cupola", "logs", "--follow"]);
+        match cli.command {
+            Command::Logs { follow, .. } => {
+                assert!(follow);
+            }
+            _ => panic!("expected Logs command"),
         }
     }
 
