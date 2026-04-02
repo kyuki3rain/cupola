@@ -126,6 +126,10 @@ pub trait GitHubClient: Send + Sync {
         pr_number: u64,
     ) -> impl std::future::Future<Output = Result<Vec<GitHubCheckRun>>> + Send;
 
+    /// CI job のログを取得する。check-run ID を job ID として使用。
+    fn get_job_logs(&self, job_id: u64)
+    -> impl std::future::Future<Output = Result<String>> + Send;
+
     /// PR の mergeable フィールドを取得する。None は GitHub が計算中を意味する。
     fn get_pr_mergeable(
         &self,
