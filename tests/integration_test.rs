@@ -96,6 +96,9 @@ impl GitHubClient for MockGitHubClient {
     async fn get_ci_check_runs(&self, _pr_number: u64) -> Result<Vec<GitHubCheckRun>> {
         Ok(vec![])
     }
+    async fn get_job_logs(&self, _job_id: u64) -> Result<String> {
+        Ok(String::new())
+    }
     async fn get_pr_mergeable(&self, _pr_number: u64) -> Result<Option<bool>> {
         Ok(Some(true))
     }

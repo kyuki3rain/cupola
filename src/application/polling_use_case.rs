@@ -661,16 +661,29 @@ where
 
                     if causes.contains(&FixingProblemKind::CiFailure) {
                         let runs = self.github.get_ci_check_runs(pr_num).await?;
-                        let errors: Vec<CiErrorEntry> = runs
+                        let mut errors: Vec<CiErrorEntry> = Vec::new();
+                        for r in runs
                             .into_iter()
                             .filter(|r| r.conclusion.as_deref() == Some("failure"))
-                            .map(|r| CiErrorEntry {
+                        {
+                            let log_lines = match self.github.get_job_logs(r.id).await {
+                                Ok(logs) => extract_error_lines(&logs),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        job_id = r.id,
+                                        error = %e,
+                                        "failed to get job logs, falling back to output fields"
+                                    );
+                                    None
+                                }
+                            };
+                            errors.push(CiErrorEntry {
                                 check_run_name: r.name,
                                 conclusion: r.conclusion.unwrap_or_default(),
                                 output_summary: r.output_summary,
-                                output_text: r.output_text,
-                            })
-                            .collect();
+                                output_text: log_lines.or(r.output_text),
+                            });
+                        }
                         write_ci_errors_input(wt, &errors)?;
                     }
 
@@ -952,6 +965,52 @@ where
     }
 }
 
+/// Extract error lines from raw CI job logs.
+/// Strips ANSI SGR color codes, filters for error-related lines, and removes timestamp prefixes.
+fn extract_error_lines(raw_log: &str) -> Option<String> {
+    let lines: Vec<String> = raw_log
+        .lines()
+        .map(strip_ansi)
+        .filter(|clean| {
+            (clean.contains("error:") || clean.contains("error[") || clean.contains("##[error]"))
+                && !clean.contains("curl")
+                && !clean.contains("spurious")
+        })
+        .map(|clean| {
+            // Strip timestamp prefix (e.g., "2026-04-02T10:53:01.0418115Z ")
+            if let Some(pos) = clean.find(' ').filter(|&p| p > 20) {
+                return clean[pos + 1..].to_string();
+            }
+            clean
+        })
+        .collect();
+
+    if lines.is_empty() {
+        return None;
+    }
+
+    Some(lines.join("\n"))
+}
+
+/// Strip ANSI SGR escape sequences (e.g., color codes like `\x1b[31m`) from a string.
+/// Only handles sequences ending with 'm'; other escape sequences are not stripped.
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            for c2 in chars.by_ref() {
+                if c2 == 'm' {
+                    break;
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1080,6 +1139,9 @@ mod tests {
         }
         async fn get_ci_check_runs(&self, _: u64) -> anyhow::Result<Vec<GitHubCheckRun>> {
             Ok(self.check_runs.clone())
+        }
+        async fn get_job_logs(&self, _: u64) -> anyhow::Result<String> {
+            Ok(String::new())
         }
         async fn get_pr_mergeable(&self, _: u64) -> anyhow::Result<Option<bool>> {
             Ok(self.pr_details.mergeable)
@@ -1331,5 +1393,41 @@ mod tests {
         assert!(causes.contains(&FixingProblemKind::Conflict));
         assert!(causes.contains(&FixingProblemKind::ReviewComments));
         assert_eq!(causes.len(), 3);
+    }
+
+    #[test]
+    fn strip_ansi_removes_color_codes() {
+        assert_eq!(
+            strip_ansi("\x1b[1m\x1b[91merror\x1b[0m: something"),
+            "error: something"
+        );
+        assert_eq!(strip_ansi("no ansi here"), "no ansi here");
+        assert_eq!(strip_ansi(""), "");
+    }
+
+    #[test]
+    fn extract_error_lines_filters_errors() {
+        let log = "2026-04-02T10:52:58.0Z \x1b[92mChecking\x1b[0m cupola\n\
+                   2026-04-02T10:53:01.0418115Z \x1b[91merror\x1b[0m: very complex type used\n\
+                   2026-04-02T10:53:01.6Z \x1b[91merror\x1b[0m: could not compile\n\
+                   2026-04-02T10:53:01.7Z some other line\n";
+        let result = extract_error_lines(log).unwrap();
+        assert!(result.contains("error: very complex type used"));
+        assert!(result.contains("error: could not compile"));
+        assert!(!result.contains("Checking"));
+        assert!(!result.contains("some other line"));
+    }
+
+    #[test]
+    fn extract_error_lines_returns_none_for_no_errors() {
+        let log = "2026-04-02T10:52:58.0Z Checking cupola\n2026-04-02T10:53:00.0Z Finished\n";
+        assert!(extract_error_lines(log).is_none());
+    }
+
+    #[test]
+    fn extract_error_lines_strips_timestamps() {
+        let log = "2026-04-02T10:53:01.0418115Z error: something wrong\n";
+        let result = extract_error_lines(log).unwrap();
+        assert_eq!(result, "error: something wrong");
     }
 }
