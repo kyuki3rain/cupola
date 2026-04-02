@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use octocrab::Octocrab;
 
 use crate::application::port::github_client::{
-    GitHubCheckRun, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails,
+    GitHubCheckRun, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails, PrStatus,
 };
 
 pub struct OctocrabRestClient {
@@ -254,5 +254,22 @@ impl OctocrabRestClient {
             .with_context(|| format!("failed to close issue #{issue_number}"))?;
 
         Ok(())
+    }
+
+    pub async fn get_pr_status(&self, pr_number: u64) -> Result<PrStatus> {
+        let pr = self
+            .octocrab
+            .pulls(&self.owner, &self.repo)
+            .get(pr_number)
+            .await
+            .with_context(|| format!("failed to get PR #{pr_number} status"))?;
+
+        if pr.merged_at.is_some() {
+            Ok(PrStatus::Merged)
+        } else if pr.state == Some(octocrab::models::IssueState::Open) {
+            Ok(PrStatus::Open)
+        } else {
+            Ok(PrStatus::Closed)
+        }
     }
 }

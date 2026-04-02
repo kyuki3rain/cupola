@@ -213,13 +213,9 @@ impl IssueRepository for SqliteIssueRepository {
             conn.execute(
                 "UPDATE issues
                  SET state = 'idle',
-                     design_pr_number = NULL,
-                     impl_pr_number = NULL,
-                     worktree_path = NULL,
                      retry_count = 0,
                      current_pid = NULL,
                      error_message = NULL,
-                     feature_name = NULL,
                      model = NULL,
                      updated_at = datetime('now')
                  WHERE id = ?1",
@@ -227,6 +223,30 @@ impl IssueRepository for SqliteIssueRepository {
             )
             .context("reset_for_restart failed")?;
             Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+    }
+
+    async fn find_by_state(&self, state: State) -> Result<Vec<Issue>> {
+        let db = self.db.clone();
+        let state_str = state_to_str(&state).to_string();
+        tokio::task::spawn_blocking(move || {
+            let conn = db
+                .conn()
+                .lock()
+                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
+            let mut stmt = conn.prepare(
+                "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
+                        worktree_path, retry_count, current_pid, error_message, feature_name, model,
+                        fixing_causes, created_at, updated_at
+                 FROM issues WHERE state = ?1",
+            )?;
+            let issues = stmt
+                .query_map([state_str], row_to_issue)?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .context("find_by_state query failed")?;
+            Ok(issues)
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
@@ -429,7 +449,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reset_for_restart() {
+    async fn reset_for_restart_clears_transient_fields() {
         let (_db, repo) = setup();
         let id = repo.save(&new_issue(70)).await.expect("save");
 
@@ -440,12 +460,79 @@ mod tests {
 
         let found = repo.find_by_id(id).await.expect("find").expect("exists");
         assert_eq!(found.state, State::Idle);
-        assert!(found.design_pr_number.is_none());
-        assert!(found.impl_pr_number.is_none());
-        assert!(found.worktree_path.is_none());
         assert_eq!(found.retry_count, 0);
         assert!(found.current_pid.is_none());
         assert!(found.error_message.is_none());
+    }
+
+    #[tokio::test]
+    async fn reset_for_restart_preserves_resource_fields() {
+        let (_db, repo) = setup();
+        let id = repo.save(&new_issue(71)).await.expect("save");
+
+        // Set resource fields before cancelling
+        let mut issue = repo.find_by_id(id).await.expect("find").expect("exists");
+        issue.state = State::Cancelled;
+        issue.design_pr_number = Some(42);
+        issue.impl_pr_number = Some(99);
+        issue.worktree_path = Some("/tmp/worktrees/71".to_string());
+        issue.feature_name = Some("my-feature".to_string());
+        issue.retry_count = 3;
+        issue.error_message = Some("some error".to_string());
+        repo.update(&issue).await.expect("update");
+
+        repo.reset_for_restart(id).await.expect("reset");
+
+        let found = repo.find_by_id(id).await.expect("find").expect("exists");
+        // Transient fields reset
+        assert_eq!(found.state, State::Idle);
+        assert_eq!(found.retry_count, 0);
+        assert!(found.error_message.is_none());
+        // Resource fields preserved
+        assert_eq!(found.design_pr_number, Some(42));
+        assert_eq!(found.impl_pr_number, Some(99));
+        assert_eq!(found.worktree_path.as_deref(), Some("/tmp/worktrees/71"));
+        assert_eq!(found.feature_name.as_deref(), Some("my-feature"));
+    }
+
+    #[tokio::test]
+    async fn find_by_state_returns_only_matching() {
+        let (_db, repo) = setup();
+        let id1 = repo.save(&new_issue(100)).await.expect("save");
+        let id2 = repo.save(&new_issue(101)).await.expect("save");
+        let id3 = repo.save(&new_issue(102)).await.expect("save");
+
+        repo.update_state(id1, State::Cancelled)
+            .await
+            .expect("update");
+        repo.update_state(id2, State::Cancelled)
+            .await
+            .expect("update");
+        repo.update_state(id3, State::Completed)
+            .await
+            .expect("update");
+
+        let cancelled = repo
+            .find_by_state(State::Cancelled)
+            .await
+            .expect("find_by_state");
+        assert_eq!(cancelled.len(), 2);
+        let numbers: Vec<u64> = cancelled.iter().map(|i| i.github_issue_number).collect();
+        assert!(numbers.contains(&100));
+        assert!(numbers.contains(&101));
+        assert!(!numbers.contains(&102));
+    }
+
+    #[tokio::test]
+    async fn find_by_state_returns_empty_when_none_match() {
+        let (_db, repo) = setup();
+        repo.save(&new_issue(200)).await.expect("save");
+
+        let cancelled = repo
+            .find_by_state(State::Cancelled)
+            .await
+            .expect("find_by_state");
+        assert!(cancelled.is_empty());
     }
 
     #[tokio::test]

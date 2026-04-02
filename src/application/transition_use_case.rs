@@ -168,8 +168,8 @@ impl<G: GitHubClient, I: IssueRepository, W: GitWorktree> TransitionUseCase<'_, 
                     count = issue.retry_count,
                     error = issue.error_message.as_deref().unwrap_or(&unknown)
                 );
+                // worktree・ブランチは保持する（reopen 時に再利用可能）
                 let _ = self.github.close_issue(issue.github_issue_number).await;
-                self.cleanup(issue).await;
                 let _ = self
                     .github
                     .comment_on_issue(issue.github_issue_number, &msg)

@@ -13,6 +13,7 @@ use crate::adapter::outbound::pid_file_manager::PidFileManager;
 use crate::adapter::outbound::sqlite_connection::SqliteConnection;
 use crate::adapter::outbound::sqlite_execution_log_repository::SqliteExecutionLogRepository;
 use crate::adapter::outbound::sqlite_issue_repository::SqliteIssueRepository;
+use crate::application::cleanup_use_case::CleanupUseCase;
 use crate::application::doctor_use_case::{CheckStatus, DoctorUseCase};
 use crate::application::init_use_case::InitUseCase;
 use crate::application::polling_use_case::PollingUseCase;
@@ -126,6 +127,24 @@ pub async fn run(cli: Cli) -> Result<()> {
             if has_failure {
                 return Err(anyhow::anyhow!("doctor checks failed"));
             }
+            Ok(())
+        }
+
+        Command::Cleanup { config } => {
+            let db_path = config
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("cupola.db");
+            if !db_path.exists() {
+                println!("No database found. Run `cupola init` first.");
+                return Ok(());
+            }
+            let db = SqliteConnection::open(&db_path)?;
+            let issue_repo = SqliteIssueRepository::new(db);
+            let worktree = GitWorktreeManager::new(".");
+            let uc = CleanupUseCase::new(issue_repo, worktree);
+            let result = uc.execute().await?;
+            result.print_summary();
             Ok(())
         }
 

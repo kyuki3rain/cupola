@@ -1,6 +1,8 @@
 issue_comment:
   design_starting: "設計を開始します"
   implementation_starting: "実装を開始します"
+  resuming_design: "設計を再開します"
+  resuming_implementation: "実装を再開します"
   all_completed: "全工程が完了しました"
   cleanup_done: "cleanup を実行しました"
   retry_exhausted: "リトライ上限に到達しました（%{count} 回）。cleanup を実行しました。\n\nエラー: %{error}"

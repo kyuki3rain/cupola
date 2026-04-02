@@ -53,6 +53,12 @@ pub enum Command {
         #[arg(long, default_value = ".cupola/cupola.toml")]
         config: PathBuf,
     },
+    /// Remove worktrees and branches associated with Cancelled issues
+    Cleanup {
+        /// Config file path (default: .cupola/cupola.toml)
+        #[arg(long, default_value = ".cupola/cupola.toml")]
+        config: PathBuf,
+    },
 }
 
 #[cfg(test)]
@@ -184,6 +190,28 @@ mod tests {
                 assert_eq!(config, PathBuf::from("/custom/path.toml"));
             }
             _ => panic!("expected Doctor command"),
+        }
+    }
+
+    #[test]
+    fn parse_cleanup_with_defaults() {
+        let cli = Cli::parse_from(["cupola", "cleanup"]);
+        match cli.command {
+            Command::Cleanup { config } => {
+                assert_eq!(config, PathBuf::from(".cupola/cupola.toml"));
+            }
+            _ => panic!("expected Cleanup command"),
+        }
+    }
+
+    #[test]
+    fn parse_cleanup_with_custom_config() {
+        let cli = Cli::parse_from(["cupola", "cleanup", "--config", "/custom/path.toml"]);
+        match cli.command {
+            Command::Cleanup { config } => {
+                assert_eq!(config, PathBuf::from("/custom/path.toml"));
+            }
+            _ => panic!("expected Cleanup command"),
         }
     }
 

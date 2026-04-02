@@ -1,5 +1,12 @@
 use anyhow::Result;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrStatus {
+    Open,
+    Closed,
+    Merged,
+}
+
 #[derive(Debug, Clone)]
 pub struct GitHubCheckRun {
     pub id: u64,
@@ -130,4 +137,10 @@ pub trait GitHubClient: Send + Sync {
         &self,
         pr_number: u64,
     ) -> impl std::future::Future<Output = Result<GitHubPrDetails>> + Send;
+
+    /// PR の三状態（Open/Closed/Merged）を取得する。
+    fn get_pr_status(
+        &self,
+        pr_number: u64,
+    ) -> impl std::future::Future<Output = Result<PrStatus>> + Send;
 }
