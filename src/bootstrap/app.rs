@@ -141,9 +141,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             let log_dir = match cfg.log_dir {
                 Some(dir) => dir,
                 None => {
-                    return Err(anyhow::anyhow!(
-                        "log.dir is not configured in cupola.toml"
-                    ));
+                    return Err(anyhow::anyhow!("log.dir is not configured in cupola.toml"));
                 }
             };
 
@@ -155,25 +153,23 @@ pub async fn run(cli: Cli) -> Result<()> {
             }
 
             // Find the latest cupola log file
-            let find_latest_log =
-                |dir: &Path| -> Option<std::path::PathBuf> {
-                    let mut entries: Vec<_> = std::fs::read_dir(dir)
-                        .ok()?
-                        .filter_map(|e| e.ok())
-                        .filter(|e| {
-                            e.file_type().map(|ft| ft.is_file()).unwrap_or(false)
-                                && e.file_name()
-                                    .to_str()
-                                    .is_some_and(|n| n.starts_with("cupola."))
-                        })
-                        .collect();
-                    entries.sort_by_key(|e| e.file_name());
-                    entries.last().map(|e| e.path())
-                };
+            let find_latest_log = |dir: &Path| -> Option<std::path::PathBuf> {
+                let mut entries: Vec<_> = std::fs::read_dir(dir)
+                    .ok()?
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        e.file_type().map(|ft| ft.is_file()).unwrap_or(false)
+                            && e.file_name()
+                                .to_str()
+                                .is_some_and(|n| n.starts_with("cupola."))
+                    })
+                    .collect();
+                entries.sort_by_key(|e| e.file_name());
+                entries.last().map(|e| e.path())
+            };
 
-            let log_path = find_latest_log(&log_dir).ok_or_else(|| {
-                anyhow::anyhow!("No log files found in {}", log_dir.display())
-            })?;
+            let log_path = find_latest_log(&log_dir)
+                .ok_or_else(|| anyhow::anyhow!("No log files found in {}", log_dir.display()))?;
 
             if follow {
                 // tail -f equivalent (blocking — runs in dedicated thread)
@@ -183,9 +179,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
                     let mut current_path = log_path;
                     let mut file = std::fs::File::open(&current_path)
-                        .with_context(|| {
-                            format!("failed to open {}", current_path.display())
-                        })?;
+                        .with_context(|| format!("failed to open {}", current_path.display()))?;
                     file.seek(SeekFrom::End(0))?;
                     let mut reader = BufReader::new(file);
                     let mut line = String::new();
@@ -196,7 +190,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                                 std::thread::sleep(Duration::from_millis(200));
 
                                 // Check for log rotation
-                                if let Some(newest) = find_latest_log(&log_dir_clone).filter(|p| *p != current_path) {
+                                if let Some(newest) =
+                                    find_latest_log(&log_dir_clone).filter(|p| *p != current_path)
+                                {
                                     let new_file = std::fs::File::open(&newest)?;
                                     reader = BufReader::new(new_file);
                                     current_path = newest;
@@ -216,8 +212,8 @@ pub async fn run(cli: Cli) -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("log follow task failed: {e}"))?
             } else {
                 // Show last 20 lines using BufRead (memory efficient)
-                use std::io::{BufRead, BufReader};
                 use std::collections::VecDeque;
+                use std::io::{BufRead, BufReader};
 
                 let file = std::fs::File::open(&log_path)
                     .with_context(|| format!("failed to open {}", log_path.display()))?;
@@ -225,9 +221,8 @@ pub async fn run(cli: Cli) -> Result<()> {
                 let mut tail: VecDeque<String> = VecDeque::with_capacity(21);
 
                 for line in reader.lines() {
-                    let line = line.with_context(|| {
-                        format!("failed to read {}", log_path.display())
-                    })?;
+                    let line =
+                        line.with_context(|| format!("failed to read {}", log_path.display()))?;
                     if tail.len() == 20 {
                         tail.pop_front();
                     }
