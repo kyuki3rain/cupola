@@ -141,83 +141,100 @@ pub async fn run(cli: Cli) -> Result<()> {
             let log_dir = match cfg.log_dir {
                 Some(dir) => dir,
                 None => {
-                    println!("log.dir is not configured in cupola.toml");
-                    return Ok(());
+                    return Err(anyhow::anyhow!(
+                        "log.dir is not configured in cupola.toml"
+                    ));
                 }
             };
 
             if !log_dir.exists() {
-                println!("Log directory not found: {}", log_dir.display());
-                return Ok(());
+                return Err(anyhow::anyhow!(
+                    "Log directory not found: {}",
+                    log_dir.display()
+                ));
             }
 
-            // Find the latest log file
-            let mut entries: Vec<_> = std::fs::read_dir(&log_dir)
-                .with_context(|| format!("failed to read log directory: {}", log_dir.display()))?
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
-                .collect();
+            // Find the latest cupola log file
+            let find_latest_log =
+                |dir: &Path| -> Option<std::path::PathBuf> {
+                    let mut entries: Vec<_> = std::fs::read_dir(dir)
+                        .ok()?
+                        .filter_map(|e| e.ok())
+                        .filter(|e| {
+                            e.file_type().map(|ft| ft.is_file()).unwrap_or(false)
+                                && e.file_name()
+                                    .to_str()
+                                    .is_some_and(|n| n.starts_with("cupola."))
+                        })
+                        .collect();
+                    entries.sort_by_key(|e| e.file_name());
+                    entries.last().map(|e| e.path())
+                };
 
-            if entries.is_empty() {
-                println!("No log files found in {}", log_dir.display());
-                return Ok(());
-            }
-
-            entries.sort_by_key(|e| e.file_name());
-            let latest = entries.last().expect("entries is non-empty");
-            let log_path = latest.path();
+            let log_path = find_latest_log(&log_dir).ok_or_else(|| {
+                anyhow::anyhow!("No log files found in {}", log_dir.display())
+            })?;
 
             if follow {
-                // tail -f equivalent
+                // tail -f equivalent (blocking — runs in dedicated thread)
                 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 
-                let mut file = std::fs::File::open(&log_path)
-                    .with_context(|| format!("failed to open {}", log_path.display()))?;
+                let log_dir_clone = log_dir.clone();
+                tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                    let mut current_path = log_path;
+                    let mut file = std::fs::File::open(&current_path)
+                        .with_context(|| {
+                            format!("failed to open {}", current_path.display())
+                        })?;
+                    file.seek(SeekFrom::End(0))?;
+                    let mut reader = BufReader::new(file);
+                    let mut line = String::new();
 
-                // Start from end of file
-                file.seek(SeekFrom::End(0))?;
-                let mut reader = BufReader::new(file);
-                let mut line = String::new();
+                    loop {
+                        match reader.read_line(&mut line) {
+                            Ok(0) => {
+                                std::thread::sleep(Duration::from_millis(200));
 
-                loop {
-                    match reader.read_line(&mut line) {
-                        Ok(0) => {
-                            // No new data, wait briefly
-                            std::thread::sleep(Duration::from_millis(200));
-
-                            // Check if a newer log file appeared (rotation)
-                            let mut current_entries: Vec<_> = std::fs::read_dir(&log_dir)
-                                .ok()
-                                .into_iter()
-                                .flatten()
-                                .filter_map(|e| e.ok())
-                                .filter(|e| {
-                                    e.file_type().map(|ft| ft.is_file()).unwrap_or(false)
-                                })
-                                .collect();
-                            current_entries.sort_by_key(|e| e.file_name());
-                            if let Some(newest) = current_entries.last().filter(|e| e.path() != log_path) {
-                                // Log rotated — switch to new file
-                                let new_file = std::fs::File::open(newest.path())?;
-                                reader = BufReader::new(new_file);
+                                // Check for log rotation
+                                if let Some(newest) = find_latest_log(&log_dir_clone).filter(|p| *p != current_path) {
+                                    let new_file = std::fs::File::open(&newest)?;
+                                    reader = BufReader::new(new_file);
+                                    current_path = newest;
+                                }
+                            }
+                            Ok(_) => {
+                                print!("{line}");
+                                line.clear();
+                            }
+                            Err(e) => {
+                                return Err(anyhow::anyhow!("failed to read log: {e}"));
                             }
                         }
-                        Ok(_) => {
-                            print!("{line}");
-                            line.clear();
-                        }
-                        Err(e) => {
-                            return Err(anyhow::anyhow!("failed to read log: {e}"));
-                        }
                     }
-                }
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("log follow task failed: {e}"))?
             } else {
-                // Show last 20 lines
-                let content = std::fs::read_to_string(&log_path)
-                    .with_context(|| format!("failed to read {}", log_path.display()))?;
-                let lines: Vec<&str> = content.lines().collect();
-                let start = lines.len().saturating_sub(20);
-                for line in &lines[start..] {
+                // Show last 20 lines using BufRead (memory efficient)
+                use std::io::{BufRead, BufReader};
+                use std::collections::VecDeque;
+
+                let file = std::fs::File::open(&log_path)
+                    .with_context(|| format!("failed to open {}", log_path.display()))?;
+                let reader = BufReader::new(file);
+                let mut tail: VecDeque<String> = VecDeque::with_capacity(21);
+
+                for line in reader.lines() {
+                    let line = line.with_context(|| {
+                        format!("failed to read {}", log_path.display())
+                    })?;
+                    if tail.len() == 20 {
+                        tail.pop_front();
+                    }
+                    tail.push_back(line);
+                }
+
+                for line in &tail {
                     println!("{line}");
                 }
                 Ok(())
