@@ -672,7 +672,7 @@ where
                                     tracing::warn!(
                                         job_id = r.id,
                                         error = %e,
-                                        "failed to get job logs, falling back to summary"
+                                        "failed to get job logs, falling back to output fields"
                                     );
                                     None
                                 }
@@ -966,25 +966,22 @@ where
 }
 
 /// Extract error lines from raw CI job logs.
-/// Strips ANSI color codes and filters for error-related lines.
+/// Strips ANSI SGR color codes, filters for error-related lines, and removes timestamp prefixes.
 fn extract_error_lines(raw_log: &str) -> Option<String> {
     let lines: Vec<String> = raw_log
         .lines()
-        .filter(|line| {
-            let clean = strip_ansi(line);
-            clean.contains("error:") || clean.contains("error[") || clean.contains("##[error]")
+        .map(strip_ansi)
+        .filter(|clean| {
+            (clean.contains("error:") || clean.contains("error[") || clean.contains("##[error]"))
+                && !clean.contains("curl")
+                && !clean.contains("spurious")
         })
-        .filter(|line| {
-            let clean = strip_ansi(line);
-            !clean.contains("curl") && !clean.contains("spurious")
-        })
-        .map(|line| {
-            let s = strip_ansi(line);
+        .map(|clean| {
             // Strip timestamp prefix (e.g., "2026-04-02T10:53:01.0418115Z ")
-            if let Some(pos) = s.find(' ').filter(|&p| p > 20) {
-                return s[pos + 1..].to_string();
+            if let Some(pos) = clean.find(' ').filter(|&p| p > 20) {
+                return clean[pos + 1..].to_string();
             }
-            s
+            clean
         })
         .collect();
 
@@ -995,7 +992,8 @@ fn extract_error_lines(raw_log: &str) -> Option<String> {
     Some(lines.join("\n"))
 }
 
-/// Strip ANSI escape sequences from a string.
+/// Strip ANSI SGR escape sequences (e.g., color codes like `\x1b[31m`) from a string.
+/// Only handles sequences ending with 'm'; other escape sequences are not stripped.
 fn strip_ansi(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars();
@@ -1395,5 +1393,41 @@ mod tests {
         assert!(causes.contains(&FixingProblemKind::Conflict));
         assert!(causes.contains(&FixingProblemKind::ReviewComments));
         assert_eq!(causes.len(), 3);
+    }
+
+    #[test]
+    fn strip_ansi_removes_color_codes() {
+        assert_eq!(
+            strip_ansi("\x1b[1m\x1b[91merror\x1b[0m: something"),
+            "error: something"
+        );
+        assert_eq!(strip_ansi("no ansi here"), "no ansi here");
+        assert_eq!(strip_ansi(""), "");
+    }
+
+    #[test]
+    fn extract_error_lines_filters_errors() {
+        let log = "2026-04-02T10:52:58.0Z \x1b[92mChecking\x1b[0m cupola\n\
+                   2026-04-02T10:53:01.0418115Z \x1b[91merror\x1b[0m: very complex type used\n\
+                   2026-04-02T10:53:01.6Z \x1b[91merror\x1b[0m: could not compile\n\
+                   2026-04-02T10:53:01.7Z some other line\n";
+        let result = extract_error_lines(log).unwrap();
+        assert!(result.contains("error: very complex type used"));
+        assert!(result.contains("error: could not compile"));
+        assert!(!result.contains("Checking"));
+        assert!(!result.contains("some other line"));
+    }
+
+    #[test]
+    fn extract_error_lines_returns_none_for_no_errors() {
+        let log = "2026-04-02T10:52:58.0Z Checking cupola\n2026-04-02T10:53:00.0Z Finished\n";
+        assert!(extract_error_lines(log).is_none());
+    }
+
+    #[test]
+    fn extract_error_lines_strips_timestamps() {
+        let log = "2026-04-02T10:53:01.0418115Z error: something wrong\n";
+        let result = extract_error_lines(log).unwrap();
+        assert_eq!(result, "error: something wrong");
     }
 }
