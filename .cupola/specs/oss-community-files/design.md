@@ -97,13 +97,13 @@ graph TB
 | Setup | `devbox shell`、`cargo build`、`cargo test` |
 | Contributing | バグ報告・機能提案・PRの方法 |
 | PR Process | ブランチ命名規則（例: `feature/xxx`）、conventional commits、CIチェック必須 |
-| Coding Standards | `cargo fmt`、`cargo clippy --all-targets`、テスト要件（`#[cfg(test)]`）|
+| Coding Standards | `cargo fmt -- --check`、`cargo clippy --all-targets`、テスト要件（`#[cfg(test)]`）|
 
 **Contracts**: なし（静的ドキュメント）
 
 **Implementation Notes**
 - Integration: GitHub の Community Profile（Insights > Community）でファイル認識される
-- Validation: PR前に `cargo fmt --check` と `cargo clippy -- -D warnings` の実行を必須と明記
+- Validation: PR前に `cargo fmt -- --check` と `cargo clippy --all-targets` の実行を必須と明記
 - Risks: devboxのバージョンや設定が変わった場合の手順陳腐化リスク → 実装後も定期的に見直す
 
 ---
