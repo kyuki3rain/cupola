@@ -109,11 +109,11 @@ sequenceDiagram
 
     Poll->>Poll: Phase::from_state(issue.state)
     alt phase が Some(p)
-        Poll->>Cfg: resolve(issue.weight, p)
+        Poll->>Cfg: resolve(issue.weight, Some(p))
         Cfg-->>Poll: model_name
     else phase が None
-        Poll->>Cfg: global model fallback
-        Cfg-->>Poll: config.model
+        Poll->>Cfg: resolve(issue.weight, None)
+        Cfg-->>Poll: model_name
     end
     Poll->>Runner: spawn(prompt, wt, schema, model_name)
 ```
