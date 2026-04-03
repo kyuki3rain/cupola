@@ -176,8 +176,8 @@ The PR will be created by the system. Please output the following information.
 }
 
 fn build_fixing_prompt(
-    _issue_number: u64,
-    _pr_number: u64,
+    issue_number: u64,
+    pr_number: u64,
     language: &str,
     causes: &[FixingProblemKind],
 ) -> String {
@@ -210,8 +210,27 @@ fn build_fixing_prompt(
             .join("\n")
     };
 
+    let output_section = if causes.contains(&FixingProblemKind::ReviewComments) {
+        format!(
+            r#"Comment replies and thread resolution will be handled by the system.
+If you addressed any threads, output the result for each thread.
+
+- thread_id: The ID of the thread addressed (use thread_id as-is)
+- response: Reply content for that thread (write in {language})
+- resolved: Whether this thread should be resolved (true/false)"#
+        )
+    } else {
+        r#"No review thread responses are required for this fix.
+Return the following as output:
+
+{"threads": []}"#
+            .to_string()
+    };
+
     format!(
         r#"You are an automated review agent. Address the following issues.
+
+PR #{pr_number} (Issue #{issue_number})
 
 ## Actions Required
 
@@ -226,18 +245,15 @@ fn build_fixing_prompt(
 3. {quality_check}
 
 4. Commit and push the fixes
-   git add -A
+   Run `git diff --name-only` to confirm the changed files, then stage only the relevant files.
+   Avoid staging temporary files or debug logs.
+   git add <changed_files>
    git commit -m "fix: address review comments"
    git push
 
 ## Output to output-schema
 
-Comment replies and thread resolution will be handled by the system.
-If you addressed any threads, output the result for each thread.
-
-- thread_id: The ID of the thread addressed (use thread_id as-is)
-- response: Reply content for that thread (write in {language})
-- resolved: Whether this thread should be resolved (true/false)
+{output_section}
 
 ## Constraints
 
@@ -398,6 +414,15 @@ mod tests {
         assert!(session.prompt.contains("review_threads.json"));
         assert!(!session.prompt.contains("ci_errors.txt"));
         assert!(!session.prompt.contains("conflict"));
+        // Task 4.1: PR/Issue番号がプロンプトに含まれることを検証
+        assert!(
+            session.prompt.contains("PR #85"),
+            "prompt should contain PR number"
+        );
+        assert!(
+            session.prompt.contains("Issue #42"),
+            "prompt should contain Issue number"
+        );
     }
 
     #[test]
@@ -415,6 +440,15 @@ mod tests {
         assert!(!session.prompt.contains("review_threads.json"));
         assert!(session.prompt.contains("ci_errors.txt"));
         assert!(!session.prompt.contains("conflict"));
+        // Task 4.2: {"threads": []} が含まれ、スレッドoutput指示が含まれないことを検証
+        assert!(
+            session.prompt.contains(r#"{"threads": []}"#),
+            "prompt should contain {{\"threads\": []}} for non-ReviewComments case"
+        );
+        assert!(
+            !session.prompt.contains("thread_id"),
+            "prompt should not contain thread_id for CI-only case"
+        );
     }
 
     #[test]
@@ -437,6 +471,15 @@ mod tests {
         );
         assert!(session.prompt.contains("base branch"));
         assert!(session.prompt.contains("conflict"));
+        // Task 4.2: {"threads": []} が含まれ、スレッドoutput指示が含まれないことを検証
+        assert!(
+            session.prompt.contains(r#"{"threads": []}"#),
+            "prompt should contain {{\"threads\": []}} for non-ReviewComments case"
+        );
+        assert!(
+            !session.prompt.contains("thread_id"),
+            "prompt should not contain thread_id for conflict-only case"
+        );
     }
 
     #[test]
@@ -457,6 +500,93 @@ mod tests {
             "should not hard-code origin/default_branch"
         );
         assert!(session.prompt.contains("base branch"));
+        // Task 4.1: PR/Issue番号がプロンプトに含まれることを検証
+        assert!(
+            session.prompt.contains("PR #85"),
+            "prompt should contain PR number"
+        );
+        assert!(
+            session.prompt.contains("Issue #42"),
+            "prompt should contain Issue number"
+        );
+        // Task 4.3: all_causesではスレッドoutput指示が含まれることを検証
+        assert!(
+            session.prompt.contains("thread_id"),
+            "prompt should contain thread_id for all-causes case"
+        );
+        assert!(
+            !session.prompt.contains(r#"{"threads": []}"#),
+            "prompt should not contain {{\"threads\": []}} when ReviewComments is present"
+        );
+    }
+
+    #[test]
+    fn fixing_prompt_no_git_add_all() {
+        let config = test_config();
+
+        // ReviewComments のみ
+        let session = build_session_config(
+            State::DesignFixing,
+            42,
+            &config,
+            Some(85),
+            None,
+            &[FixingProblemKind::ReviewComments],
+        )
+        .unwrap();
+        assert!(
+            !session.prompt.contains("git add -A"),
+            "prompt should not contain 'git add -A' (ReviewComments case)"
+        );
+
+        // CiFailure のみ
+        let session = build_session_config(
+            State::DesignFixing,
+            42,
+            &config,
+            Some(85),
+            None,
+            &[FixingProblemKind::CiFailure],
+        )
+        .unwrap();
+        assert!(
+            !session.prompt.contains("git add -A"),
+            "prompt should not contain 'git add -A' (CiFailure case)"
+        );
+
+        // Conflict のみ
+        let session = build_session_config(
+            State::DesignFixing,
+            42,
+            &config,
+            Some(85),
+            None,
+            &[FixingProblemKind::Conflict],
+        )
+        .unwrap();
+        assert!(
+            !session.prompt.contains("git add -A"),
+            "prompt should not contain 'git add -A' (Conflict case)"
+        );
+
+        // 全causes
+        let session = build_session_config(
+            State::DesignFixing,
+            42,
+            &config,
+            Some(85),
+            None,
+            &[
+                FixingProblemKind::CiFailure,
+                FixingProblemKind::Conflict,
+                FixingProblemKind::ReviewComments,
+            ],
+        )
+        .unwrap();
+        assert!(
+            !session.prompt.contains("git add -A"),
+            "prompt should not contain 'git add -A' (all-causes case)"
+        );
     }
 
     #[test]
