@@ -8,7 +8,7 @@ use tokio::signal::unix::SignalKind;
 use tokio::time::interval;
 
 use crate::application::io::{
-    CiErrorEntry, ConflictInfo, parse_fixing_output, parse_pr_creation_output,
+    CiErrorEntry, ConflictInfo, clear_inputs_dir, parse_fixing_output, parse_pr_creation_output,
     write_ci_errors_input, write_conflict_info_input, write_issue_input,
     write_review_threads_input,
 };
@@ -794,6 +794,7 @@ where
     }
 
     async fn prepare_inputs(&self, issue: &Issue, wt: &Path) -> Result<()> {
+        clear_inputs_dir(wt)?;
         match issue.state {
             State::DesignRunning => {
                 let detail = self.github.get_issue(issue.github_issue_number).await?;
