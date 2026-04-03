@@ -2745,12 +2745,6 @@ mod tests {
                 merge_call_count: Arc::new(Mutex::new(0)),
             }
         }
-        fn fetch_count(&self) -> u32 {
-            *self.fetch_call_count.lock().unwrap()
-        }
-        fn merge_count(&self) -> u32 {
-            *self.merge_call_count.lock().unwrap()
-        }
     }
 
     impl crate::application::port::git_worktree::GitWorktree for MockGitWorktreeForStep7 {
