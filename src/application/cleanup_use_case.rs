@@ -284,7 +284,7 @@ mod tests {
             error_message: Some("error".to_string()),
             feature_name: Some("feature".to_string()),
             fixing_causes: vec![],
-            model: None,
+            weight: crate::domain::task_weight::TaskWeight::Medium,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }
@@ -338,7 +338,7 @@ mod tests {
             error_message: None,
             feature_name: None,
             fixing_causes: vec![],
-            model: None,
+            weight: crate::domain::task_weight::TaskWeight::Medium,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };

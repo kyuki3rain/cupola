@@ -57,7 +57,7 @@ impl SqliteConnection {
                 updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
                 error_message       TEXT,
                 feature_name        TEXT,
-                model               TEXT
+                weight              TEXT NOT NULL DEFAULT 'medium'
             );
 
             CREATE TABLE IF NOT EXISTS execution_log (
@@ -79,8 +79,8 @@ impl SqliteConnection {
         // Migration: add feature_name column for existing databases
         Self::run_add_column_migration(&conn, "feature_name TEXT")?;
 
-        // Migration: add model column for existing databases
-        Self::run_add_column_migration(&conn, "model TEXT")?;
+        // Migration: add weight column for existing databases (replaces model)
+        Self::run_add_column_migration(&conn, "weight TEXT NOT NULL DEFAULT 'medium'")?;
 
         // Migration: add fixing_causes column for existing databases
         Self::run_add_column_migration(&conn, "fixing_causes TEXT NOT NULL DEFAULT '[]'")?;
@@ -150,11 +150,11 @@ mod tests {
     }
 
     #[test]
-    fn migration_adds_model_column_to_existing_db() {
+    fn migration_adds_weight_column_to_existing_db() {
         let db = SqliteConnection::open_in_memory().expect("should open");
         let conn = db.conn().lock().expect("mutex");
 
-        // Create a legacy issues table without model column
+        // Create a legacy issues table without weight column
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS issues (
                 id                  INTEGER PRIMARY KEY,
@@ -185,22 +185,25 @@ mod tests {
         // Run migration
         db.init_schema().expect("migration should succeed");
 
-        // Verify model column exists and existing record has NULL model
+        // Verify weight column exists and existing record has default value 'medium'
         let conn = db.conn().lock().expect("mutex");
-        let model: Option<String> = conn
+        let weight: String = conn
             .query_row(
-                "SELECT model FROM issues WHERE github_issue_number = 1",
+                "SELECT weight FROM issues WHERE github_issue_number = 1",
                 [],
                 |row| row.get(0),
             )
             .expect("query");
-        assert!(model.is_none(), "existing record should have NULL model");
+        assert_eq!(
+            weight, "medium",
+            "existing record should have default weight 'medium'"
+        );
     }
 
     #[test]
-    fn migration_model_column_is_idempotent() {
+    fn migration_weight_column_is_idempotent() {
         let db = SqliteConnection::open_in_memory().expect("should open");
-        // Running init_schema twice should not fail even if model column already exists
+        // Running init_schema twice should not fail even if weight column already exists
         db.init_schema().expect("first init");
         db.init_schema()
             .expect("second init should succeed (idempotent)");
