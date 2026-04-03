@@ -25,7 +25,7 @@ impl ExecutionLogRepository for SqliteExecutionLogRepository {
             let conn = db
                 .conn()
                 .lock()
-                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
+                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             conn.execute(
                 "INSERT INTO execution_log (issue_id, state) VALUES (?1, ?2)",
                 rusqlite::params![issue_id, state_str],
@@ -51,7 +51,7 @@ impl ExecutionLogRepository for SqliteExecutionLogRepository {
             let conn = db
                 .conn()
                 .lock()
-                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
+                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             conn.execute(
                 "UPDATE execution_log
                  SET finished_at = datetime('now'), exit_code = ?1,
@@ -72,7 +72,7 @@ impl ExecutionLogRepository for SqliteExecutionLogRepository {
             let conn = db
                 .conn()
                 .lock()
-                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
+                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let mut stmt = conn.prepare(
                 "SELECT id, issue_id, state, started_at, finished_at,
                         exit_code, structured_output, error_message

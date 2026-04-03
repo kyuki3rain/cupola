@@ -26,7 +26,7 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db
                 .conn()
                 .lock()
-                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
+                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
                         worktree_path, retry_count, current_pid, error_message, feature_name, model,
@@ -49,7 +49,7 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db
                 .conn()
                 .lock()
-                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
+                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
                         worktree_path, retry_count, current_pid, error_message, feature_name, model,
@@ -72,7 +72,7 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db
                 .conn()
                 .lock()
-                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
+                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
                         worktree_path, retry_count, current_pid, error_message, feature_name, model,
@@ -95,7 +95,7 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db
                 .conn()
                 .lock()
-                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
+                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
                         worktree_path, retry_count, current_pid, error_message, feature_name, model,
@@ -119,7 +119,7 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db
                 .conn()
                 .lock()
-                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
+                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let fixing_causes_json = serde_json::to_string(&issue.fixing_causes)
                 .context("failed to serialize fixing_causes")?;
             conn.execute(
@@ -154,7 +154,7 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db
                 .conn()
                 .lock()
-                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
+                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             conn.execute(
                 "UPDATE issues SET state = ?1, updated_at = datetime('now') WHERE id = ?2",
                 rusqlite::params![state_to_str(&state), id],
@@ -173,7 +173,7 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db
                 .conn()
                 .lock()
-                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
+                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let fixing_causes_json = serde_json::to_string(&issue.fixing_causes)
                 .context("failed to serialize fixing_causes")?;
             conn.execute(
@@ -209,7 +209,7 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db
                 .conn()
                 .lock()
-                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
+                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             conn.execute(
                 "UPDATE issues
                  SET state = 'idle',
@@ -236,7 +236,7 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db
                 .conn()
                 .lock()
-                .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
+                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
                         worktree_path, retry_count, current_pid, error_message, feature_name, model,

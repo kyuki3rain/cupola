@@ -5,7 +5,7 @@ pub enum Event {
     IssueClosed,
     DesignPrMerged,
     ImplementationPrMerged,
-    UnresolvedThreadsDetected,
+    FixingRequired,
 
     // Internal
     InitializationCompleted,

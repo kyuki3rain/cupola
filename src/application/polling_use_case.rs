@@ -502,7 +502,7 @@ where
                     );
                     continue;
                 }
-                events.push((issue.id, Event::UnresolvedThreadsDetected));
+                events.push((issue.id, Event::FixingRequired));
             }
         }
     }
@@ -1499,7 +1499,7 @@ mod tests {
         let mut events = vec![];
         uc.step4_pr_monitoring(&mut events).await;
         assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], (1, Event::UnresolvedThreadsDetected)));
+        assert!(matches!(events[0], (1, Event::FixingRequired)));
         let updates = updated.lock().unwrap();
         assert_eq!(updates.len(), 1);
         assert!(

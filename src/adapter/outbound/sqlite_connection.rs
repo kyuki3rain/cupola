@@ -42,7 +42,7 @@ impl SqliteConnection {
         let conn = self
             .conn
             .lock()
-            .map_err(|_| anyhow::anyhow!("failed to acquire database lock"))?;
+            .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS issues (
                 id                  INTEGER PRIMARY KEY,
