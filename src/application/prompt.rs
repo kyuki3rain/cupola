@@ -29,6 +29,7 @@ pub fn build_session_config(
     pr_number: Option<u64>,
     feature_name: Option<&str>,
     fixing_causes: &[FixingProblemKind],
+    has_merge_conflict: bool,
 ) -> anyhow::Result<SessionConfig> {
     match state {
         State::DesignRunning => Ok(SessionConfig {
@@ -38,7 +39,13 @@ pub fn build_session_config(
         State::DesignFixing => {
             let pr = pr_number.context("fixing state requires pr_number in DB")?;
             Ok(SessionConfig {
-                prompt: build_fixing_prompt(issue_number, pr, &config.language, fixing_causes),
+                prompt: build_fixing_prompt(
+                    issue_number,
+                    pr,
+                    &config.language,
+                    fixing_causes,
+                    has_merge_conflict,
+                ),
                 output_schema: OutputSchemaKind::Fixing,
             })
         }
@@ -49,7 +56,13 @@ pub fn build_session_config(
         State::ImplementationFixing => {
             let pr = pr_number.context("fixing state requires pr_number in DB")?;
             Ok(SessionConfig {
-                prompt: build_fixing_prompt(issue_number, pr, &config.language, fixing_causes),
+                prompt: build_fixing_prompt(
+                    issue_number,
+                    pr,
+                    &config.language,
+                    fixing_causes,
+                    has_merge_conflict,
+                ),
                 output_schema: OutputSchemaKind::Fixing,
             })
         }
@@ -180,7 +193,24 @@ fn build_fixing_prompt(
     pr_number: u64,
     language: &str,
     causes: &[FixingProblemKind],
+    has_merge_conflict: bool,
 ) -> String {
+    let conflict_section = if has_merge_conflict {
+        r#"## Merge Conflict Resolution Required
+
+The working tree is in the middle of a merge.
+Conflict markers (<<<<<<<, =======, >>>>>>>) remain in the files.
+
+1. Resolve all conflicts first
+2. Stage resolved files with `git add <resolved_files>`
+3. Complete the merge with `git commit --no-edit`
+4. Then proceed with the other fixes
+
+"#
+    } else {
+        ""
+    };
+
     let mut instructions = Vec::new();
 
     if causes.contains(&FixingProblemKind::ReviewComments) {
@@ -228,7 +258,7 @@ Return the following as output:
     };
 
     format!(
-        r#"You are an automated review agent. Address the following issues.
+        r#"{conflict_section}You are an automated review agent. Address the following issues.
 
 PR #{pr_number} (Issue #{issue_number})
 
@@ -276,7 +306,8 @@ mod tests {
     fn design_running_returns_pr_creation_schema() {
         let config = test_config();
         let session =
-            build_session_config(State::DesignRunning, 42, &config, None, None, &[]).unwrap();
+            build_session_config(State::DesignRunning, 42, &config, None, None, &[], false)
+                .unwrap();
         assert_eq!(session.output_schema, OutputSchemaKind::PrCreation);
         assert!(session.prompt.contains("automated design agent"));
         assert!(session.prompt.contains("#42"));
@@ -292,6 +323,7 @@ mod tests {
             None,
             Some("my-feature"),
             &[],
+            false,
         )
         .unwrap();
         assert_eq!(session.output_schema, OutputSchemaKind::PrCreation);
@@ -302,7 +334,8 @@ mod tests {
     fn design_fixing_returns_fixing_schema() {
         let config = test_config();
         let session =
-            build_session_config(State::DesignFixing, 42, &config, Some(85), None, &[]).unwrap();
+            build_session_config(State::DesignFixing, 42, &config, Some(85), None, &[], false)
+                .unwrap();
         assert_eq!(session.output_schema, OutputSchemaKind::Fixing);
         assert!(session.prompt.contains("automated review agent"));
     }
@@ -317,6 +350,7 @@ mod tests {
             Some(90),
             None,
             &[],
+            false,
         )
         .unwrap();
         assert_eq!(session.output_schema, OutputSchemaKind::Fixing);
@@ -361,7 +395,8 @@ mod tests {
     fn design_prompt_contains_related_instruction() {
         let config = test_config();
         let session =
-            build_session_config(State::DesignRunning, 42, &config, None, None, &[]).unwrap();
+            build_session_config(State::DesignRunning, 42, &config, None, None, &[], false)
+                .unwrap();
         assert!(
             session.prompt.contains("Related: #42"),
             "design prompt should instruct to use 'Related: #N'"
@@ -372,7 +407,8 @@ mod tests {
     fn design_prompt_does_not_contain_closes() {
         let config = test_config();
         let session =
-            build_session_config(State::DesignRunning, 42, &config, None, None, &[]).unwrap();
+            build_session_config(State::DesignRunning, 42, &config, None, None, &[], false)
+                .unwrap();
         assert!(
             !session.prompt.contains("Closes"),
             "design prompt should not contain 'Closes'"
@@ -389,6 +425,7 @@ mod tests {
             None,
             Some("my-feature"),
             &[],
+            false,
         )
         .unwrap();
         assert!(
@@ -409,6 +446,7 @@ mod tests {
             Some(85),
             None,
             &[FixingProblemKind::ReviewComments],
+            false,
         )
         .unwrap();
         assert!(session.prompt.contains("review_threads.json"));
@@ -435,6 +473,7 @@ mod tests {
             Some(85),
             None,
             &[FixingProblemKind::CiFailure],
+            false,
         )
         .unwrap();
         assert!(!session.prompt.contains("review_threads.json"));
@@ -470,6 +509,7 @@ mod tests {
             Some(85),
             None,
             &[FixingProblemKind::Conflict],
+            false,
         )
         .unwrap();
         assert!(!session.prompt.contains("review_threads.json"));
@@ -508,9 +548,16 @@ mod tests {
             FixingProblemKind::Conflict,
             FixingProblemKind::ReviewComments,
         ];
-        let session =
-            build_session_config(State::DesignFixing, 42, &config, Some(85), None, &causes)
-                .unwrap();
+        let session = build_session_config(
+            State::DesignFixing,
+            42,
+            &config,
+            Some(85),
+            None,
+            &causes,
+            false,
+        )
+        .unwrap();
         assert!(session.prompt.contains("review_threads.json"));
         assert!(session.prompt.contains("ci_errors.txt"));
         assert!(
@@ -550,6 +597,7 @@ mod tests {
             Some(85),
             None,
             &[FixingProblemKind::ReviewComments],
+            false,
         )
         .unwrap();
         assert!(
@@ -565,6 +613,7 @@ mod tests {
             Some(85),
             None,
             &[FixingProblemKind::CiFailure],
+            false,
         )
         .unwrap();
         assert!(
@@ -580,6 +629,7 @@ mod tests {
             Some(85),
             None,
             &[FixingProblemKind::Conflict],
+            false,
         )
         .unwrap();
         assert!(
@@ -599,6 +649,7 @@ mod tests {
                 FixingProblemKind::Conflict,
                 FixingProblemKind::ReviewComments,
             ],
+            false,
         )
         .unwrap();
         assert!(
@@ -610,7 +661,7 @@ mod tests {
     #[test]
     fn design_fixing_without_pr_number_returns_err() {
         let config = test_config();
-        let result = build_session_config(State::DesignFixing, 42, &config, None, None, &[]);
+        let result = build_session_config(State::DesignFixing, 42, &config, None, None, &[], false);
         assert!(
             result.is_err(),
             "DesignFixing with pr_number=None should return Err"
@@ -626,8 +677,15 @@ mod tests {
     #[test]
     fn implementation_fixing_without_pr_number_returns_err() {
         let config = test_config();
-        let result =
-            build_session_config(State::ImplementationFixing, 42, &config, None, None, &[]);
+        let result = build_session_config(
+            State::ImplementationFixing,
+            42,
+            &config,
+            None,
+            None,
+            &[],
+            false,
+        );
         assert!(
             result.is_err(),
             "ImplementationFixing with pr_number=None should return Err"
@@ -643,7 +701,8 @@ mod tests {
     #[test]
     fn design_running_without_pr_number_returns_ok() {
         let config = test_config();
-        let result = build_session_config(State::DesignRunning, 42, &config, None, None, &[]);
+        let result =
+            build_session_config(State::DesignRunning, 42, &config, None, None, &[], false);
         assert!(
             result.is_ok(),
             "DesignRunning with pr_number=None should return Ok"
@@ -656,11 +715,63 @@ mod tests {
             serde_json::from_str(FIXING_SCHEMA).expect("should be valid JSON");
     }
 
+    // Task 3.2: has_merge_conflict フラグのテスト
+
+    #[test]
+    fn fixing_prompt_has_merge_conflict_true_inserts_section_at_top() {
+        let config = test_config();
+        let session =
+            build_session_config(State::DesignFixing, 42, &config, Some(85), None, &[], true)
+                .unwrap();
+        assert!(
+            session
+                .prompt
+                .contains("## Merge Conflict Resolution Required"),
+            "prompt should contain conflict resolution section"
+        );
+        assert!(
+            session.prompt.contains("git commit --no-edit"),
+            "prompt should contain git commit --no-edit instruction"
+        );
+        // コンフリクト解消セクションが "Actions Required" より前に出現すること
+        let conflict_pos = session
+            .prompt
+            .find("## Merge Conflict Resolution Required")
+            .unwrap();
+        let actions_pos = session.prompt.find("## Actions Required").unwrap();
+        assert!(
+            conflict_pos < actions_pos,
+            "conflict section should appear before Actions Required"
+        );
+    }
+
+    #[test]
+    fn fixing_prompt_has_merge_conflict_false_is_unchanged() {
+        let config = test_config();
+        let with_flag =
+            build_session_config(State::DesignFixing, 42, &config, Some(85), None, &[], false)
+                .unwrap();
+        let without_flag =
+            build_session_config(State::DesignFixing, 42, &config, Some(85), None, &[], false)
+                .unwrap();
+        assert_eq!(
+            with_flag.prompt, without_flag.prompt,
+            "prompt should be identical when has_merge_conflict=false"
+        );
+        assert!(
+            !with_flag
+                .prompt
+                .contains("## Merge Conflict Resolution Required"),
+            "prompt should not contain conflict section when has_merge_conflict=false"
+        );
+    }
+
     #[test]
     fn design_prompt_generic_quality_check() {
         let config = test_config();
         let session =
-            build_session_config(State::DesignRunning, 42, &config, None, None, &[]).unwrap();
+            build_session_config(State::DesignRunning, 42, &config, None, None, &[], false)
+                .unwrap();
         assert!(
             session.prompt.contains(GENERIC_QUALITY_CHECK_INSTRUCTION),
             "design prompt should contain GENERIC_QUALITY_CHECK_INSTRUCTION"
@@ -677,6 +788,7 @@ mod tests {
             None,
             Some("my-feature"),
             &[],
+            false,
         )
         .unwrap();
         assert!(
@@ -688,9 +800,16 @@ mod tests {
     #[test]
     fn implementation_prompt_without_feature_name_generic_quality_check() {
         let config = test_config();
-        let session =
-            build_session_config(State::ImplementationRunning, 42, &config, None, None, &[])
-                .unwrap();
+        let session = build_session_config(
+            State::ImplementationRunning,
+            42,
+            &config,
+            None,
+            None,
+            &[],
+            false,
+        )
+        .unwrap();
         assert!(
             session.prompt.contains(GENERIC_QUALITY_CHECK_INSTRUCTION),
             "implementation prompt (without feature_name) should contain GENERIC_QUALITY_CHECK_INSTRUCTION"
@@ -701,7 +820,8 @@ mod tests {
     fn fixing_prompt_generic_quality_check() {
         let config = test_config();
         let session =
-            build_session_config(State::DesignFixing, 42, &config, Some(85), None, &[]).unwrap();
+            build_session_config(State::DesignFixing, 42, &config, Some(85), None, &[], false)
+                .unwrap();
         assert!(
             session.prompt.contains(GENERIC_QUALITY_CHECK_INSTRUCTION),
             "fixing prompt should contain GENERIC_QUALITY_CHECK_INSTRUCTION"

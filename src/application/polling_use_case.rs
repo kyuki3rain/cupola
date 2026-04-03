@@ -713,6 +713,52 @@ where
 
             let wt = Path::new(wt_path);
 
+            // Fetch + merge origin/{default_branch} before spawning (Fixing states only)
+            let is_fixing = matches!(
+                issue.state,
+                State::DesignFixing | State::ImplementationFixing
+            );
+            let mut has_merge_conflict = false;
+            let mut local_causes: Vec<FixingProblemKind> = issue.fixing_causes.clone();
+            if is_fixing {
+                match self.worktree.fetch() {
+                    Err(e) => {
+                        tracing::warn!(
+                            issue_id = issue.id,
+                            error = %e,
+                            "failed to fetch origin before spawn, skipping merge"
+                        );
+                    }
+                    Ok(()) => {
+                        match self.worktree.merge(wt, &self.config.default_branch) {
+                            Ok(()) => {
+                                // clean merge — no action needed
+                            }
+                            Err(e) => {
+                                // Distinguish conflict from other failures by checking if
+                                // the working tree is in merging state (non-zero exit from git merge)
+                                let err_str = format!("{e}");
+                                if err_str.contains("Merge conflict")
+                                    || err_str.contains("CONFLICT")
+                                    || err_str.contains("conflict")
+                                {
+                                    has_merge_conflict = true;
+                                    if !local_causes.contains(&FixingProblemKind::Conflict) {
+                                        local_causes.push(FixingProblemKind::Conflict);
+                                    }
+                                } else {
+                                    tracing::warn!(
+                                        issue_id = issue.id,
+                                        error = %e,
+                                        "merge failed (non-conflict), continuing spawn"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Clean up stale index.lock
             let lock_file = wt.join(".git/index.lock");
             if lock_file.exists() {
@@ -739,7 +785,8 @@ where
                 &self.config,
                 pr_number,
                 issue.feature_name.as_deref(),
-                &issue.fixing_causes,
+                &local_causes,
+                has_merge_conflict,
             ) {
                 Ok(cfg) => cfg,
                 Err(e) => {
@@ -1450,6 +1497,9 @@ mod tests {
     struct NoopWorktree;
     impl crate::application::port::git_worktree::GitWorktree for NoopWorktree {
         fn fetch(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn merge(&self, _: &Path, _: &str) -> anyhow::Result<()> {
             Ok(())
         }
         fn exists(&self, _: &Path) -> bool {
@@ -2674,5 +2724,257 @@ mod tests {
         let uc = make_uc_step1(github, repo);
         let event = uc.resolve_close_event_for_issue(&issue).await;
         assert!(matches!(event, Event::IssueClosed));
+    }
+
+    // --- Mocks and helpers for step7 fetch+merge tests (Task 4.3) ---
+
+    struct MockGitWorktreeForStep7 {
+        fetch_fails: bool,
+        /// "conflict" | "other_error" | "" (clean)
+        merge_result: &'static str,
+        fetch_call_count: Arc<Mutex<u32>>,
+        merge_call_count: Arc<Mutex<u32>>,
+    }
+
+    impl MockGitWorktreeForStep7 {
+        fn new(fetch_fails: bool, merge_result: &'static str) -> Self {
+            Self {
+                fetch_fails,
+                merge_result,
+                fetch_call_count: Arc::new(Mutex::new(0)),
+                merge_call_count: Arc::new(Mutex::new(0)),
+            }
+        }
+        fn fetch_count(&self) -> u32 {
+            *self.fetch_call_count.lock().unwrap()
+        }
+        fn merge_count(&self) -> u32 {
+            *self.merge_call_count.lock().unwrap()
+        }
+    }
+
+    impl crate::application::port::git_worktree::GitWorktree for MockGitWorktreeForStep7 {
+        fn fetch(&self) -> anyhow::Result<()> {
+            *self.fetch_call_count.lock().unwrap() += 1;
+            if self.fetch_fails {
+                anyhow::bail!("fetch failed: network error");
+            }
+            Ok(())
+        }
+        fn merge(&self, _: &Path, _: &str) -> anyhow::Result<()> {
+            *self.merge_call_count.lock().unwrap() += 1;
+            match self.merge_result {
+                "conflict" => {
+                    anyhow::bail!(
+                        "git merge --no-edit origin/main failed: CONFLICT (content): Merge conflict in file.rs"
+                    )
+                }
+                "other_error" => anyhow::bail!("merge failed: some other error"),
+                _ => Ok(()),
+            }
+        }
+        fn exists(&self, _: &Path) -> bool {
+            false
+        }
+        fn create(&self, _: &Path, _: &str, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn remove(&self, _: &Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn create_branch(&self, _: &Path, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn checkout(&self, _: &Path, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn pull(&self, _: &Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn push(&self, _: &Path, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn delete_branch(&self, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct CapturingClaudeRunner {
+        captured_prompt: Arc<Mutex<Option<String>>>,
+    }
+    impl CapturingClaudeRunner {
+        fn new() -> (Self, Arc<Mutex<Option<String>>>) {
+            let captured = Arc::new(Mutex::new(None));
+            (
+                Self {
+                    captured_prompt: captured.clone(),
+                },
+                captured,
+            )
+        }
+    }
+    impl crate::application::port::claude_code_runner::ClaudeCodeRunner for CapturingClaudeRunner {
+        fn spawn(
+            &self,
+            prompt: &str,
+            _: &Path,
+            _: Option<&str>,
+            _: &str,
+        ) -> anyhow::Result<std::process::Child> {
+            *self.captured_prompt.lock().unwrap() = Some(prompt.to_string());
+            Err(anyhow::anyhow!("CapturingClaudeRunner: no real spawn"))
+        }
+    }
+
+    fn make_fixing_uc(
+        worktree: MockGitWorktreeForStep7,
+        runner: CapturingClaudeRunner,
+        issues: Vec<Issue>,
+    ) -> PollingUseCase<
+        MockGitHub,
+        MockIssueRepo,
+        NoopExecLogRepo,
+        CapturingClaudeRunner,
+        MockGitWorktreeForStep7,
+    > {
+        let (repo, _) = MockIssueRepo::new(issues);
+        let github = MockGitHub::new(false, None, vec![], false);
+        let config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        PollingUseCase::new(github, repo, NoopExecLogRepo, runner, worktree, config)
+    }
+
+    fn make_fixing_issue(tmpdir: &tempfile::TempDir) -> Issue {
+        Issue {
+            id: 1,
+            github_issue_number: 42,
+            state: State::DesignFixing,
+            design_pr_number: Some(100),
+            impl_pr_number: None,
+            worktree_path: Some(tmpdir.path().to_string_lossy().to_string()),
+            retry_count: 0,
+            current_pid: None,
+            error_message: None,
+            feature_name: None,
+            fixing_causes: vec![],
+            weight: TaskWeight::Medium,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn make_non_fixing_issue(tmpdir: &tempfile::TempDir) -> Issue {
+        Issue {
+            id: 2,
+            github_issue_number: 43,
+            state: State::DesignRunning,
+            design_pr_number: None,
+            impl_pr_number: None,
+            worktree_path: Some(tmpdir.path().to_string_lossy().to_string()),
+            retry_count: 0,
+            current_pid: None,
+            error_message: None,
+            feature_name: None,
+            fixing_causes: vec![],
+            weight: TaskWeight::Medium,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn step7_fixing_state_calls_fetch_and_merge() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let issue = make_fixing_issue(&tmpdir);
+        let worktree = MockGitWorktreeForStep7::new(false, "");
+        let fetch_count = worktree.fetch_call_count.clone();
+        let merge_count = worktree.merge_call_count.clone();
+        let (runner, _) = CapturingClaudeRunner::new();
+        let mut uc = make_fixing_uc(worktree, runner, vec![issue]);
+
+        uc.step7_spawn_processes().await;
+
+        assert_eq!(
+            *fetch_count.lock().unwrap(),
+            1,
+            "fetch should be called once"
+        );
+        assert_eq!(
+            *merge_count.lock().unwrap(),
+            1,
+            "merge should be called once"
+        );
+    }
+
+    #[tokio::test]
+    async fn step7_fetch_failure_continues_spawn_without_merge() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let issue = make_fixing_issue(&tmpdir);
+        let worktree = MockGitWorktreeForStep7::new(true, "");
+        let fetch_count = worktree.fetch_call_count.clone();
+        let merge_count = worktree.merge_call_count.clone();
+        let (runner, captured_prompt) = CapturingClaudeRunner::new();
+        let mut uc = make_fixing_uc(worktree, runner, vec![issue]);
+
+        uc.step7_spawn_processes().await;
+
+        assert_eq!(
+            *fetch_count.lock().unwrap(),
+            1,
+            "fetch should be called once"
+        );
+        assert_eq!(
+            *merge_count.lock().unwrap(),
+            0,
+            "merge should NOT be called when fetch fails"
+        );
+        // spawn should still be attempted (prompt captured)
+        assert!(
+            captured_prompt.lock().unwrap().is_some(),
+            "spawn should be attempted even when fetch fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn step7_merge_conflict_sets_has_merge_conflict_flag() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let issue = make_fixing_issue(&tmpdir);
+        let worktree = MockGitWorktreeForStep7::new(false, "conflict");
+        let (runner, captured_prompt) = CapturingClaudeRunner::new();
+        let mut uc = make_fixing_uc(worktree, runner, vec![issue]);
+
+        uc.step7_spawn_processes().await;
+
+        let prompt = captured_prompt.lock().unwrap().clone();
+        assert!(prompt.is_some(), "spawn should be attempted");
+        let prompt_text = prompt.unwrap();
+        assert!(
+            prompt_text.contains("## Merge Conflict Resolution Required"),
+            "prompt should contain conflict resolution section when has_merge_conflict=true"
+        );
+    }
+
+    #[tokio::test]
+    async fn step7_non_fixing_state_does_not_call_fetch_or_merge() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let issue = make_non_fixing_issue(&tmpdir);
+        let worktree = MockGitWorktreeForStep7::new(false, "");
+        let fetch_count = worktree.fetch_call_count.clone();
+        let merge_count = worktree.merge_call_count.clone();
+        let (runner, _) = CapturingClaudeRunner::new();
+        let mut uc = make_fixing_uc(worktree, runner, vec![issue]);
+
+        uc.step7_spawn_processes().await;
+
+        assert_eq!(
+            *fetch_count.lock().unwrap(),
+            0,
+            "fetch should NOT be called for non-Fixing state"
+        );
+        assert_eq!(
+            *merge_count.lock().unwrap(),
+            0,
+            "merge should NOT be called for non-Fixing state"
+        );
     }
 }
