@@ -94,7 +94,7 @@
   - _Requirements: 4.1, 4.2, 4.3, 4.4_
 
 - [ ] 5.2 静的解析・フォーマットチェックを通過させる
-  - `cargo clippy -- -D warnings` を実行して警告がないことを確認する
-  - `cargo fmt --check` を実行してフォーマット準拠を確認する
+  - `RUSTFLAGS=-D warnings cargo clippy --all-targets` を実行して警告がないことを確認する
+  - `cargo fmt -- --check` を実行してフォーマット準拠を確認する
   - 指摘がある場合は修正して再確認する
   - _Requirements: 4.4, 4.5_
