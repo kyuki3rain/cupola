@@ -93,7 +93,7 @@
 
 ## Risks & Mitigations
 
-- **リスク**: 既存の SQLite データに破損した `fixing_causes` JSON が存在する場合、そのIssueが `find_all`/`find_by_state` でスキップされる
+- **リスク**: 既存の SQLite データに破損した `fixing_causes` JSON が存在する場合、そのIssueが `find_active`/`find_by_state` でスキップされる
   - **緩和**: これが本修正の目的であり、破損Issueがサイレントに処理されるより明示的にエラーログへ記録される方が望ましい
 
 - **リスク**: `str_to_state` が `pub` から `pub(crate)` または非公開に変わる場合、外部テストが壊れる

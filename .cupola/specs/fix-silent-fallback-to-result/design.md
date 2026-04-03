@@ -19,7 +19,7 @@
 ### Non-Goals
 
 - `IssueRepository` トレイトのインターフェース変更
-- `row_to_issue` の呼び出し元（`find_all`, `find_by_state` 等）の変更
+- `row_to_issue` の呼び出し元（`find_active`, `find_needing_process`, `find_by_state` 等）の変更
 - 破損データのリカバリ機能
 - カスタムエラー型の導入
 
@@ -274,7 +274,7 @@ SET state = 'idle',
 
 ### Error Strategy
 
-DBデータ異常を `rusqlite::Error` として伝播し、呼び出し元（`query_map` → `collect::<Result<Vec<_>, _>>` → `.context("...")`）でエラーメッセージをログに記録する。個別の Issue が読み取れない場合は、その Issue のみをスキップしてエラーログを出力する（既存の動作）。
+DBデータ異常を `rusqlite::Error` として伝播し、呼び出し元（`query_map` → `collect::<Result<Vec<_>, _>>` → `.context("...")`）でエラーメッセージをログに記録する。`collect::<Result<Vec<_>, _>>()` を用いるため、個別の Issue が読み取れない場合はその行だけをスキップせず、そのクエリ呼び出し全体が `Err` になる。
 
 ### Error Categories and Responses
 
@@ -297,11 +297,11 @@ DBデータ異常を `rusqlite::Error` として伝播し、呼び出し元（`q
 2. `str_to_state` — 未知文字列で `Err(InvalidColumnType)` を返す
 3. `parse_sqlite_datetime` — 正しい形式で `Ok(DateTime)` を返す
 4. `parse_sqlite_datetime` — 不正形式で `Err(InvalidColumnType)` を返す
-5. `row_to_issue` 相当 — 破損 JSON を持つ Row の `find_all`/`find_by_state` がエラーを返す（in-memory DB 使用）
+5. `row_to_issue` 相当 — 破損 JSON を持つ Row の `find_active`/`find_needing_process`/`find_by_state` がエラーを返す（in-memory DB 使用）
 
 ### Integration Tests（既存 in-memory DB テスト）
 
-1. 正常 Issue の `save` → `find_all` ラウンドトリップ（既存テストの継続通過を確認）
+1. 正常 Issue の `save` → `find_active` ラウンドトリップ（既存テストの継続通過を確認）
 2. `reset_for_restart` 後の `fixing_causes` が `[]` であることを確認
 
 ### Unit Tests（sqlite_connection.rs）

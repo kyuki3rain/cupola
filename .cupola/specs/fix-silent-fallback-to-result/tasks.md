@@ -48,9 +48,9 @@
   - `parse_sqlite_datetime` に無効な文字列を渡したとき `Err` が返ることを確認する
   - _Requirements: 1.1, 1.3, 4.1, 4.2_
 
-- [ ] 3.2 破損データを含む Row が find_all / find_by_state でエラーを返すことを検証する
+- [ ] 3.2 破損データを含む Row が find_active / find_needing_process でエラーを返すことを検証する
   - インメモリ DB に状態が不明文字列の Issue を直接 INSERT する
-  - `find_all` または `find_by_state` を呼んだとき `Err` が返ることを確認する
+  - `find_active` または `find_needing_process` を呼んだとき `Err` が返ることを確認する
   - 破損 JSON（`fixing_causes` が `"not_json"`）の場合も同様に `Err` を返すことを確認する
   - _Requirements: 1.2, 3.1_
 
@@ -59,6 +59,6 @@
   - `reset_for_restart` を呼び出した後、Issue を再取得して `fixing_causes` が空配列であることを確認する
   - _Requirements: 6.1, 6.3_
 
-- [ ]* 3.4 init_schema の冪等性テストで fixing_causes カラムの重複追加が無視されることを確認する
+- [ ] 3.4 init_schema の冪等性テストで fixing_causes カラムの重複追加が無視されることを確認する
   - `init_schema` を2回呼び出してもエラーにならないことを確認する（既存テストが通過すれば可）
   - _Requirements: 5.1_
