@@ -638,6 +638,7 @@ mod tests {
             impl_pr_number: None,
             worktree_path: Some(".cupola/worktrees/42".into()),
             retry_count: 1,
+            ci_fix_count: 0,
             current_pid: None,
             error_message: None,
             feature_name: None,

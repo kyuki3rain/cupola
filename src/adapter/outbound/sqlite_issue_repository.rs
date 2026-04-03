@@ -31,7 +31,7 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
                         worktree_path, retry_count, current_pid, error_message, feature_name, weight,
-                        fixing_causes, created_at, updated_at
+                        fixing_causes, created_at, updated_at, ci_fix_count
                  FROM issues WHERE id = ?1",
             )?;
             let issue = stmt
@@ -54,7 +54,7 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
                         worktree_path, retry_count, current_pid, error_message, feature_name, weight,
-                        fixing_causes, created_at, updated_at
+                        fixing_causes, created_at, updated_at, ci_fix_count
                  FROM issues WHERE github_issue_number = ?1",
             )?;
             let issue = stmt
@@ -77,7 +77,7 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
                         worktree_path, retry_count, current_pid, error_message, feature_name, weight,
-                        fixing_causes, created_at, updated_at
+                        fixing_causes, created_at, updated_at, ci_fix_count
                  FROM issues WHERE state NOT IN ('completed', 'cancelled')",
             )?;
             let issues = stmt
@@ -100,7 +100,7 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
                         worktree_path, retry_count, current_pid, error_message, feature_name, weight,
-                        fixing_causes, created_at, updated_at
+                        fixing_causes, created_at, updated_at, ci_fix_count
                  FROM issues WHERE state IN ('design_running', 'design_fixing', 'implementation_running', 'implementation_fixing')",
             )?;
             let issues = stmt
@@ -126,8 +126,8 @@ impl IssueRepository for SqliteIssueRepository {
             conn.execute(
                 "INSERT INTO issues (github_issue_number, state, design_pr_number, impl_pr_number,
                                      worktree_path, retry_count, current_pid, error_message, feature_name, weight,
-                                     fixing_causes)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                                     fixing_causes, ci_fix_count)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 rusqlite::params![
                     issue.github_issue_number,
                     state_to_str(&issue.state),
@@ -140,6 +140,7 @@ impl IssueRepository for SqliteIssueRepository {
                     issue.feature_name,
                     task_weight_to_str(issue.weight),
                     fixing_causes_json,
+                    issue.ci_fix_count,
                 ],
             )
             .context("save issue failed")?;
@@ -181,8 +182,8 @@ impl IssueRepository for SqliteIssueRepository {
                 "UPDATE issues SET state = ?1, design_pr_number = ?2, impl_pr_number = ?3,
                                    worktree_path = ?4, retry_count = ?5, current_pid = ?6,
                                    error_message = ?7, feature_name = ?8, weight = ?9,
-                                   fixing_causes = ?10, updated_at = datetime('now')
-                 WHERE id = ?11",
+                                   fixing_causes = ?10, ci_fix_count = ?11, updated_at = datetime('now')
+                 WHERE id = ?12",
                 rusqlite::params![
                     state_to_str(&issue.state),
                     issue.design_pr_number,
@@ -194,6 +195,7 @@ impl IssueRepository for SqliteIssueRepository {
                     issue.feature_name,
                     task_weight_to_str(issue.weight),
                     fixing_causes_json,
+                    issue.ci_fix_count,
                     issue.id,
                 ],
             )
@@ -240,7 +242,7 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
                         worktree_path, retry_count, current_pid, error_message, feature_name, weight,
-                        fixing_causes, created_at, updated_at
+                        fixing_causes, created_at, updated_at, ci_fix_count
                  FROM issues WHERE state = ?1",
             )?;
             let issues = stmt
@@ -337,6 +339,7 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
         fixing_causes,
         created_at: parse_sqlite_datetime(12, &created_str)?,
         updated_at: parse_sqlite_datetime(13, &updated_str)?,
+        ci_fix_count: row.get(14)?,
     })
 }
 
@@ -369,6 +372,7 @@ mod tests {
             impl_pr_number: None,
             worktree_path: None,
             retry_count: 0,
+            ci_fix_count: 0,
             current_pid: None,
             error_message: None,
             feature_name: None,
@@ -741,6 +745,80 @@ mod tests {
         assert!(
             result.is_err(),
             "find_active should return Err for corrupt fixing_causes"
+        );
+    }
+
+    #[tokio::test]
+    async fn ci_fix_count_persists_and_loads() {
+        let (_db, repo) = setup();
+        let id = repo.save(&new_issue(400)).await.expect("save");
+
+        let mut issue = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert_eq!(issue.ci_fix_count, 0);
+
+        issue.ci_fix_count = 2;
+        repo.update(&issue).await.expect("update");
+
+        let found = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert_eq!(found.ci_fix_count, 2);
+    }
+
+    #[tokio::test]
+    async fn ci_fix_count_default_is_zero_on_save() {
+        let (_db, repo) = setup();
+        let id = repo.save(&new_issue(401)).await.expect("save");
+
+        let found = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert_eq!(found.ci_fix_count, 0);
+    }
+
+    #[test]
+    fn migration_adds_ci_fix_count_column_to_existing_db() {
+        let db = SqliteConnection::open_in_memory().expect("should open");
+        let conn = db.conn().lock().expect("mutex");
+
+        // Create a legacy issues table without ci_fix_count column
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS issues (
+                id                  INTEGER PRIMARY KEY,
+                github_issue_number INTEGER UNIQUE NOT NULL,
+                state               TEXT NOT NULL DEFAULT 'idle',
+                design_pr_number    INTEGER,
+                impl_pr_number      INTEGER,
+                worktree_path       TEXT,
+                retry_count         INTEGER NOT NULL DEFAULT 0,
+                current_pid         INTEGER,
+                created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+                error_message       TEXT,
+                feature_name        TEXT,
+                weight              TEXT NOT NULL DEFAULT 'medium',
+                fixing_causes       TEXT NOT NULL DEFAULT '[]'
+            );",
+        )
+        .expect("create legacy table");
+
+        conn.execute(
+            "INSERT INTO issues (github_issue_number, state) VALUES (1, 'idle')",
+            [],
+        )
+        .expect("insert");
+
+        drop(conn);
+
+        db.init_schema().expect("migration should succeed");
+
+        let conn = db.conn().lock().expect("mutex");
+        let ci_fix_count: i64 = conn
+            .query_row(
+                "SELECT ci_fix_count FROM issues WHERE github_issue_number = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query");
+        assert_eq!(
+            ci_fix_count, 0,
+            "existing record should have default ci_fix_count 0"
         );
     }
 

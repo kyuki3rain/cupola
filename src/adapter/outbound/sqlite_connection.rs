@@ -57,7 +57,9 @@ impl SqliteConnection {
                 updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
                 error_message       TEXT,
                 feature_name        TEXT,
-                weight              TEXT NOT NULL DEFAULT 'medium'
+                weight              TEXT NOT NULL DEFAULT 'medium',
+                fixing_causes       TEXT NOT NULL DEFAULT '[]',
+                ci_fix_count        INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS execution_log (
@@ -84,6 +86,9 @@ impl SqliteConnection {
 
         // Migration: add fixing_causes column for existing databases
         Self::run_add_column_migration(&conn, "fixing_causes TEXT NOT NULL DEFAULT '[]'")?;
+
+        // Migration: add ci_fix_count column for existing databases
+        Self::run_add_column_migration(&conn, "ci_fix_count INTEGER NOT NULL DEFAULT 0")?;
 
         Ok(())
     }

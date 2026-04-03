@@ -83,6 +83,7 @@ impl<G: GitHubClient, I: IssueRepository, W: GitWorktree> TransitionUseCase<'_, 
             impl_pr_number: None,
             worktree_path: None,
             retry_count: 0,
+            ci_fix_count: 0,
             current_pid: None,
             error_message: None,
             feature_name: None,
@@ -114,6 +115,10 @@ impl<G: GitHubClient, I: IssueRepository, W: GitWorktree> TransitionUseCase<'_, 
 
             // DesignReviewWaiting → ImplementationRunning
             (State::ImplementationRunning, Event::DesignPrMerged) => {
+                // Reset ci_fix_count on phase change (Design → Implementation)
+                issue.ci_fix_count = 0;
+                self.issue_repo.update(issue).await?;
+
                 if let Some(ref wt) = issue.worktree_path {
                     let wt_path = std::path::Path::new(wt);
                     let branch = format!("cupola/{}/main", issue.github_issue_number);
