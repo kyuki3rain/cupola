@@ -496,13 +496,31 @@ where
                 }
             }
 
-            // (5) If any causes found, save to DB and emit event
-            if !causes.is_empty() {
+            // (5) Evaluate causes and update ci_fix_count accordingly
+            let has_review_comments = causes.contains(&FixingProblemKind::ReviewComments);
+            let has_ci_or_conflict = causes.iter().any(|c| {
+                matches!(
+                    c,
+                    FixingProblemKind::CiFailure | FixingProblemKind::Conflict
+                )
+            });
+
+            if causes.is_empty() {
+                // causes 空 → リセット、emit なし（すでに 0 なら DB 更新不要）
+                if issue.ci_fix_count != 0 {
+                    tracing::info!(issue_id = issue.id, "causes empty, resetting ci_fix_count");
+                    issue.ci_fix_count = 0;
+                    if let Err(e) = self.issue_repo.update(&issue).await {
+                        tracing::warn!(issue_id = issue.id, error = %e, "failed to update ci_fix_count");
+                    }
+                }
+            } else if has_review_comments {
+                // ReviewComments を含む → リセット + FixingRequired emit (CiFailure 同時発生も含む)
                 tracing::info!(
-                    pr_number = pr_num,
-                    cause_count = causes.len(),
-                    "fixing causes collected"
+                    issue_id = issue.id,
+                    "ReviewComments detected, resetting ci_fix_count"
                 );
+                issue.ci_fix_count = 0;
                 issue.fixing_causes = causes;
                 if let Err(e) = self.issue_repo.update(&issue).await {
                     tracing::warn!(
@@ -513,6 +531,50 @@ where
                     continue;
                 }
                 events.push((issue.id, Event::FixingRequired));
+            } else if has_ci_or_conflict {
+                let max = self.config.max_ci_fix_cycles;
+                if issue.ci_fix_count < max {
+                    // 上限未満 → インクリメント + FixingRequired emit
+                    issue.ci_fix_count += 1;
+                    tracing::info!(
+                        issue_id = issue.id,
+                        ci_fix_count = issue.ci_fix_count,
+                        "CI/Conflict detected, incrementing ci_fix_count"
+                    );
+                    issue.fixing_causes = causes;
+                    if let Err(e) = self.issue_repo.update(&issue).await {
+                        tracing::warn!(
+                            issue_id = issue.id,
+                            error = %e,
+                            "failed to update fixing_causes, skipping event"
+                        );
+                        continue;
+                    }
+                    events.push((issue.id, Event::FixingRequired));
+                } else {
+                    // 上限以上 → emit なし、上限到達サイクルのみコメント投稿
+                    if issue.ci_fix_count == max {
+                        tracing::warn!(
+                            issue_id = issue.id,
+                            ci_fix_count = issue.ci_fix_count,
+                            max_ci_fix_cycles = max,
+                            "ci_fix_count reached max"
+                        );
+                        let comment =
+                            "CI/Conflict の修正が上限に達しました。手動確認してください。";
+                        if let Err(e) = self
+                            .github
+                            .comment_on_issue(issue.github_issue_number, comment)
+                            .await
+                        {
+                            tracing::warn!(
+                                issue_id = issue.id,
+                                error = %e,
+                                "failed to post ci_fix_count limit comment"
+                            );
+                        }
+                    }
+                }
             }
         }
     }
@@ -1508,6 +1570,7 @@ mod tests {
             impl_pr_number: impl_pr,
             worktree_path: None,
             retry_count: 0,
+            ci_fix_count: 0,
             current_pid: None,
             error_message: None,
             feature_name: None,
@@ -1625,6 +1688,7 @@ mod tests {
             impl_pr_number: None,
             worktree_path: Some("/tmp/wt/42".to_string()),
             retry_count: 0,
+            ci_fix_count: 0,
             current_pid: None,
             error_message: None,
             feature_name: None,
@@ -1644,6 +1708,7 @@ mod tests {
             impl_pr_number: Some(pr_num),
             worktree_path: Some("/tmp/wt/43".to_string()),
             retry_count: 0,
+            ci_fix_count: 0,
             current_pid: None,
             error_message: None,
             feature_name: None,
@@ -1878,6 +1943,7 @@ mod tests {
             impl_pr_number: None,
             worktree_path: Some("/tmp".to_string()),
             retry_count: 0,
+            ci_fix_count: 0,
             current_pid: None,
             error_message: None,
             feature_name: None,
@@ -1941,6 +2007,7 @@ mod tests {
             impl_pr_number: None,
             worktree_path: None,
             retry_count: 0,
+            ci_fix_count: 0,
             current_pid: None,
             error_message: None,
             feature_name: None,
@@ -2106,6 +2173,7 @@ mod tests {
             impl_pr_number: None,
             worktree_path: None,
             retry_count: 0,
+            ci_fix_count: 0,
             current_pid: None,
             error_message: None,
             feature_name: None,
@@ -2650,6 +2718,7 @@ mod tests {
             impl_pr_number: None,
             worktree_path: None,
             retry_count: 0,
+            ci_fix_count: 0,
             current_pid: None,
             error_message: None,
             feature_name: None,

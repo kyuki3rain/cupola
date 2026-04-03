@@ -19,6 +19,7 @@ pub struct Config {
     pub language: String,
     pub polling_interval_secs: u64,
     pub max_retries: u32,
+    pub max_ci_fix_cycles: u32,
     pub stall_timeout_secs: u64,
     pub log_level: LogLevel,
     pub log_dir: PathBuf,
@@ -35,6 +36,7 @@ impl Config {
             language: "ja".to_string(),
             polling_interval_secs: 60,
             max_retries: 3,
+            max_ci_fix_cycles: 3,
             stall_timeout_secs: 1800,
             log_level: LogLevel::Info,
             log_dir: PathBuf::from(".cupola/logs"),
@@ -72,6 +74,9 @@ impl Config {
         }
         if let Some(0) = self.max_concurrent_sessions {
             return Err("max_concurrent_sessions must be greater than 0".to_string());
+        }
+        if self.max_ci_fix_cycles == 0 {
+            return Err("max_ci_fix_cycles must be greater than 0".to_string());
         }
         self.models.validate()?;
         Ok(())
@@ -308,6 +313,30 @@ mod tests {
     fn validate_accepts_valid_default_config() {
         let config =
             Config::default_with_repo("owner".to_string(), "repo".to_string(), "main".to_string());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn default_with_repo_max_ci_fix_cycles_is_3() {
+        let config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        assert_eq!(config.max_ci_fix_cycles, 3);
+    }
+
+    #[test]
+    fn validate_rejects_zero_max_ci_fix_cycles() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.max_ci_fix_cycles = 0;
+        let err = config.validate().unwrap_err();
+        assert_eq!(err, "max_ci_fix_cycles must be greater than 0");
+    }
+
+    #[test]
+    fn validate_accepts_positive_max_ci_fix_cycles() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.max_ci_fix_cycles = 5;
         assert!(config.validate().is_ok());
     }
 }

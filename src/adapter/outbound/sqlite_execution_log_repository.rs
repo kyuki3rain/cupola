@@ -159,6 +159,7 @@ mod tests {
             impl_pr_number: None,
             worktree_path: None,
             retry_count: 0,
+            ci_fix_count: 0,
             current_pid: None,
             error_message: None,
             feature_name: None,
