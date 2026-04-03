@@ -9,7 +9,7 @@
 ### Goals
 - `step1_issue_polling` の全分岐（新規 Issue 検出・重複スキップ・close 検出・エラー継続）をテストでカバーする
 - `resolve_close_event_for_issue` の全分岐（PR merge 判定・フォールバック）をテストでカバーする
-- `cargo test` および `cargo clippy -- -D warnings` をすべてパスするテストコードを実装する
+- `cargo test` および `RUSTFLAGS=-D warnings cargo clippy --all-targets` をすべてパスするテストコードを実装する
 
 ### Non-Goals
 - プロダクションコードの変更
@@ -120,7 +120,7 @@ sequenceDiagram
 | Component | Domain/Layer | Intent | Req Coverage | Key Dependencies | Contracts |
 |-----------|--------------|--------|--------------|------------------|-----------|
 | MockGitHubStep1 | application/test | step1 向け GitHubClient mock | 1.1〜1.5, 2.1〜2.4, 3.1〜3.4 | GitHubClient trait (P0) | Service |
-| MockIssueRepoStep1 | application/test | step1 向け IssueRepository mock | 1.1〜1.4, 1.5, 2.1〜2.5 | IssueRepository trait (P0) | Service |
+| MockIssueRepoStep1 | application/test | step1 向け IssueRepository mock | 1.1〜1.4, 2.1〜2.5 | IssueRepository trait (P0) | Service |
 | step1 テスト関数群 | application/test | step1_issue_polling の全分岐テスト | 1.1〜1.5, 2.1〜2.5 | MockGitHubStep1 (P0), MockIssueRepoStep1 (P0) | - |
 | resolve_close テスト関数群 | application/test | resolve_close_event_for_issue の全分岐テスト | 3.1〜3.6 | MockGitHubStep1 (P0), review_waiting_issue ヘルパー (P1) | - |
 
@@ -136,7 +136,7 @@ sequenceDiagram
 **Responsibilities & Constraints**
 - `list_ready_issues`: `ready_issues: Vec<GitHubIssue>` フィールドを返すか、`list_ready_issues_err: bool` が true なら `Err` を返す
 - `is_issue_open`: `issue_open: bool` フィールドを返すか、`is_issue_open_err: bool` が true なら `Err` を返す
-- `is_pr_merged`: `pr_merged: Result<bool, ()>` フィールドに基づいて返す
+- `is_pr_merged`: `pr_merged: bool` フィールドを返すか、`is_pr_merged_err: bool` が true なら `Err` を返す
 - その他のメソッドは `unimplemented!()` または Noop
 
 **Dependencies**
@@ -243,5 +243,5 @@ resolve_close_event_for_issue（Requirement 3）:
 
 ### 品質チェック（Requirement 4）
 - `cargo test` — 全テストが pass すること
-- `cargo clippy -- -D warnings` — 警告なし
-- `cargo fmt --check` — フォーマット準拠
+- `RUSTFLAGS=-D warnings cargo clippy --all-targets` — 警告なし
+- `cargo fmt -- --check` — フォーマット準拠
