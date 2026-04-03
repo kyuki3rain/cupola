@@ -104,7 +104,7 @@ sequenceDiagram
     else CiFailure/Conflict 含む かつ count < max
         Step4->>Step4: ci_fix_count += 1
         Step4->>Repo: update(issue)
-        Step5->>Events: emit FixingRequired
+        Step4->>Events: emit FixingRequired
     else CiFailure/Conflict 含む かつ count >= max
         Step4->>GitHub: post_issue_comment("CI/Conflictの修正が上限に達しました...")
         Note over Step4: FixingRequired を emit しない
