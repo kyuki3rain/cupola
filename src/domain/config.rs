@@ -19,7 +19,7 @@ pub struct Config {
     pub max_retries: u32,
     pub stall_timeout_secs: u64,
     pub log_level: LogLevel,
-    pub log_dir: Option<PathBuf>,
+    pub log_dir: PathBuf,
     pub max_concurrent_sessions: Option<u32>,
     pub model: String,
 }
@@ -35,13 +35,16 @@ impl Config {
             max_retries: 3,
             stall_timeout_secs: 1800,
             log_level: LogLevel::Info,
-            log_dir: None,
+            log_dir: PathBuf::from(".cupola/logs"),
             max_concurrent_sessions: None,
             model: "sonnet".to_string(),
         }
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.log_dir.as_os_str().is_empty() {
+            return Err("log_dir must not be empty".to_string());
+        }
         if let Some(0) = self.max_concurrent_sessions {
             return Err("max_concurrent_sessions must be greater than 0".to_string());
         }
@@ -65,7 +68,7 @@ mod tests {
         assert_eq!(config.max_retries, 3);
         assert_eq!(config.stall_timeout_secs, 1800);
         assert_eq!(config.log_level, LogLevel::Info);
-        assert!(config.log_dir.is_none());
+        assert_eq!(config.log_dir, PathBuf::from(".cupola/logs"));
         assert!(config.max_concurrent_sessions.is_none());
         assert_eq!(config.model, "sonnet");
     }

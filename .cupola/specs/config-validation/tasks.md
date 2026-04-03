@@ -6,6 +6,15 @@
 
 - [ ] 1. `Config::validate()` のバリデーションロジックを拡張する
 
+- [ ] 1.0 `log_dir` の必須化と空チェックを実装する
+  - `Config.log_dir` の型を `Option<PathBuf>` から `PathBuf` に変更する
+  - `default_with_repo` のデフォルト値を `PathBuf::from(".cupola/logs")` に設定する
+  - `validate()` で `log_dir.as_os_str().is_empty()` のときエラーを返す処理を追加する
+  - `config_loader.rs` の `into_config` で `log.dir` が未設定の場合 `".cupola/logs"` をデフォルト値として使用する
+  - `app.rs` の daemon モード `cfg.log_dir.is_none()` チェックを削除する
+  - `logging.rs` の `init_logging` 引数を `Option<&Path>` → `&Path`、戻り値を `Option<WorkerGuard>` → `WorkerGuard` に変更する
+  - _Requirements: 6.1, 6.2, 6.3, 6.4_
+
 - [ ] 1.1 文字列フィールドの空文字列チェックを追加する
   - `owner`、`repo`、`default_branch`、`language`、`model` の各フィールドに対して、空文字列の場合にエラーを返す処理を追加する
   - 評価順序: owner → repo → default_branch → language → model の順で評価し、最初に検出したエラーで早期リターンする
@@ -29,6 +38,12 @@
 ---
 
 - [ ] 2. 追加バリデーションに対するユニットテストを実装する
+
+- [ ] 2.0 `log_dir` バリデーションに対するテストを追加する
+  - `validate_rejects_empty_log_dir` — `log_dir` が空パス（`PathBuf::from("")`）のとき `Err` が返ることを確認
+  - `validate_accepts_nonempty_log_dir` — `log_dir` が非空パスのとき OK が返ることを確認
+  - `default_with_repo_log_dir_is_default_path` — デフォルト値が `".cupola/logs"` であることを確認
+  - _Requirements: 6.1, 6.2_
 
 - [ ] 2.1 文字列フィールドの空文字列チェックに対するテストを追加する
   - `validate_rejects_empty_owner` — `owner` が空文字列のとき `Err` が返ることを確認

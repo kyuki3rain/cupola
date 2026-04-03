@@ -6,16 +6,18 @@
 
 **Users**: Cupola の運用者（設定ファイルを記述するユーザー）が主な対象。設定ミスを起動直後に明確なエラーメッセージで検知できる。
 
-**Impact**: `src/domain/config.rs` の `Config::validate()` メソッドのみを変更する。既存の `max_concurrent_sessions` チェックは維持し、7 つの新チェックを追加する。
+**Impact**: 主に `src/domain/config.rs` の `Config::validate()` メソッドを変更する。加えて `Config.log_dir` の型変更に伴い `src/bootstrap/config_loader.rs`、`src/bootstrap/app.rs`、`src/bootstrap/logging.rs` も変更する。既存の `max_concurrent_sessions` チェックは維持し、8 つの新チェックを追加する。
 
 ### Goals
 - 5 つの文字列フィールド（owner, repo, default_branch, language, model）に対して空文字列禁止を適用する
+- `log_dir` の空パスチェックを追加し、`Config.log_dir` の型を `Option<PathBuf>` から `PathBuf` に変更する
 - `polling_interval_secs` の絶対下限（10 秒）を強制する
 - `stall_timeout_secs` の絶対下限（60 秒）と `polling_interval_secs` との大小関係を強制する
 - 既存バリデーション（`max_concurrent_sessions`）との共存を保証する
 
 ### Non-Goals
 - `log_dir` のディレクトリ存在チェック（I/O が必要なため domain 層では扱わない）
+- `log_dir` の空チェックは validate() で行うが、ディレクトリが実際に存在するかは検証しない
 - `max_retries` のチェック（`u32` 型で >= 0 は型保証済み）
 - `log_level` のチェック（enum で静的保証済み）
 - 複数エラーの同時収集（本機能は早期リターン方式を採用）
@@ -54,7 +56,9 @@ graph TB
 
 ```mermaid
 graph TD
-    Start([validate 開始]) --> C1{owner 空文字?}
+    Start([validate 開始]) --> C0{log_dir 空パス?}
+    C0 -->|Yes| E0[Err: log_dir must not be empty]
+    C0 -->|No| C1{owner 空文字?}
     C1 -->|Yes| E1[Err: owner must not be empty]
     C1 -->|No| C2{repo 空文字?}
     C2 -->|Yes| E2[Err: repo must not be empty]
@@ -101,11 +105,15 @@ graph TD
 | 4.3 | stall > polling ならエラーなし | Config::validate | validate() | C8 pass |
 | 4.4 | 絶対下限違反時は相関チェックをスキップ | Config::validate | validate() | C6/C7 で早期リターン |
 | 5.1 | max_concurrent_sessions Some(0) で既存エラー | Config::validate | validate() | C9 |
-| 5.2 | 新旧チェックの共存 | Config::validate | validate() | C1-C9 全体 |
+| 5.2 | 新旧チェックの共存 | Config::validate | validate() | C0-C9 全体 |
 | 5.3 | 全条件満足時 Ok(()) | Config::validate | validate() | OK |
-| 6.1 | エラーメッセージにフィールド名を含む | Config::validate | validate() | 全エラーメッセージ |
-| 6.2 | 数値系エラーに下限値を含む | Config::validate | validate() | E6, E7 |
-| 6.3 | エラーメッセージは英語 | Config::validate | validate() | 全エラーメッセージ |
+| 6.1 | log_dir 空パスチェック | Config::validate | validate() | C0 |
+| 6.2 | log_dir 型変更 Option<PathBuf> → PathBuf、デフォルト値 ".cupola/logs" | config_loader, domain | into_config() | — |
+| 6.3 | daemon の log_dir.is_none() チェック削除 | bootstrap/app.rs | start_daemon() | — |
+| 6.4 | init_logging 引数 Option<&Path> → &Path | bootstrap/logging.rs | init_logging() | — |
+| 7.1 | エラーメッセージにフィールド名を含む | Config::validate | validate() | 全エラーメッセージ |
+| 7.2 | 数値系エラーに下限値を含む | Config::validate | validate() | E6, E7 |
+| 7.3 | エラーメッセージは英語 | Config::validate | validate() | 全エラーメッセージ |
 
 ## Components and Interfaces
 
@@ -143,7 +151,7 @@ impl Config {
 - Invariants: デフォルト値（`Config::default_with_repo` で生成）は常に `Ok(())` を返す
 
 **Implementation Notes**
-- 評価順序: owner → repo → default_branch → language → model → polling_interval_secs → stall_timeout_secs → stall vs polling の相関 → max_concurrent_sessions
+- 評価順序: log_dir → owner → repo → default_branch → language → model → polling_interval_secs → stall_timeout_secs → stall vs polling の相関 → max_concurrent_sessions
 - 空文字列チェック: `self.owner.is_empty()` パターン（`.trim()` は行わない — 設定ファイルの空白はユーザーの意図とみなす）
 - エラーメッセージは英語の小文字スネーク記法（フィールド名はコード上の名前と一致させる）
 - Risks: なし（domain 層の pure 関数拡張のみ）
@@ -160,6 +168,7 @@ impl Config {
 
 | フィールド | 条件 | エラーメッセージ |
 |-----------|------|-----------------|
+| log_dir | 空パス | `"log_dir must not be empty"` |
 | owner | 空文字列 | `"owner must not be empty"` |
 | repo | 空文字列 | `"repo must not be empty"` |
 | default_branch | 空文字列 | `"default_branch must not be empty"` |
