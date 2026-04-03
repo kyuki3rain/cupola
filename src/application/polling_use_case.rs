@@ -1882,7 +1882,7 @@ mod tests {
             error_message: None,
             feature_name: None,
             fixing_causes: vec![],
-            model: None,
+            weight: TaskWeight::Medium,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -1951,6 +1951,171 @@ mod tests {
         }
     }
 
+    // --- Mocks for step1 tests ---
+
+    struct MockGitHubStep1 {
+        ready_issues: Vec<GitHubIssue>,
+        list_ready_issues_err: bool,
+        issue_open: bool,
+        is_issue_open_err: bool,
+        pr_merged: bool,
+        is_pr_merged_err: bool,
+    }
+
+    impl crate::application::port::github_client::GitHubClient for MockGitHubStep1 {
+        async fn list_ready_issues(&self) -> anyhow::Result<Vec<GitHubIssue>> {
+            if self.list_ready_issues_err {
+                return Err(anyhow::anyhow!("list_ready_issues error"));
+            }
+            Ok(self.ready_issues.clone())
+        }
+        async fn get_issue(&self, n: u64) -> anyhow::Result<GitHubIssueDetail> {
+            Ok(GitHubIssueDetail {
+                number: n,
+                title: "Test Issue".to_string(),
+                body: "Test body".to_string(),
+                labels: vec![],
+            })
+        }
+        async fn is_issue_open(&self, _: u64) -> anyhow::Result<bool> {
+            if self.is_issue_open_err {
+                return Err(anyhow::anyhow!("is_issue_open error"));
+            }
+            Ok(self.issue_open)
+        }
+        async fn find_pr_by_branches(&self, _: &str, _: &str) -> anyhow::Result<Option<GitHubPr>> {
+            Ok(None)
+        }
+        async fn is_pr_merged(&self, _: u64) -> anyhow::Result<bool> {
+            if self.is_pr_merged_err {
+                return Err(anyhow::anyhow!("is_pr_merged error"));
+            }
+            Ok(self.pr_merged)
+        }
+        async fn list_unresolved_threads(&self, _: u64) -> anyhow::Result<Vec<ReviewThread>> {
+            Ok(vec![])
+        }
+        async fn create_pr(&self, _: &str, _: &str, _: &str, _: &str) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
+        async fn reply_to_thread(&self, _: &str, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn resolve_thread(&self, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn comment_on_issue(&self, _: u64, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn close_issue(&self, _: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn get_ci_check_runs(&self, _: u64) -> anyhow::Result<Vec<GitHubCheckRun>> {
+            Ok(vec![])
+        }
+        async fn get_job_logs(&self, _: u64) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+        async fn get_pr_mergeable(&self, _: u64) -> anyhow::Result<Option<bool>> {
+            Ok(None)
+        }
+        async fn get_pr_details(&self, _: u64) -> anyhow::Result<GitHubPrDetails> {
+            Ok(GitHubPrDetails {
+                merged: self.pr_merged,
+                mergeable: None,
+            })
+        }
+        async fn get_pr_status(&self, _: u64) -> anyhow::Result<PrStatus> {
+            Ok(PrStatus::Closed)
+        }
+    }
+
+    struct MockIssueRepoStep1 {
+        issues_by_number: std::collections::HashMap<u64, Option<Issue>>,
+        active_issues: Vec<Issue>,
+        find_active_err: bool,
+    }
+
+    impl crate::application::port::issue_repository::IssueRepository for MockIssueRepoStep1 {
+        async fn find_by_id(&self, _: i64) -> anyhow::Result<Option<Issue>> {
+            Ok(None)
+        }
+        async fn find_by_issue_number(&self, n: u64) -> anyhow::Result<Option<Issue>> {
+            Ok(self.issues_by_number.get(&n).cloned().flatten())
+        }
+        async fn find_active(&self) -> anyhow::Result<Vec<Issue>> {
+            if self.find_active_err {
+                return Err(anyhow::anyhow!("find_active error"));
+            }
+            Ok(self.active_issues.clone())
+        }
+        async fn find_needing_process(&self) -> anyhow::Result<Vec<Issue>> {
+            Ok(vec![])
+        }
+        async fn save(&self, _: &Issue) -> anyhow::Result<i64> {
+            Ok(0)
+        }
+        async fn update_state(&self, _: i64, _: State) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn update(&self, _: &Issue) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn reset_for_restart(&self, _: i64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn find_by_state(&self, _: State) -> anyhow::Result<Vec<Issue>> {
+            Ok(vec![])
+        }
+    }
+
+    type Step1TestUseCase = PollingUseCase<
+        MockGitHubStep1,
+        MockIssueRepoStep1,
+        NoopExecLogRepo,
+        NoopClaudeRunner,
+        NoopWorktree,
+    >;
+
+    fn make_uc_step1(github: MockGitHubStep1, repo: MockIssueRepoStep1) -> Step1TestUseCase {
+        let config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        PollingUseCase::new(
+            github,
+            repo,
+            NoopExecLogRepo,
+            NoopClaudeRunner,
+            NoopWorktree,
+            config,
+        )
+    }
+
+    fn github_issue(number: u64) -> GitHubIssue {
+        GitHubIssue {
+            number,
+            title: format!("Issue {number}"),
+        }
+    }
+
+    fn active_issue(id: i64, issue_number: u64, state: State) -> Issue {
+        Issue {
+            id,
+            github_issue_number: issue_number,
+            state,
+            design_pr_number: None,
+            impl_pr_number: None,
+            worktree_path: None,
+            retry_count: 0,
+            current_pid: None,
+            error_message: None,
+            feature_name: None,
+            fixing_causes: vec![],
+            weight: TaskWeight::Medium,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
     #[tokio::test]
     async fn step3_stale_failed_exit_does_not_emit_event_for_design_review_waiting() {
         // Session was registered during DesignRunning; issue has since transitioned to
@@ -1971,6 +2136,286 @@ mod tests {
         );
     }
 
+    // --- Step1 新規 Issue 検出テスト ---
+
+    #[tokio::test]
+    async fn step1_new_issue_detected_emits_issue_detected_event() {
+        let github = MockGitHubStep1 {
+            ready_issues: vec![github_issue(1)],
+            list_ready_issues_err: false,
+            issue_open: false,
+            is_issue_open_err: false,
+            pr_merged: false,
+            is_pr_merged_err: false,
+        };
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: std::collections::HashMap::new(),
+            active_issues: vec![],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let mut events = vec![];
+        uc.step1_issue_polling(&mut events).await;
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0],
+            (0, Event::IssueDetected { issue_number: 1 })
+        ));
+    }
+
+    #[tokio::test]
+    async fn step1_multiple_issues_each_emit_event() {
+        let github = MockGitHubStep1 {
+            ready_issues: vec![github_issue(1), github_issue(2), github_issue(3)],
+            list_ready_issues_err: false,
+            issue_open: true,
+            is_issue_open_err: false,
+            pr_merged: false,
+            is_pr_merged_err: false,
+        };
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: std::collections::HashMap::new(),
+            active_issues: vec![],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let mut events = vec![];
+        uc.step1_issue_polling(&mut events).await;
+        assert_eq!(events.len(), 3);
+        let issue_numbers: Vec<u64> = events
+            .iter()
+            .filter_map(|(_, e)| {
+                if let Event::IssueDetected { issue_number } = e {
+                    Some(*issue_number)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(issue_numbers.contains(&1));
+        assert!(issue_numbers.contains(&2));
+        assert!(issue_numbers.contains(&3));
+    }
+
+    #[tokio::test]
+    async fn step1_non_terminal_existing_issue_is_skipped() {
+        let github = MockGitHubStep1 {
+            ready_issues: vec![github_issue(10)],
+            list_ready_issues_err: false,
+            issue_open: true,
+            is_issue_open_err: false,
+            pr_merged: false,
+            is_pr_merged_err: false,
+        };
+        let existing = active_issue(1, 10, State::DesignRunning);
+        let mut map = std::collections::HashMap::new();
+        map.insert(10u64, Some(existing));
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: map,
+            active_issues: vec![],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let mut events = vec![];
+        uc.step1_issue_polling(&mut events).await;
+        assert!(events.is_empty(), "non-terminal issue should be skipped");
+    }
+
+    #[tokio::test]
+    async fn step1_terminal_existing_issue_is_redetected() {
+        let github = MockGitHubStep1 {
+            ready_issues: vec![github_issue(20)],
+            list_ready_issues_err: false,
+            issue_open: false,
+            is_issue_open_err: false,
+            pr_merged: false,
+            is_pr_merged_err: false,
+        };
+        let existing = active_issue(1, 20, State::Completed);
+        let mut map = std::collections::HashMap::new();
+        map.insert(20u64, Some(existing));
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: map,
+            active_issues: vec![],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let mut events = vec![];
+        uc.step1_issue_polling(&mut events).await;
+        assert_eq!(events.len(), 1, "terminal issue should be redetected");
+        assert!(matches!(
+            events[0],
+            (0, Event::IssueDetected { issue_number: 20 })
+        ));
+    }
+
+    #[tokio::test]
+    async fn step1_list_ready_issues_error_no_event() {
+        let github = MockGitHubStep1 {
+            ready_issues: vec![],
+            list_ready_issues_err: true,
+            issue_open: false,
+            is_issue_open_err: false,
+            pr_merged: false,
+            is_pr_merged_err: false,
+        };
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: std::collections::HashMap::new(),
+            active_issues: vec![],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let mut events = vec![];
+        uc.step1_issue_polling(&mut events).await;
+        assert!(
+            events.is_empty(),
+            "list_ready_issues error should produce no events"
+        );
+    }
+
+    // --- Step1 close 検出テスト ---
+
+    #[tokio::test]
+    async fn step1_closed_non_review_waiting_emits_issue_closed() {
+        let issue = active_issue(5, 100, State::DesignRunning);
+        let github = MockGitHubStep1 {
+            ready_issues: vec![],
+            list_ready_issues_err: false,
+            issue_open: false,
+            is_issue_open_err: false,
+            pr_merged: false,
+            is_pr_merged_err: false,
+        };
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: std::collections::HashMap::new(),
+            active_issues: vec![issue],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let mut events = vec![];
+        uc.step1_issue_polling(&mut events).await;
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], (5, Event::IssueClosed)));
+    }
+
+    #[tokio::test]
+    async fn step1_open_issue_emits_no_event() {
+        let issue = active_issue(6, 101, State::ImplementationRunning);
+        let github = MockGitHubStep1 {
+            ready_issues: vec![],
+            list_ready_issues_err: false,
+            issue_open: true,
+            is_issue_open_err: false,
+            pr_merged: false,
+            is_pr_merged_err: false,
+        };
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: std::collections::HashMap::new(),
+            active_issues: vec![issue],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let mut events = vec![];
+        uc.step1_issue_polling(&mut events).await;
+        assert!(
+            events.is_empty(),
+            "open issue should produce no close event"
+        );
+    }
+
+    #[tokio::test]
+    async fn step1_closed_design_review_waiting_with_merged_pr_emits_design_pr_merged() {
+        let issue = review_waiting_issue(State::DesignReviewWaiting, 50);
+        let github = MockGitHubStep1 {
+            ready_issues: vec![],
+            list_ready_issues_err: false,
+            issue_open: false,
+            is_issue_open_err: false,
+            pr_merged: true,
+            is_pr_merged_err: false,
+        };
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: std::collections::HashMap::new(),
+            active_issues: vec![issue.clone()],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let mut events = vec![];
+        uc.step1_issue_polling(&mut events).await;
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], (1, Event::DesignPrMerged)));
+    }
+
+    #[tokio::test]
+    async fn step1_closed_design_review_waiting_without_merged_pr_emits_issue_closed() {
+        let issue = review_waiting_issue(State::DesignReviewWaiting, 50);
+        let github = MockGitHubStep1 {
+            ready_issues: vec![],
+            list_ready_issues_err: false,
+            issue_open: false,
+            is_issue_open_err: false,
+            pr_merged: false,
+            is_pr_merged_err: false,
+        };
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: std::collections::HashMap::new(),
+            active_issues: vec![issue.clone()],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let mut events = vec![];
+        uc.step1_issue_polling(&mut events).await;
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], (1, Event::IssueClosed)));
+    }
+
+    #[tokio::test]
+    async fn step1_closed_implementation_review_waiting_with_merged_pr_emits_implementation_pr_merged()
+     {
+        let issue = review_waiting_issue(State::ImplementationReviewWaiting, 60);
+        let github = MockGitHubStep1 {
+            ready_issues: vec![],
+            list_ready_issues_err: false,
+            issue_open: false,
+            is_issue_open_err: false,
+            pr_merged: true,
+            is_pr_merged_err: false,
+        };
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: std::collections::HashMap::new(),
+            active_issues: vec![issue.clone()],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let mut events = vec![];
+        uc.step1_issue_polling(&mut events).await;
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], (1, Event::ImplementationPrMerged)));
+    }
+
+    #[tokio::test]
+    async fn step1_closed_implementation_review_waiting_without_merged_pr_emits_issue_closed() {
+        let issue = review_waiting_issue(State::ImplementationReviewWaiting, 60);
+        let github = MockGitHubStep1 {
+            ready_issues: vec![],
+            list_ready_issues_err: false,
+            issue_open: false,
+            is_issue_open_err: false,
+            pr_merged: false,
+            is_pr_merged_err: false,
+        };
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: std::collections::HashMap::new(),
+            active_issues: vec![issue.clone()],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let mut events = vec![];
+        uc.step1_issue_polling(&mut events).await;
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], (1, Event::IssueClosed)));
+    }
+
     #[tokio::test]
     async fn step3_stale_failed_exit_does_not_emit_event_for_completed() {
         // Session was registered during ImplementationRunning; issue is now Completed.
@@ -1987,6 +2432,31 @@ mod tests {
             events.is_empty(),
             "stale exit should not emit events: {:?}",
             events
+        );
+    }
+
+    #[tokio::test]
+    async fn step1_is_issue_open_error_no_event() {
+        let issue = active_issue(7, 102, State::DesignRunning);
+        let github = MockGitHubStep1 {
+            ready_issues: vec![],
+            list_ready_issues_err: false,
+            issue_open: false,
+            is_issue_open_err: true,
+            pr_merged: false,
+            is_pr_merged_err: false,
+        };
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: std::collections::HashMap::new(),
+            active_issues: vec![issue],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let mut events = vec![];
+        uc.step1_issue_polling(&mut events).await;
+        assert!(
+            events.is_empty(),
+            "is_issue_open error should produce no event"
         );
     }
 
@@ -2037,5 +2507,172 @@ mod tests {
             events
         );
         assert_eq!(events[0].0, 3, "event should be for active issue id=3");
+    }
+
+    #[tokio::test]
+    async fn step1_find_active_error_no_event() {
+        let github = MockGitHubStep1 {
+            ready_issues: vec![],
+            list_ready_issues_err: false,
+            issue_open: false,
+            is_issue_open_err: false,
+            pr_merged: false,
+            is_pr_merged_err: false,
+        };
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: std::collections::HashMap::new(),
+            active_issues: vec![],
+            find_active_err: true,
+        };
+        let uc = make_uc_step1(github, repo);
+        let mut events = vec![];
+        uc.step1_issue_polling(&mut events).await;
+        assert!(
+            events.is_empty(),
+            "find_active error should produce no event"
+        );
+    }
+
+    // --- resolve_close_event_for_issue テスト ---
+
+    #[tokio::test]
+    async fn resolve_close_design_review_waiting_merged_emits_design_pr_merged() {
+        let issue = review_waiting_issue(State::DesignReviewWaiting, 50);
+        let github = MockGitHubStep1 {
+            ready_issues: vec![],
+            list_ready_issues_err: false,
+            issue_open: false,
+            is_issue_open_err: false,
+            pr_merged: true,
+            is_pr_merged_err: false,
+        };
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: std::collections::HashMap::new(),
+            active_issues: vec![],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let event = uc.resolve_close_event_for_issue(&issue).await;
+        assert!(matches!(event, Event::DesignPrMerged));
+    }
+
+    #[tokio::test]
+    async fn resolve_close_impl_review_waiting_merged_emits_impl_pr_merged() {
+        let issue = review_waiting_issue(State::ImplementationReviewWaiting, 60);
+        let github = MockGitHubStep1 {
+            ready_issues: vec![],
+            list_ready_issues_err: false,
+            issue_open: false,
+            is_issue_open_err: false,
+            pr_merged: true,
+            is_pr_merged_err: false,
+        };
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: std::collections::HashMap::new(),
+            active_issues: vec![],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let event = uc.resolve_close_event_for_issue(&issue).await;
+        assert!(matches!(event, Event::ImplementationPrMerged));
+    }
+
+    #[tokio::test]
+    async fn resolve_close_pr_not_merged_emits_issue_closed() {
+        let issue = review_waiting_issue(State::DesignReviewWaiting, 70);
+        let github = MockGitHubStep1 {
+            ready_issues: vec![],
+            list_ready_issues_err: false,
+            issue_open: false,
+            is_issue_open_err: false,
+            pr_merged: false,
+            is_pr_merged_err: false,
+        };
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: std::collections::HashMap::new(),
+            active_issues: vec![],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let event = uc.resolve_close_event_for_issue(&issue).await;
+        assert!(matches!(event, Event::IssueClosed));
+    }
+
+    #[tokio::test]
+    async fn resolve_close_is_pr_merged_error_fallback_to_issue_closed() {
+        let issue = review_waiting_issue(State::DesignReviewWaiting, 80);
+        let github = MockGitHubStep1 {
+            ready_issues: vec![],
+            list_ready_issues_err: false,
+            issue_open: false,
+            is_issue_open_err: false,
+            pr_merged: false,
+            is_pr_merged_err: true,
+        };
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: std::collections::HashMap::new(),
+            active_issues: vec![],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let event = uc.resolve_close_event_for_issue(&issue).await;
+        assert!(matches!(event, Event::IssueClosed));
+    }
+
+    #[tokio::test]
+    async fn resolve_close_non_review_waiting_state_emits_issue_closed() {
+        let issue = active_issue(1, 42, State::DesignRunning);
+        let github = MockGitHubStep1 {
+            ready_issues: vec![],
+            list_ready_issues_err: false,
+            issue_open: false,
+            is_issue_open_err: false,
+            pr_merged: true,
+            is_pr_merged_err: false,
+        };
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: std::collections::HashMap::new(),
+            active_issues: vec![],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let event = uc.resolve_close_event_for_issue(&issue).await;
+        assert!(matches!(event, Event::IssueClosed));
+    }
+
+    #[tokio::test]
+    async fn resolve_close_no_pr_number_emits_issue_closed() {
+        let issue = Issue {
+            id: 1,
+            github_issue_number: 42,
+            state: State::DesignReviewWaiting,
+            design_pr_number: None,
+            impl_pr_number: None,
+            worktree_path: None,
+            retry_count: 0,
+            current_pid: None,
+            error_message: None,
+            feature_name: None,
+            fixing_causes: vec![],
+            weight: TaskWeight::Medium,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let github = MockGitHubStep1 {
+            ready_issues: vec![],
+            list_ready_issues_err: false,
+            issue_open: false,
+            is_issue_open_err: false,
+            pr_merged: true,
+            is_pr_merged_err: false,
+        };
+        let repo = MockIssueRepoStep1 {
+            issues_by_number: std::collections::HashMap::new(),
+            active_issues: vec![],
+            find_active_err: false,
+        };
+        let uc = make_uc_step1(github, repo);
+        let event = uc.resolve_close_event_for_issue(&issue).await;
+        assert!(matches!(event, Event::IssueClosed));
     }
 }
