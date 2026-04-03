@@ -333,6 +333,16 @@ pub async fn run(cli: Cli) -> Result<()> {
     }
 }
 
+/// Returns the PID file path derived from the config file path.
+/// Both `start_foreground` and `start_daemon`/`start_daemon_child` use this
+/// helper so the path is always `<config_dir>/cupola.pid`.
+fn pid_file_path(config: &Path) -> std::path::PathBuf {
+    config
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("cupola.pid")
+}
+
 async fn start_foreground(
     config: std::path::PathBuf,
     polling_interval_secs: Option<u64>,
@@ -350,12 +360,8 @@ async fn start_foreground(
         .map_err(|e| anyhow::anyhow!("config validation failed: {e}"))?;
 
     // PID file protection (same path as daemon)
-    let config_dir = config
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf();
-    let pid_file_path = config_dir.join("cupola.pid");
-    let pid_file_manager = PidFileManager::new(pid_file_path.clone());
+    let pid_path = pid_file_path(&config);
+    let pid_file_manager = PidFileManager::new(pid_path.clone());
 
     check_and_clean_pid_file(&pid_file_manager)?;
 
@@ -369,46 +375,58 @@ async fn start_foreground(
     // Initialize logging (hold guard for app lifetime)
     let _guard = init_logging(cfg.log_level, &cfg.log_dir);
 
-    tracing::info!(
-        owner = %cfg.owner,
-        repo = %cfg.repo,
-        polling_interval = cfg.polling_interval_secs,
-        "starting cupola"
-    );
+    // Wrap all post-write_pid work in a single async block so that any `?` propagation
+    // (tracing, DB open, token resolution, client construction, polling) is captured as a
+    // Result rather than causing an early function return. This ensures apply_pid_cleanup
+    // is always reached regardless of where the failure occurs.
+    let result: anyhow::Result<()> = async {
+        tracing::info!(
+            owner = %cfg.owner,
+            repo = %cfg.repo,
+            polling_interval = cfg.polling_interval_secs,
+            "starting cupola"
+        );
 
-    // Initialize SQLite
-    let db_path = Path::new(".cupola/cupola.db");
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent).context("failed to create .cupola directory")?;
+        // Initialize SQLite
+        let db_path = Path::new(".cupola/cupola.db");
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent).context("failed to create .cupola directory")?;
+        }
+        let db = SqliteConnection::open(db_path)?;
+        db.init_schema()?;
+
+        // Resolve GitHub token
+        let token = gh_token::get()?;
+
+        // Build adapters
+        let rest = OctocrabRestClient::new(token.clone(), cfg.owner.clone(), cfg.repo.clone())?;
+        let graphql = GraphQLClient::new(token, cfg.owner.clone(), cfg.repo.clone());
+        let github = GitHubClientImpl::new(rest, graphql);
+        let issue_repo = SqliteIssueRepository::new(db.clone());
+        let exec_log_repo = SqliteExecutionLogRepository::new(db);
+        let claude_runner = ClaudeCodeProcess::new("claude");
+        let worktree = GitWorktreeManager::new(".");
+
+        // Build polling use case with PID file for graceful shutdown cleanup
+        let mut polling = PollingUseCase::new(
+            github,
+            issue_repo,
+            exec_log_repo,
+            claude_runner,
+            worktree,
+            cfg,
+        )
+        .with_pid_file(Box::new(pid_file_manager));
+
+        polling.run().await
     }
-    let db = SqliteConnection::open(db_path)?;
-    db.init_schema()?;
+    .await;
 
-    // Resolve GitHub token
-    let token = gh_token::get()?;
-
-    // Build adapters
-    let rest = OctocrabRestClient::new(token.clone(), cfg.owner.clone(), cfg.repo.clone())?;
-    let graphql = GraphQLClient::new(token, cfg.owner.clone(), cfg.repo.clone());
-    let github = GitHubClientImpl::new(rest, graphql);
-    let issue_repo = SqliteIssueRepository::new(db.clone());
-    let exec_log_repo = SqliteExecutionLogRepository::new(db);
-    let claude_runner = ClaudeCodeProcess::new("claude");
-    let worktree = GitWorktreeManager::new(".");
-
-    // Build polling use case with PID file for graceful shutdown cleanup
-    let mut polling = PollingUseCase::new(
-        github,
-        issue_repo,
-        exec_log_repo,
-        claude_runner,
-        worktree,
-        cfg,
-    )
-    .with_pid_file(Box::new(pid_file_manager));
-
-    let result = polling.run().await;
-    apply_pid_cleanup(result, pid_file_path)
+    // Fallback cleanup: graceful_shutdown() handles the normal SIGTERM/SIGINT path,
+    // but if the async block above returns via any other exit (error, early return, etc.)
+    // the PID file may still exist. Delete it here unconditionally; failure is
+    // intentionally ignored so it never masks the original outcome.
+    apply_pid_cleanup(result, pid_path)
 }
 
 /// Launch the daemon by spawning a fresh child process (re-exec).
@@ -430,11 +448,7 @@ async fn start_daemon(
     cfg.validate()
         .map_err(|e| anyhow::anyhow!("config validation failed: {e}"))?;
 
-    let config_dir = config
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf();
-    let pid_file_manager = PidFileManager::new(config_dir.join("cupola.pid"));
+    let pid_file_manager = PidFileManager::new(pid_file_path(&config));
 
     // Check for existing running daemon
     check_and_clean_pid_file(&pid_file_manager)?;
@@ -495,7 +509,8 @@ async fn start_daemon_child(
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
-    let pid_file_manager = PidFileManager::new(config_dir.join("cupola.pid"));
+    let pid_path = pid_file_path(&config);
+    let pid_file_manager = PidFileManager::new(pid_path.clone());
 
     // Write our PID
     use crate::application::port::pid_file::PidFilePort;
@@ -503,8 +518,6 @@ async fn start_daemon_child(
     pid_file_manager
         .write_pid(my_pid)
         .map_err(|e| anyhow::anyhow!("failed to write PID file: {e}"))?;
-
-    let pid_path = config_dir.join("cupola.pid");
 
     // Initialize logging to file
     let _guard = init_logging(cfg.log_level, &cfg.log_dir);
@@ -565,7 +578,7 @@ async fn start_daemon_child(
 /// - If a PID file exists and the process is alive: returns `Err` (already running).
 /// - If a PID file exists but the process is dead: deletes the file and returns `Ok(())`.
 /// - If no PID file exists: returns `Ok(())`.
-/// - On read error: propagates the error.
+/// - On read error: returns an `Err` that wraps the underlying read error with context.
 fn check_and_clean_pid_file(pid_file_manager: &PidFileManager) -> Result<()> {
     use crate::application::port::pid_file::PidFilePort;
     match pid_file_manager.read_pid() {
@@ -753,21 +766,15 @@ mod tests {
         let path = dir.path().join("cupola.pid");
         let mgr = PidFileManager::new(path.clone());
 
-        // Write a PID that is almost certainly dead (PID 1 on Linux is init,
-        // but we can't kill it; use a very large PID unlikely to exist)
-        // Use i32::MAX which is documented as invalid in the PidFileManager tests
-        // Actually we need a valid pid (1..=i32::MAX) that is dead.
-        // Write raw content to bypass the range check — we just need a dead PID.
-        // PID 2 might exist, so let's use something reliably dead.
-        // Write the file directly with a PID that is very unlikely to exist.
-        std::fs::write(&path, "999999\n").expect("write");
+        // Find a PID in a broad range that this environment currently considers dead,
+        // so the test does not silently skip based on real OS process state for a
+        // single hard-coded PID.
+        let stale_pid = (999_999..1_010_000)
+            .find(|pid| !mgr.is_process_alive(*pid))
+            .expect("expected to find at least one dead PID in test range");
+        std::fs::write(&path, format!("{stale_pid}\n")).expect("write");
 
         let result = super::check_and_clean_pid_file(&mgr);
-
-        // If PID 999999 happens to be alive (extremely unlikely), skip
-        if mgr.is_process_alive(999_999) {
-            return; // skip in edge case environments
-        }
 
         assert!(result.is_ok(), "should return Ok(()) for stale PID");
         assert!(!path.exists(), "stale PID file should be deleted");
@@ -805,20 +812,15 @@ mod tests {
     }
 
     #[test]
-    fn start_foreground_pid_file_path_uses_config_dir() {
-        // Verify that the PID file path is <config_dir>/cupola.pid (same as daemon)
-        // This is a structural test — we verify the path construction logic matches daemon's.
+    fn pid_file_path_helper_uses_config_dir() {
+        // Verify that pid_file_path() returns <config_dir>/cupola.pid.
+        // Both start_foreground and start_daemon/start_daemon_child delegate to this
+        // helper, so testing it once covers all callers.
         let dir = tempfile::TempDir::new().expect("temp dir");
         let config_path = dir.path().join("cupola.toml");
         let expected_pid_path = dir.path().join("cupola.pid");
 
-        // The path construction in start_foreground mirrors start_daemon:
-        // config.parent().unwrap_or(Path::new(".")).join("cupola.pid")
-        let config_dir = config_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .to_path_buf();
-        let pid_path = config_dir.join("cupola.pid");
+        let pid_path = super::pid_file_path(&config_path);
 
         assert_eq!(
             pid_path, expected_pid_path,
