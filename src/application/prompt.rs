@@ -248,7 +248,7 @@ PR #{pr_number} (Issue #{issue_number})
    Run `git diff --name-only` to confirm the changed files, then stage only the relevant files.
    Avoid staging temporary files or debug logs.
    git add <changed_files>
-   git commit -m "fix: address review comments"
+   git commit -m "fix: address requested changes"
    git push
 
 ## Output to output-schema
@@ -440,6 +440,15 @@ mod tests {
         assert!(!session.prompt.contains("review_threads.json"));
         assert!(session.prompt.contains("ci_errors.txt"));
         assert!(!session.prompt.contains("conflict"));
+        // Task 4.1: PR/Issue番号がプロンプトに含まれることを検証
+        assert!(
+            session.prompt.contains("PR #85"),
+            "prompt should contain PR number"
+        );
+        assert!(
+            session.prompt.contains("Issue #42"),
+            "prompt should contain Issue number"
+        );
         // Task 4.2: {"threads": []} が含まれ、スレッドoutput指示が含まれないことを検証
         assert!(
             session.prompt.contains(r#"{"threads": []}"#),
@@ -471,6 +480,15 @@ mod tests {
         );
         assert!(session.prompt.contains("base branch"));
         assert!(session.prompt.contains("conflict"));
+        // Task 4.1: PR/Issue番号がプロンプトに含まれることを検証
+        assert!(
+            session.prompt.contains("PR #85"),
+            "prompt should contain PR number"
+        );
+        assert!(
+            session.prompt.contains("Issue #42"),
+            "prompt should contain Issue number"
+        );
         // Task 4.2: {"threads": []} が含まれ、スレッドoutput指示が含まれないことを検証
         assert!(
             session.prompt.contains(r#"{"threads": []}"#),

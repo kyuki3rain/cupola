@@ -15,7 +15,7 @@ build_fixing_prompt の改善: issue/PR番号のコンテキスト追加、outpu
 
 #### Acceptance Criteria
 1. When `build_fixing_prompt` が呼び出されるとき、the Prompt Builder shall `_issue_number` および `_pr_number` パラメータの先頭アンダースコアを除去し、実際の値として参照する
-2. The Prompt Builder shall プロンプト本文のヘッダー部分に `PR #<pr_number> (Issue #<issue_number})` の形式でコンテキスト情報を含める
+2. The Prompt Builder shall プロンプト本文のヘッダー部分に `PR #<pr_number> (Issue #<issue_number>)` の形式でコンテキスト情報を含める
 3. When `build_session_config` が `DesignFixing` または `ImplementationFixing` 状態で呼び出されるとき、the Prompt Builder shall `issue_number` と `pr_number` の両方をプロンプトテキストに埋め込む
 
 ---
