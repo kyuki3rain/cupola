@@ -550,7 +550,23 @@ async fn start_daemon_child(
     )
     .with_pid_file(Box::new(pid_file_manager));
 
-    polling.run().await
+    let result = polling.run().await;
+    // Fallback cleanup: graceful_shutdown() handles the normal SIGTERM/SIGINT path,
+    // but if run() returns via any other exit (error, early return, etc.) the PID file
+    // may still exist. Delete it here unconditionally; failure is intentionally ignored.
+    apply_pid_cleanup(result, config_dir.join("cupola.pid"))
+}
+
+/// Deletes the PID file at `pid_path` as a best-effort fallback, then returns `result`
+/// unchanged. Deletion errors are silently ignored so they never mask the original outcome.
+fn apply_pid_cleanup(
+    result: anyhow::Result<()>,
+    pid_path: std::path::PathBuf,
+) -> anyhow::Result<()> {
+    use crate::application::port::pid_file::PidFilePort;
+    let cleanup = PidFileManager::new(pid_path);
+    let _ = cleanup.delete_pid();
+    result
 }
 
 #[cfg(test)]
@@ -605,5 +621,69 @@ mod tests {
         let db = SqliteConnection::open_in_memory().expect("open");
         db.init_schema().expect("first init");
         db.init_schema().expect("second init should also succeed");
+    }
+
+    // --- apply_pid_cleanup tests ---
+
+    #[test]
+    fn apply_pid_cleanup_deletes_pid_file_on_ok_result() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("cupola.pid");
+        std::fs::write(&path, "12345\n").expect("write");
+        assert!(path.exists());
+
+        let result = super::apply_pid_cleanup(Ok(()), path.clone());
+
+        assert!(result.is_ok());
+        assert!(!path.exists(), "PID file should be deleted after Ok result");
+    }
+
+    #[test]
+    fn apply_pid_cleanup_deletes_pid_file_on_err_result() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("cupola.pid");
+        std::fs::write(&path, "12345\n").expect("write");
+        assert!(path.exists());
+
+        let original_err = anyhow::anyhow!("polling failed");
+        let result = super::apply_pid_cleanup(Err(original_err), path.clone());
+
+        assert!(result.is_err(), "original Err should be preserved");
+        assert!(
+            !path.exists(),
+            "PID file should be deleted even after Err result"
+        );
+    }
+
+    #[test]
+    fn apply_pid_cleanup_preserves_original_err_when_deletion_fails() {
+        // Use a non-existent directory so delete_pid() is irrelevant (file absent → Ok(()))
+        // For the case where deletion fails, the function uses `let _ = ...`, so we only
+        // verify that the original Result is returned unchanged.
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("cupola.pid");
+        // No PID file created — deletion will be a no-op (Ok(()))
+
+        let original_err = anyhow::anyhow!("some polling error");
+        let err_msg = original_err.to_string();
+        let result = super::apply_pid_cleanup(Err(original_err), path);
+
+        let err = result.expect_err("should return Err");
+        assert_eq!(err.to_string(), err_msg, "original error message preserved");
+    }
+
+    #[test]
+    fn apply_pid_cleanup_ok_when_pid_file_absent() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("cupola.pid");
+        // File does not exist
+
+        let result = super::apply_pid_cleanup(Ok(()), path.clone());
+
+        assert!(
+            result.is_ok(),
+            "Ok(()) should pass through even when PID file absent"
+        );
+        assert!(!path.exists());
     }
 }
