@@ -6,6 +6,7 @@ use crate::application::port::issue_repository::IssueRepository;
 use crate::domain::fixing_problem_kind::FixingProblemKind;
 use crate::domain::issue::Issue;
 use crate::domain::state::State;
+use crate::domain::task_weight::TaskWeight;
 
 use super::sqlite_connection::SqliteConnection;
 
@@ -29,7 +30,7 @@ impl IssueRepository for SqliteIssueRepository {
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, model,
+                        worktree_path, retry_count, current_pid, error_message, feature_name, weight,
                         fixing_causes, created_at, updated_at
                  FROM issues WHERE id = ?1",
             )?;
@@ -52,7 +53,7 @@ impl IssueRepository for SqliteIssueRepository {
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, model,
+                        worktree_path, retry_count, current_pid, error_message, feature_name, weight,
                         fixing_causes, created_at, updated_at
                  FROM issues WHERE github_issue_number = ?1",
             )?;
@@ -75,7 +76,7 @@ impl IssueRepository for SqliteIssueRepository {
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, model,
+                        worktree_path, retry_count, current_pid, error_message, feature_name, weight,
                         fixing_causes, created_at, updated_at
                  FROM issues WHERE state NOT IN ('completed', 'cancelled')",
             )?;
@@ -98,7 +99,7 @@ impl IssueRepository for SqliteIssueRepository {
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, model,
+                        worktree_path, retry_count, current_pid, error_message, feature_name, weight,
                         fixing_causes, created_at, updated_at
                  FROM issues WHERE state IN ('design_running', 'design_fixing', 'implementation_running', 'implementation_fixing')",
             )?;
@@ -124,7 +125,7 @@ impl IssueRepository for SqliteIssueRepository {
                 .context("failed to serialize fixing_causes")?;
             conn.execute(
                 "INSERT INTO issues (github_issue_number, state, design_pr_number, impl_pr_number,
-                                     worktree_path, retry_count, current_pid, error_message, feature_name, model,
+                                     worktree_path, retry_count, current_pid, error_message, feature_name, weight,
                                      fixing_causes)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 rusqlite::params![
@@ -137,7 +138,7 @@ impl IssueRepository for SqliteIssueRepository {
                     issue.current_pid,
                     issue.error_message,
                     issue.feature_name,
-                    issue.model,
+                    task_weight_to_str(issue.weight),
                     fixing_causes_json,
                 ],
             )
@@ -179,7 +180,7 @@ impl IssueRepository for SqliteIssueRepository {
             conn.execute(
                 "UPDATE issues SET state = ?1, design_pr_number = ?2, impl_pr_number = ?3,
                                    worktree_path = ?4, retry_count = ?5, current_pid = ?6,
-                                   error_message = ?7, feature_name = ?8, model = ?9,
+                                   error_message = ?7, feature_name = ?8, weight = ?9,
                                    fixing_causes = ?10, updated_at = datetime('now')
                  WHERE id = ?11",
                 rusqlite::params![
@@ -191,7 +192,7 @@ impl IssueRepository for SqliteIssueRepository {
                     issue.current_pid,
                     issue.error_message,
                     issue.feature_name,
-                    issue.model,
+                    task_weight_to_str(issue.weight),
                     fixing_causes_json,
                     issue.id,
                 ],
@@ -216,7 +217,6 @@ impl IssueRepository for SqliteIssueRepository {
                      retry_count = 0,
                      current_pid = NULL,
                      error_message = NULL,
-                     model = NULL,
                      fixing_causes = '[]',
                      updated_at = datetime('now')
                  WHERE id = ?1",
@@ -239,7 +239,7 @@ impl IssueRepository for SqliteIssueRepository {
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, model,
+                        worktree_path, retry_count, current_pid, error_message, feature_name, weight,
                         fixing_causes, created_at, updated_at
                  FROM issues WHERE state = ?1",
             )?;
@@ -289,8 +289,30 @@ pub fn str_to_state(col_idx: usize, s: &str) -> rusqlite::Result<State> {
     }
 }
 
+fn task_weight_to_str(weight: TaskWeight) -> &'static str {
+    match weight {
+        TaskWeight::Light => "light",
+        TaskWeight::Medium => "medium",
+        TaskWeight::Heavy => "heavy",
+    }
+}
+
+fn str_to_task_weight(col_idx: usize, s: &str) -> rusqlite::Result<TaskWeight> {
+    match s {
+        "light" => Ok(TaskWeight::Light),
+        "medium" => Ok(TaskWeight::Medium),
+        "heavy" => Ok(TaskWeight::Heavy),
+        _ => Err(rusqlite::Error::InvalidColumnType(
+            col_idx,
+            s.to_owned(),
+            rusqlite::types::Type::Text,
+        )),
+    }
+}
+
 fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
     let state_str: String = row.get(2)?;
+    let weight_str: String = row.get(10)?;
     let fixing_causes_json: String = row.get(11)?;
     let created_str: String = row.get(12)?;
     let updated_str: String = row.get(13)?;
@@ -311,7 +333,7 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
         current_pid: row.get(7)?,
         error_message: row.get(8)?,
         feature_name: row.get(9)?,
-        model: row.get(10)?,
+        weight: str_to_task_weight(10, &weight_str)?,
         fixing_causes,
         created_at: parse_sqlite_datetime(12, &created_str)?,
         updated_at: parse_sqlite_datetime(13, &updated_str)?,
@@ -351,7 +373,7 @@ mod tests {
             error_message: None,
             feature_name: None,
             fixing_causes: vec![],
-            model: None,
+            weight: TaskWeight::Medium,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -369,6 +391,7 @@ mod tests {
         assert_eq!(found.id, id);
         assert_eq!(found.github_issue_number, 42);
         assert_eq!(found.state, State::Idle);
+        assert_eq!(found.weight, TaskWeight::Medium);
     }
 
     #[tokio::test]
@@ -609,6 +632,61 @@ mod tests {
     }
 
     #[test]
+    fn task_weight_roundtrip() {
+        let weights = [TaskWeight::Light, TaskWeight::Medium, TaskWeight::Heavy];
+        for weight in weights {
+            assert_eq!(
+                str_to_task_weight(0, task_weight_to_str(weight)).unwrap(),
+                weight
+            );
+        }
+    }
+
+    #[test]
+    fn str_to_task_weight_unknown_returns_err() {
+        assert!(str_to_task_weight(10, "unknown").is_err());
+        assert!(str_to_task_weight(10, "").is_err());
+        assert!(str_to_task_weight(10, "MEDIUM").is_err());
+    }
+
+    #[tokio::test]
+    async fn weight_persists_and_loads() {
+        let (_db, repo) = setup();
+
+        let mut issue = new_issue(500);
+        issue.weight = TaskWeight::Heavy;
+        let id = repo.save(&issue).await.expect("save");
+
+        let found = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert_eq!(found.weight, TaskWeight::Heavy);
+
+        // Update to Light
+        let mut loaded = found;
+        loaded.weight = TaskWeight::Light;
+        repo.update(&loaded).await.expect("update");
+
+        let found2 = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert_eq!(found2.weight, TaskWeight::Light);
+    }
+
+    #[tokio::test]
+    async fn unknown_weight_in_db_returns_err() {
+        let (db, repo) = setup();
+        {
+            let conn = db.conn().lock().expect("lock");
+            conn.execute(
+                "INSERT INTO issues (github_issue_number, state, weight, fixing_causes, created_at, updated_at)
+                 VALUES (999, 'idle', 'unknown_weight', '[]', datetime('now'), datetime('now'))",
+                [],
+            )
+            .expect("insert corrupt row");
+        }
+
+        let result = repo.find_by_issue_number(999).await;
+        assert!(result.is_err(), "unknown weight should return Err");
+    }
+
+    #[test]
     fn parse_sqlite_datetime_valid() {
         let result = parse_sqlite_datetime(12, "2024-01-15 10:30:00");
         assert!(result.is_ok());
@@ -632,8 +710,8 @@ mod tests {
         {
             let conn = db.conn().lock().expect("lock");
             conn.execute(
-                "INSERT INTO issues (github_issue_number, state, fixing_causes, created_at, updated_at)
-                 VALUES (999, 'unknown_corrupt_state', '[]', datetime('now'), datetime('now'))",
+                "INSERT INTO issues (github_issue_number, state, weight, fixing_causes, created_at, updated_at)
+                 VALUES (998, 'unknown_corrupt_state', 'medium', '[]', datetime('now'), datetime('now'))",
                 [],
             )
             .expect("insert corrupt row");
@@ -652,8 +730,8 @@ mod tests {
         {
             let conn = db.conn().lock().expect("lock");
             conn.execute(
-                "INSERT INTO issues (github_issue_number, state, fixing_causes, created_at, updated_at)
-                 VALUES (998, 'idle', 'not_json', datetime('now'), datetime('now'))",
+                "INSERT INTO issues (github_issue_number, state, weight, fixing_causes, created_at, updated_at)
+                 VALUES (997, 'idle', 'medium', 'not_json', datetime('now'), datetime('now'))",
                 [],
             )
             .expect("insert corrupt row");

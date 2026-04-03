@@ -37,7 +37,7 @@ impl<C: ConfigLoader> DoctorUseCase<C> {
             check_git(),
             check_gh(),
             check_gh_label(),
-            check_model_labels(),
+            check_weight_labels(),
             check_steering(&steering_path),
             check_db(&db_path),
         ]
@@ -193,41 +193,58 @@ fn check_gh_label() -> DoctorCheckResult {
     }
 }
 
-fn check_model_labels() -> DoctorCheckResult {
+fn check_weight_labels() -> DoctorCheckResult {
     let result = std::process::Command::new("gh")
         .args(["label", "list", "--json", "name"])
         .output();
 
     match result {
         Err(e) if e.kind() == ErrorKind::NotFound => DoctorCheckResult {
-            name: "model:* ラベル".to_string(),
+            name: "weight:* ラベル".to_string(),
             status: CheckStatus::Fail(
                 "gh CLI がインストールされていないため、ラベルを確認できません".to_string(),
             ),
         },
         Err(e) => DoctorCheckResult {
-            name: "model:* ラベル".to_string(),
+            name: "weight:* ラベル".to_string(),
             status: CheckStatus::Fail(format!("ラベル一覧の取得に失敗しました: {e}")),
         },
         Ok(output) if !output.status.success() => DoctorCheckResult {
-            name: "model:* ラベル".to_string(),
+            name: "weight:* ラベル".to_string(),
             status: CheckStatus::Fail(
                 "ラベル一覧の取得に失敗しました。gh の認証状態を確認してください".to_string(),
             ),
         },
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.contains("\"model:") {
+            let has_light = stdout.contains("\"weight:light\"");
+            let has_heavy = stdout.contains("\"weight:heavy\"");
+            if has_light && has_heavy {
                 DoctorCheckResult {
-                    name: "model:* ラベル".to_string(),
-                    status: CheckStatus::Ok("model:* ラベルがリポジトリに存在します".to_string()),
+                    name: "weight:* ラベル".to_string(),
+                    status: CheckStatus::Ok(
+                        "weight:light と weight:heavy ラベルがリポジトリに存在します".to_string(),
+                    ),
                 }
             } else {
+                let missing: Vec<&str> = [
+                    (!has_light).then_some("weight:light"),
+                    (!has_heavy).then_some("weight:heavy"),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                let create_cmds: Vec<String> = missing
+                    .iter()
+                    .map(|l| format!("gh label create {l}"))
+                    .collect();
                 DoctorCheckResult {
-                    name: "model:* ラベル".to_string(),
-                    status: CheckStatus::Fail(
-                        "model:* ラベルがリポジトリに存在しません。`gh label create model:opus && gh label create model:haiku && gh label create model:sonnet` を実行してください".to_string(),
-                    ),
+                    name: "weight:* ラベル".to_string(),
+                    status: CheckStatus::Warn(format!(
+                        "{} ラベルがリポジトリに存在しません。`{}` を実行してください",
+                        missing.join(", "),
+                        create_cmds.join(" && ")
+                    )),
                 }
             }
         }
@@ -507,7 +524,7 @@ mod tests {
 
         // toml check should be Ok (mock returns Ok)
         assert!(matches!(results[0].status, CheckStatus::Ok(_)));
-        // 7 checks should be returned (toml, git, gh, agent:ready, model:*, steering, db)
+        // 7 checks should be returned (toml, git, gh, agent:ready, weight:*, steering, db)
         assert_eq!(results.len(), 7);
     }
 

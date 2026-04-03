@@ -9,6 +9,7 @@ use crate::domain::event::Event;
 use crate::domain::issue::Issue;
 use crate::domain::state::State;
 use crate::domain::state_machine::StateMachine;
+use crate::domain::task_weight::TaskWeight;
 
 pub struct TransitionUseCase<'a, G: GitHubClient, I: IssueRepository, W: GitWorktree> {
     pub github: &'a G,
@@ -85,8 +86,8 @@ impl<G: GitHubClient, I: IssueRepository, W: GitWorktree> TransitionUseCase<'_, 
             current_pid: None,
             error_message: None,
             feature_name: None,
+            weight: TaskWeight::Medium,
             fixing_causes: vec![],
-            model: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };

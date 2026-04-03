@@ -16,6 +16,7 @@ struct SessionEntry {
     registered_state: State,
     stdout_handle: Option<JoinHandle<String>>,
     stderr_handle: Option<JoinHandle<String>>,
+    log_id: i64,
 }
 
 pub struct ExitedSession {
@@ -23,6 +24,7 @@ pub struct ExitedSession {
     pub exit_status: ExitStatus,
     pub stdout: String,
     pub stderr: String,
+    pub log_id: i64,
     /// The issue state at the time this session was registered.
     pub registered_state: State,
 }
@@ -64,6 +66,7 @@ impl SessionManager {
                 registered_state: state,
                 stdout_handle,
                 stderr_handle,
+                log_id: 0,
             },
         );
     }
@@ -113,6 +116,7 @@ impl SessionManager {
                     exit_status,
                     stdout,
                     stderr,
+                    log_id: entry.log_id,
                     registered_state: entry.registered_state,
                 });
             }
@@ -139,6 +143,12 @@ impl SessionManager {
     pub fn kill_all(&mut self) {
         for entry in self.sessions.values_mut() {
             let _ = entry.child.kill();
+        }
+    }
+
+    pub fn update_log_id(&mut self, issue_id: i64, log_id: i64) {
+        if let Some(entry) = self.sessions.get_mut(&issue_id) {
+            entry.log_id = log_id;
         }
     }
 
@@ -258,6 +268,20 @@ mod tests {
         assert_eq!(mgr.count(), 1);
 
         mgr.kill_all();
+    }
+
+    #[test]
+    fn collect_exited_includes_log_id() {
+        let mut mgr = SessionManager::new();
+        let child = spawn_echo();
+        mgr.register(1, State::DesignRunning, child);
+        mgr.update_log_id(1, 42);
+
+        std::thread::sleep(Duration::from_millis(200));
+
+        let exited = mgr.collect_exited();
+        assert_eq!(exited.len(), 1);
+        assert_eq!(exited[0].log_id, 42);
     }
 
     #[test]

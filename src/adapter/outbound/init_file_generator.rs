@@ -15,6 +15,17 @@ default_branch = ""
 # [log]
 # level = "info"
 # dir = ".cupola/logs"
+
+# モデルを weight 別に指定する例:
+# [models]
+# light = "haiku"
+# heavy = "opus"
+#
+# フェーズ別に細かく指定する例:
+# [models.heavy]
+# design = "opus"
+# implementation = "opus"
+# # design_fix / implementation_fix は上記にフォールバックされます
 "#;
 
 const GITIGNORE_MARKER: &str = "# cupola";

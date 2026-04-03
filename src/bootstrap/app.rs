@@ -500,45 +500,72 @@ async fn start_daemon_child(
         .write_pid(my_pid)
         .map_err(|e| anyhow::anyhow!("failed to write PID file: {e}"))?;
 
+    let pid_path = config_dir.join("cupola.pid");
+
     // Initialize logging to file
     let _guard = init_logging(cfg.log_level, &cfg.log_dir);
 
-    tracing::info!(
-        owner = %cfg.owner,
-        repo = %cfg.repo,
-        pid = my_pid,
-        "starting cupola daemon"
-    );
+    // Wrap all post-write_pid work in a single async block so that any `?` propagation
+    // (DB open, token resolution, client construction, polling) is captured as a Result
+    // rather than causing an early function return. This ensures apply_pid_cleanup is
+    // always reached regardless of where the failure occurs.
+    let result: anyhow::Result<()> = async {
+        tracing::info!(
+            owner = %cfg.owner,
+            repo = %cfg.repo,
+            pid = my_pid,
+            "starting cupola daemon"
+        );
 
-    // Initialize SQLite
-    let db_path = config_dir.join("cupola.db");
-    let db = SqliteConnection::open(&db_path)?;
-    db.init_schema()?;
+        // Initialize SQLite
+        let db_path = config_dir.join("cupola.db");
+        let db = SqliteConnection::open(&db_path)?;
+        db.init_schema()?;
 
-    // Resolve GitHub token
-    let token = gh_token::get()?;
+        // Resolve GitHub token
+        let token = gh_token::get()?;
 
-    // Build adapters
-    let rest = OctocrabRestClient::new(token.clone(), cfg.owner.clone(), cfg.repo.clone())?;
-    let graphql = GraphQLClient::new(token, cfg.owner.clone(), cfg.repo.clone());
-    let github = GitHubClientImpl::new(rest, graphql);
-    let issue_repo = SqliteIssueRepository::new(db.clone());
-    let exec_log_repo = SqliteExecutionLogRepository::new(db);
-    let claude_runner = ClaudeCodeProcess::new("claude");
-    let worktree = GitWorktreeManager::new(".");
+        // Build adapters
+        let rest = OctocrabRestClient::new(token.clone(), cfg.owner.clone(), cfg.repo.clone())?;
+        let graphql = GraphQLClient::new(token, cfg.owner.clone(), cfg.repo.clone());
+        let github = GitHubClientImpl::new(rest, graphql);
+        let issue_repo = SqliteIssueRepository::new(db.clone());
+        let exec_log_repo = SqliteExecutionLogRepository::new(db);
+        let claude_runner = ClaudeCodeProcess::new("claude");
+        let worktree = GitWorktreeManager::new(".");
 
-    // Build polling use case with PID file
-    let mut polling = PollingUseCase::new(
-        github,
-        issue_repo,
-        exec_log_repo,
-        claude_runner,
-        worktree,
-        cfg,
-    )
-    .with_pid_file(Box::new(pid_file_manager));
+        // Build polling use case with PID file
+        let mut polling = PollingUseCase::new(
+            github,
+            issue_repo,
+            exec_log_repo,
+            claude_runner,
+            worktree,
+            cfg,
+        )
+        .with_pid_file(Box::new(pid_file_manager));
 
-    polling.run().await
+        polling.run().await
+    }
+    .await;
+
+    // Fallback cleanup: graceful_shutdown() handles the normal SIGTERM/SIGINT path,
+    // but if the async block above returns via any other exit (error, early return, etc.)
+    // the PID file may still exist. Delete it here unconditionally; failure is
+    // intentionally ignored so it never masks the original outcome.
+    apply_pid_cleanup(result, pid_path)
+}
+
+/// Deletes the PID file at `pid_path` as a best-effort fallback, then returns `result`
+/// unchanged. Deletion errors are silently ignored so they never mask the original outcome.
+fn apply_pid_cleanup(
+    result: anyhow::Result<()>,
+    pid_path: std::path::PathBuf,
+) -> anyhow::Result<()> {
+    use crate::application::port::pid_file::PidFilePort;
+    let cleanup = PidFileManager::new(pid_path);
+    let _ = cleanup.delete_pid();
+    result
 }
 
 #[cfg(test)]
@@ -576,7 +603,7 @@ mod tests {
             error_message: None,
             feature_name: None,
             fixing_causes: vec![],
-            model: None,
+            weight: crate::domain::task_weight::TaskWeight::Medium,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -593,5 +620,70 @@ mod tests {
         let db = SqliteConnection::open_in_memory().expect("open");
         db.init_schema().expect("first init");
         db.init_schema().expect("second init should also succeed");
+    }
+
+    // --- apply_pid_cleanup tests ---
+
+    #[test]
+    fn apply_pid_cleanup_deletes_pid_file_on_ok_result() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("cupola.pid");
+        std::fs::write(&path, "12345\n").expect("write");
+        assert!(path.exists());
+
+        let result = super::apply_pid_cleanup(Ok(()), path.clone());
+
+        assert!(result.is_ok());
+        assert!(!path.exists(), "PID file should be deleted after Ok result");
+    }
+
+    #[test]
+    fn apply_pid_cleanup_deletes_pid_file_on_err_result() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("cupola.pid");
+        std::fs::write(&path, "12345\n").expect("write");
+        assert!(path.exists());
+
+        let original_err = anyhow::anyhow!("polling failed");
+        let result = super::apply_pid_cleanup(Err(original_err), path.clone());
+
+        assert!(result.is_err(), "original Err should be preserved");
+        assert!(
+            !path.exists(),
+            "PID file should be deleted even after Err result"
+        );
+    }
+
+    #[test]
+    fn apply_pid_cleanup_preserves_original_err_when_deletion_fails() {
+        // Create a directory at the PID path so remove_file() fails deterministically
+        // (you cannot remove_file() a directory on most platforms).
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("cupola.pid");
+        std::fs::create_dir(&path).expect("create directory at pid path");
+        assert!(path.is_dir(), "test setup: pid path must be a directory");
+
+        let original_err = anyhow::anyhow!("some polling error");
+        let err_msg = original_err.to_string();
+        let result = super::apply_pid_cleanup(Err(original_err), path);
+
+        // The function must return the original Err, not the deletion error.
+        let err = result.expect_err("should return Err");
+        assert_eq!(err.to_string(), err_msg, "original error message preserved");
+    }
+
+    #[test]
+    fn apply_pid_cleanup_ok_when_pid_file_absent() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("cupola.pid");
+        // File does not exist
+
+        let result = super::apply_pid_cleanup(Ok(()), path.clone());
+
+        assert!(
+            result.is_ok(),
+            "Ok(()) should pass through even when PID file absent"
+        );
+        assert!(!path.exists());
     }
 }

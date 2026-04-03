@@ -29,7 +29,9 @@ use crate::domain::config::Config;
 use crate::domain::event::Event;
 use crate::domain::fixing_problem_kind::FixingProblemKind;
 use crate::domain::issue::Issue;
+use crate::domain::phase::Phase;
 use crate::domain::state::State;
+use crate::domain::task_weight::TaskWeight;
 
 pub struct PollingUseCase<G, I, E, C, W>
 where
@@ -329,12 +331,7 @@ where
                 }
             }
 
-            // Record execution log
-            let log_id = self
-                .exec_log_repo
-                .record_start(issue.id, issue.state)
-                .await
-                .unwrap_or(0);
+            let log_id = session.log_id;
 
             if session.exit_status.success() {
                 tracing::info!(
@@ -544,8 +541,35 @@ where
         for (id, event) in events.drain(..) {
             if let Event::IssueDetected { issue_number } = &event {
                 let uc = self.transition_uc();
-                if let Err(e) = uc.handle_issue_detected(*issue_number).await {
-                    tracing::error!(issue_number, error = %e, "failed to handle issue detected");
+                match uc.handle_issue_detected(*issue_number).await {
+                    Ok(mut issue) => {
+                        // Detect weight label from GitHub and update if different from default
+                        match self.github.get_issue(*issue_number).await {
+                            Ok(detail) => {
+                                let weight = label_to_weight(&detail.labels);
+                                if weight != issue.weight {
+                                    issue.weight = weight;
+                                    if let Err(e) = self.issue_repo.update(&issue).await {
+                                        tracing::warn!(
+                                            issue_number,
+                                            error = %e,
+                                            "failed to update weight for issue"
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    issue_number,
+                                    error = %e,
+                                    "failed to fetch issue details for weight detection"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(issue_number, error = %e, "failed to handle issue detected");
+                    }
                 }
             } else {
                 remaining.push((id, event));
@@ -729,9 +753,12 @@ where
                 OutputSchemaKind::Fixing => Some(FIXING_SCHEMA),
             };
 
+            let phase = Phase::from_state(issue.state);
+            let model = self.config.models.resolve(issue.weight, phase);
+
             match self
                 .claude_runner
-                .spawn(&session_config.prompt, wt, schema, &self.config.model)
+                .spawn(&session_config.prompt, wt, schema, model)
             {
                 Ok(child) => {
                     let pid = child.id();
@@ -742,7 +769,15 @@ where
                         pid,
                         "spawned Claude Code process"
                     );
+                    // Register first to start draining stdout/stderr before any await,
+                    // preventing pipe buffer exhaustion if the child writes large output.
                     self.session_mgr.register(issue.id, issue.state, child);
+                    let log_id = self
+                        .exec_log_repo
+                        .record_start(issue.id, issue.state)
+                        .await
+                        .unwrap_or(0);
+                    self.session_mgr.update_log_id(issue.id, log_id);
 
                     // Persist PID to DB
                     let mut updated_issue = issue.clone();
@@ -1131,6 +1166,18 @@ fn strip_ansi(s: &str) -> String {
     result
 }
 
+/// GitHub Issue のラベルリストから TaskWeight を解決する。
+/// weight:heavy が優先、weight:light が次、どちらもなければ Medium。
+pub fn label_to_weight(labels: &[String]) -> TaskWeight {
+    if labels.iter().any(|l| l == "weight:heavy") {
+        TaskWeight::Heavy
+    } else if labels.iter().any(|l| l == "weight:light") {
+        TaskWeight::Light
+    } else {
+        TaskWeight::Medium
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1465,7 +1512,7 @@ mod tests {
             error_message: None,
             feature_name: None,
             fixing_causes: vec![],
-            model: None,
+            weight: TaskWeight::Medium,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }
@@ -1582,7 +1629,7 @@ mod tests {
             error_message: None,
             feature_name: None,
             fixing_causes: vec![],
-            model: None,
+            weight: TaskWeight::Medium,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }
@@ -1601,7 +1648,7 @@ mod tests {
             error_message: None,
             feature_name: None,
             fixing_causes: vec![],
-            model: None,
+            weight: TaskWeight::Medium,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }
@@ -1728,6 +1775,151 @@ mod tests {
         assert_eq!(result, "error: something wrong");
     }
 
+    // --- Mocks for record_start tracking tests ---
+
+    type RecordStartCalls = Arc<Mutex<Vec<(i64, State)>>>;
+
+    struct TrackingExecLogRepo {
+        record_start_calls: RecordStartCalls,
+        return_log_id: i64,
+    }
+
+    impl TrackingExecLogRepo {
+        fn new(return_log_id: i64) -> (Self, RecordStartCalls) {
+            let calls = Arc::new(Mutex::new(vec![]));
+            (
+                Self {
+                    record_start_calls: calls.clone(),
+                    return_log_id,
+                },
+                calls,
+            )
+        }
+    }
+
+    impl crate::application::port::execution_log_repository::ExecutionLogRepository
+        for TrackingExecLogRepo
+    {
+        async fn record_start(&self, issue_id: i64, state: State) -> anyhow::Result<i64> {
+            self.record_start_calls
+                .lock()
+                .unwrap()
+                .push((issue_id, state));
+            Ok(self.return_log_id)
+        }
+        async fn record_finish(
+            &self,
+            _: i64,
+            _: Option<i32>,
+            _: Option<&str>,
+            _: Option<&str>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn find_by_issue(&self, _: i64) -> anyhow::Result<Vec<ExecutionLog>> {
+            Ok(vec![])
+        }
+    }
+
+    // Spawns `false` (exits with code 1) to exercise the non-zero exit path in step3,
+    // which avoids triggering PR-creation GitHub API calls that are not mocked here.
+    struct FalseClaudeRunner;
+    impl crate::application::port::claude_code_runner::ClaudeCodeRunner for FalseClaudeRunner {
+        fn spawn(
+            &self,
+            _: &str,
+            _: &Path,
+            _: Option<&str>,
+            _: &str,
+        ) -> anyhow::Result<std::process::Child> {
+            use std::process::{Command, Stdio};
+            Ok(Command::new("false")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?)
+        }
+    }
+
+    type TrackingTestUseCase = PollingUseCase<
+        MockGitHub,
+        MockIssueRepo,
+        TrackingExecLogRepo,
+        FalseClaudeRunner,
+        NoopWorktree,
+    >;
+
+    fn make_tracking_uc(
+        issues: Vec<Issue>,
+        return_log_id: i64,
+    ) -> (TrackingTestUseCase, RecordStartCalls) {
+        let (repo, _) = MockIssueRepo::new(issues);
+        let github = MockGitHub::new(false, None, vec![], false);
+        let (exec_log_repo, record_start_calls) = TrackingExecLogRepo::new(return_log_id);
+        let config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        let uc = PollingUseCase::new(
+            github,
+            repo,
+            exec_log_repo,
+            FalseClaudeRunner,
+            NoopWorktree,
+            config,
+        );
+        (uc, record_start_calls)
+    }
+
+    #[tokio::test]
+    async fn step7_calls_record_start_and_step3_does_not() {
+        let issue = Issue {
+            id: 10,
+            github_issue_number: 99,
+            state: State::DesignRunning,
+            design_pr_number: None,
+            impl_pr_number: None,
+            worktree_path: Some("/tmp".to_string()),
+            retry_count: 0,
+            current_pid: None,
+            error_message: None,
+            feature_name: None,
+            fixing_causes: vec![],
+            model: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let (mut uc, record_start_calls) = make_tracking_uc(vec![issue], 42);
+
+        // step7: spawn → record_start should be called once
+        uc.step7_spawn_processes().await;
+
+        let calls_after_step7 = record_start_calls.lock().unwrap().clone();
+        assert_eq!(
+            calls_after_step7.len(),
+            1,
+            "record_start should be called exactly once in step7"
+        );
+        assert_eq!(calls_after_step7[0].0, 10, "issue_id should match");
+        assert_eq!(
+            calls_after_step7[0].1,
+            State::DesignRunning,
+            "state should match"
+        );
+
+        // Wait for the spawned `false` process to exit
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // step3: collect exited → record_start should NOT be called again
+        let mut events = vec![];
+        uc.step3_process_exit_check(&mut events).await;
+
+        let calls_after_step3 = record_start_calls.lock().unwrap().clone();
+        assert_eq!(
+            calls_after_step3.len(),
+            1,
+            "record_start must not be called in step3"
+        );
+    }
+
     // --- Step 3: stale exit guard tests ---
 
     fn spawn_fail() -> std::process::Child {
@@ -1753,7 +1945,7 @@ mod tests {
             error_message: None,
             feature_name: None,
             fixing_causes: vec![],
-            model: None,
+            weight: crate::domain::task_weight::TaskWeight::default(),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }

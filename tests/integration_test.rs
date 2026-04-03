@@ -173,7 +173,7 @@ fn new_issue(issue_number: u64) -> Issue {
         error_message: None,
         feature_name: None,
         fixing_causes: vec![],
-        model: None,
+        weight: cupola::domain::task_weight::TaskWeight::Medium,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     }
@@ -806,7 +806,7 @@ async fn concurrent_session_limit_restricts_spawning() {
             error_message: None,
             feature_name: None,
             fixing_causes: vec![],
-            model: None,
+            weight: cupola::domain::task_weight::TaskWeight::Medium,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -852,7 +852,7 @@ async fn no_limit_spawns_all_processes() {
             error_message: None,
             feature_name: None,
             fixing_causes: vec![],
-            model: None,
+            weight: cupola::domain::task_weight::TaskWeight::Medium,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
