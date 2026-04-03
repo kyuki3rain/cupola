@@ -27,9 +27,7 @@ impl StateMachine {
 
             // design_review_waiting (merge takes priority)
             (State::DesignReviewWaiting, Event::DesignPrMerged) => Ok(State::ImplementationRunning),
-            (State::DesignReviewWaiting, Event::FixingRequired) => {
-                Ok(State::DesignFixing)
-            }
+            (State::DesignReviewWaiting, Event::FixingRequired) => Ok(State::DesignFixing),
 
             // design_fixing
             (State::DesignFixing, Event::ProcessCompleted) => Ok(State::DesignReviewWaiting),
@@ -123,10 +121,7 @@ mod tests {
 
     #[test]
     fn design_review_waiting_to_fixing_on_unresolved() {
-        let result = StateMachine::transition(
-            &State::DesignReviewWaiting,
-            &Event::FixingRequired,
-        );
+        let result = StateMachine::transition(&State::DesignReviewWaiting, &Event::FixingRequired);
         assert_eq!(result.unwrap(), State::DesignFixing);
     }
 
@@ -181,10 +176,8 @@ mod tests {
 
     #[test]
     fn impl_review_waiting_to_fixing_on_unresolved() {
-        let result = StateMachine::transition(
-            &State::ImplementationReviewWaiting,
-            &Event::FixingRequired,
-        );
+        let result =
+            StateMachine::transition(&State::ImplementationReviewWaiting, &Event::FixingRequired);
         assert_eq!(result.unwrap(), State::ImplementationFixing);
     }
 

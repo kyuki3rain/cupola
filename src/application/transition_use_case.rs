@@ -190,14 +190,20 @@ impl<G: GitHubClient, I: IssueRepository, W: GitWorktree> TransitionUseCase<'_, 
 
     async fn cleanup(&self, issue: &mut Issue) {
         if let Some(ref wt) = issue.worktree_path {
-            let _ = self.worktree.remove(std::path::Path::new(wt));
+            let path = std::path::Path::new(wt);
+            match self.worktree.remove(path) {
+                Ok(()) => {
+                    issue.worktree_path = None;
+                    let _ = self.issue_repo.update(issue).await;
+                }
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "failed to remove worktree, keeping path in DB");
+                }
+            }
         }
         let n = issue.github_issue_number;
         let _ = self.worktree.delete_branch(&format!("cupola/{n}/main"));
         let _ = self.worktree.delete_branch(&format!("cupola/{n}/design"));
-
-        issue.worktree_path = None;
-        let _ = self.issue_repo.update(issue).await;
     }
 }
 
