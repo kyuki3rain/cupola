@@ -81,7 +81,10 @@ impl SessionManager {
         let mut results = Vec::new();
         for issue_id in exited_ids {
             if let Some(mut entry) = self.sessions.remove(&issue_id) {
-                #[expect(clippy::expect_used, reason = "wait after kill is practically unreachable")]
+                #[expect(
+                    clippy::expect_used,
+                    reason = "wait after kill is practically unreachable"
+                )]
                 let exit_status = entry.child.try_wait().ok().flatten().unwrap_or_else(|| {
                     let _ = entry.child.kill();
                     entry.child.wait().expect("wait after kill")

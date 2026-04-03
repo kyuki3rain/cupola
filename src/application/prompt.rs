@@ -469,7 +469,8 @@ mod tests {
         );
         let err = result.unwrap_err();
         assert!(
-            err.to_string().contains("fixing state requires pr_number in DB"),
+            err.to_string()
+                .contains("fixing state requires pr_number in DB"),
             "error message should contain expected context"
         );
     }
@@ -485,7 +486,8 @@ mod tests {
         );
         let err = result.unwrap_err();
         assert!(
-            err.to_string().contains("fixing state requires pr_number in DB"),
+            err.to_string()
+                .contains("fixing state requires pr_number in DB"),
             "error message should contain expected context"
         );
     }
@@ -494,7 +496,10 @@ mod tests {
     fn design_running_without_pr_number_returns_ok() {
         let config = test_config();
         let result = build_session_config(State::DesignRunning, 42, &config, None, None, &[]);
-        assert!(result.is_ok(), "DesignRunning with pr_number=None should return Ok");
+        assert!(
+            result.is_ok(),
+            "DesignRunning with pr_number=None should return Ok"
+        );
     }
 
     #[test]
