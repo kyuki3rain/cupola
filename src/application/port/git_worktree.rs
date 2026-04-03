@@ -1,6 +1,13 @@
 use anyhow::Result;
 use std::path::Path;
 
+/// Returned by [`GitWorktree::merge`] when the merge fails due to a conflict
+/// (exit code 1).  Other merge failures (fatal errors, exit code 2+) are
+/// represented as plain [`anyhow::Error`] values.
+#[derive(Debug, thiserror::Error)]
+#[error("merge conflict detected")]
+pub struct MergeConflictError;
+
 pub trait GitWorktree: Send + Sync {
     fn fetch(&self) -> Result<()>;
     fn merge(&self, worktree_path: &Path, branch: &str) -> Result<()>;

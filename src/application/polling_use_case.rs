@@ -713,6 +713,14 @@ where
 
             let wt = Path::new(wt_path);
 
+            // Clean up stale index.lock before fetch/merge so that a leftover lock
+            // from a previous crash does not cause the merge to fail immediately.
+            let lock_file = wt.join(".git/index.lock");
+            if lock_file.exists() {
+                tracing::warn!(path = %lock_file.display(), "removing stale index.lock");
+                let _ = std::fs::remove_file(&lock_file);
+            }
+
             // Fetch + merge origin/{default_branch} before spawning (Fixing states only)
             let is_fixing = matches!(
                 issue.state,
@@ -735,13 +743,10 @@ where
                                 // clean merge — no action needed
                             }
                             Err(e) => {
-                                // Distinguish conflict from other failures by checking if
-                                // the working tree is in merging state (non-zero exit from git merge)
-                                let err_str = format!("{e}");
-                                if err_str.contains("Merge conflict")
-                                    || err_str.contains("CONFLICT")
-                                    || err_str.contains("conflict")
-                                {
+                                // Use the typed MergeConflictError to distinguish a conflict
+                                // (exit code 1) from other fatal merge failures (exit code 2+),
+                                // avoiding locale-sensitive string matching.
+                                if e.is::<crate::application::port::git_worktree::MergeConflictError>() {
                                     has_merge_conflict = true;
                                     if !local_causes.contains(&FixingProblemKind::Conflict) {
                                         local_causes.push(FixingProblemKind::Conflict);
@@ -757,13 +762,6 @@ where
                         }
                     }
                 }
-            }
-
-            // Clean up stale index.lock
-            let lock_file = wt.join(".git/index.lock");
-            if lock_file.exists() {
-                tracing::warn!(path = %lock_file.display(), "removing stale index.lock");
-                let _ = std::fs::remove_file(&lock_file);
             }
 
             // Write input files
@@ -2758,11 +2756,9 @@ mod tests {
         fn merge(&self, _: &Path, _: &str) -> anyhow::Result<()> {
             *self.merge_call_count.lock().unwrap() += 1;
             match self.merge_result {
-                "conflict" => {
-                    anyhow::bail!(
-                        "git merge --no-edit origin/main failed: CONFLICT (content): Merge conflict in file.rs"
-                    )
-                }
+                "conflict" => Err(anyhow::Error::from(
+                    crate::application::port::git_worktree::MergeConflictError,
+                )),
                 "other_error" => anyhow::bail!("merge failed: some other error"),
                 _ => Ok(()),
             }

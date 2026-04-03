@@ -45,6 +45,7 @@ pub fn build_session_config(
                     &config.language,
                     fixing_causes,
                     has_merge_conflict,
+                    &config.default_branch,
                 ),
                 output_schema: OutputSchemaKind::Fixing,
             })
@@ -62,6 +63,7 @@ pub fn build_session_config(
                     &config.language,
                     fixing_causes,
                     has_merge_conflict,
+                    &config.default_branch,
                 ),
                 output_schema: OutputSchemaKind::Fixing,
             })
@@ -194,11 +196,13 @@ fn build_fixing_prompt(
     language: &str,
     causes: &[FixingProblemKind],
     has_merge_conflict: bool,
+    default_branch: &str,
 ) -> String {
     let conflict_section = if has_merge_conflict {
-        r#"## Merge Conflict Resolution Required
+        format!(
+            r#"## Merge Conflict Resolution Required
 
-The working tree is in the middle of a merge.
+The working tree is in the middle of a merge with origin/{default_branch}.
 Conflict markers (<<<<<<<, =======, >>>>>>>) remain in the files.
 
 1. Resolve all conflicts first
@@ -207,8 +211,9 @@ Conflict markers (<<<<<<<, =======, >>>>>>>) remain in the files.
 4. Then proceed with the other fixes
 
 "#
+        )
     } else {
-        ""
+        String::new()
     };
 
     let mut instructions = Vec::new();
@@ -748,21 +753,27 @@ mod tests {
     #[test]
     fn fixing_prompt_has_merge_conflict_false_is_unchanged() {
         let config = test_config();
-        let with_flag =
+        let without_conflict =
             build_session_config(State::DesignFixing, 42, &config, Some(85), None, &[], false)
                 .unwrap();
-        let without_flag =
-            build_session_config(State::DesignFixing, 42, &config, Some(85), None, &[], false)
+        let with_conflict =
+            build_session_config(State::DesignFixing, 42, &config, Some(85), None, &[], true)
                 .unwrap();
-        assert_eq!(
-            with_flag.prompt, without_flag.prompt,
-            "prompt should be identical when has_merge_conflict=false"
-        );
         assert!(
-            !with_flag
+            !without_conflict
                 .prompt
                 .contains("## Merge Conflict Resolution Required"),
             "prompt should not contain conflict section when has_merge_conflict=false"
+        );
+        assert!(
+            with_conflict
+                .prompt
+                .contains("## Merge Conflict Resolution Required"),
+            "prompt should contain conflict section when has_merge_conflict=true"
+        );
+        assert_ne!(
+            without_conflict.prompt, with_conflict.prompt,
+            "prompt should differ between has_merge_conflict=false and has_merge_conflict=true"
         );
     }
 

@@ -3,7 +3,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, anyhow};
 
-use crate::application::port::git_worktree::GitWorktree;
+use crate::application::port::git_worktree::{GitWorktree, MergeConflictError};
 
 pub struct GitWorktreeManager {
     repo_root: std::path::PathBuf,
@@ -61,8 +61,27 @@ impl GitWorktree for GitWorktreeManager {
 
     fn merge(&self, worktree_path: &Path, branch: &str) -> Result<()> {
         let remote_branch = format!("origin/{branch}");
-        self.run_git_in_dir(worktree_path, &["merge", "--no-edit", &remote_branch])
-            .with_context(|| format!("failed to merge {remote_branch}"))
+        let output = Command::new("git")
+            .args(["merge", "--no-edit", &remote_branch])
+            .current_dir(worktree_path)
+            .output()
+            .with_context(|| format!("failed to execute git merge {remote_branch}"))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        // Exit code 1 means merge conflict; anything else is a fatal error.
+        if output.status.code() == Some(1) {
+            return Err(anyhow::Error::from(MergeConflictError));
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(anyhow!(
+            "git merge {} failed: {}",
+            remote_branch,
+            stderr.trim()
+        ))
     }
 
     fn exists(&self, path: &Path) -> bool {
@@ -239,10 +258,12 @@ mod tests {
     fn set_initial_branch_main(dir: &std::path::Path) {
         // git symbolic-ref changes HEAD to point to refs/heads/main so the first
         // commit creates the "main" branch regardless of git's default config.
-        let _ = Command::new("git")
+        let status = Command::new("git")
             .args(["symbolic-ref", "HEAD", "refs/heads/main"])
             .current_dir(dir)
-            .status();
+            .status()
+            .unwrap();
+        assert!(status.success());
     }
 
     fn make_commit(dir: &std::path::Path, filename: &str, content: &str, msg: &str) {
@@ -483,14 +504,15 @@ mod tests {
                 .success()
         );
 
-        // merge() should fail due to conflict
+        // merge() should fail with MergeConflictError (exit code 1)
         let mgr = GitWorktreeManager::new(repo_dir.path());
         let result = mgr.merge(repo_dir.path(), "main");
         assert!(result.is_err(), "conflicting merge should return Err");
-        let err_msg = format!("{:#}", result.unwrap_err());
         assert!(
-            err_msg.contains("failed to merge origin/main"),
-            "error should contain context message, got: {err_msg}"
+            result
+                .unwrap_err()
+                .is::<MergeConflictError>(),
+            "conflicting merge should return MergeConflictError"
         );
     }
 }
