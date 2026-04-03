@@ -4,5 +4,8 @@ pub mod event;
 pub mod execution_log;
 pub mod fixing_problem_kind;
 pub mod issue;
+pub mod model_config;
+pub mod phase;
 pub mod state;
 pub mod state_machine;
+pub mod task_weight;

@@ -29,7 +29,9 @@ use crate::domain::config::Config;
 use crate::domain::event::Event;
 use crate::domain::fixing_problem_kind::FixingProblemKind;
 use crate::domain::issue::Issue;
+use crate::domain::phase::Phase;
 use crate::domain::state::State;
+use crate::domain::task_weight::TaskWeight;
 
 pub struct PollingUseCase<G, I, E, C, W>
 where
@@ -544,8 +546,26 @@ where
         for (id, event) in events.drain(..) {
             if let Event::IssueDetected { issue_number } = &event {
                 let uc = self.transition_uc();
-                if let Err(e) = uc.handle_issue_detected(*issue_number).await {
-                    tracing::error!(issue_number, error = %e, "failed to handle issue detected");
+                match uc.handle_issue_detected(*issue_number).await {
+                    Ok(mut issue) => {
+                        // Detect weight label from GitHub and update if different from default
+                        if let Ok(detail) = self.github.get_issue(*issue_number).await {
+                            let weight = label_to_weight(&detail.labels);
+                            if weight != issue.weight {
+                                issue.weight = weight;
+                                if let Err(e) = self.issue_repo.update(&issue).await {
+                                    tracing::warn!(
+                                        issue_number,
+                                        error = %e,
+                                        "failed to update weight for issue"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(issue_number, error = %e, "failed to handle issue detected");
+                    }
                 }
             } else {
                 remaining.push((id, event));
@@ -729,9 +749,12 @@ where
                 OutputSchemaKind::Fixing => Some(FIXING_SCHEMA),
             };
 
+            let phase = Phase::from_state(issue.state);
+            let model = self.config.models.resolve(issue.weight, phase);
+
             match self
                 .claude_runner
-                .spawn(&session_config.prompt, wt, schema, &self.config.model)
+                .spawn(&session_config.prompt, wt, schema, model)
             {
                 Ok(child) => {
                     let pid = child.id();
@@ -1131,6 +1154,18 @@ fn strip_ansi(s: &str) -> String {
     result
 }
 
+/// GitHub Issue のラベルリストから TaskWeight を解決する。
+/// weight:heavy が優先、weight:light が次、どちらもなければ Medium。
+pub fn label_to_weight(labels: &[String]) -> TaskWeight {
+    if labels.iter().any(|l| l == "weight:heavy") {
+        TaskWeight::Heavy
+    } else if labels.iter().any(|l| l == "weight:light") {
+        TaskWeight::Light
+    } else {
+        TaskWeight::Medium
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1465,7 +1500,7 @@ mod tests {
             error_message: None,
             feature_name: None,
             fixing_causes: vec![],
-            model: None,
+            weight: TaskWeight::Medium,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }
@@ -1582,7 +1617,7 @@ mod tests {
             error_message: None,
             feature_name: None,
             fixing_causes: vec![],
-            model: None,
+            weight: TaskWeight::Medium,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }
@@ -1601,7 +1636,7 @@ mod tests {
             error_message: None,
             feature_name: None,
             fixing_causes: vec![],
-            model: None,
+            weight: TaskWeight::Medium,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }

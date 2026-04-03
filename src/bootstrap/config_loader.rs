@@ -3,6 +3,43 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::domain::config::{Config, LogLevel};
+use crate::domain::model_config::{ModelConfig, PerPhaseModels, WeightModelConfig};
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ModelTier {
+    Uniform(String),
+    PerPhase {
+        design: Option<String>,
+        design_fix: Option<String>,
+        implementation: Option<String>,
+        implementation_fix: Option<String>,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelsToml {
+    light: Option<ModelTier>,
+    medium: Option<ModelTier>,
+    heavy: Option<ModelTier>,
+}
+
+fn model_tier_to_weight_config(tier: ModelTier) -> WeightModelConfig {
+    match tier {
+        ModelTier::Uniform(s) => WeightModelConfig::Uniform(s),
+        ModelTier::PerPhase {
+            design,
+            design_fix,
+            implementation,
+            implementation_fix,
+        } => WeightModelConfig::PerPhase(PerPhaseModels {
+            design,
+            design_fix,
+            implementation,
+            implementation_fix,
+        }),
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct CupolaToml {
@@ -15,6 +52,7 @@ pub struct CupolaToml {
     pub stall_timeout_secs: Option<u64>,
     pub max_concurrent_sessions: Option<u32>,
     pub model: Option<String>,
+    models: Option<ModelsToml>,
     pub log: Option<LogToml>,
 }
 
@@ -46,6 +84,19 @@ impl CupolaToml {
             .map(Into::into)
             .unwrap_or_else(|| std::path::PathBuf::from(".cupola/logs"));
 
+        let default_model = self.model.unwrap_or_else(|| "sonnet".to_string());
+
+        let models = if let Some(models_toml) = self.models {
+            ModelConfig {
+                default_model,
+                light: models_toml.light.map(model_tier_to_weight_config),
+                medium: models_toml.medium.map(model_tier_to_weight_config),
+                heavy: models_toml.heavy.map(model_tier_to_weight_config),
+            }
+        } else {
+            ModelConfig::new_default(default_model)
+        };
+
         Config {
             owner: self.owner,
             repo: self.repo,
@@ -60,7 +111,7 @@ impl CupolaToml {
             log_level,
             log_dir,
             max_concurrent_sessions: self.max_concurrent_sessions,
-            model: self.model.unwrap_or_else(|| "sonnet".to_string()),
+            models,
         }
     }
 }
@@ -185,7 +236,7 @@ default_branch = "main"
         assert_eq!(config.log_level, LogLevel::Info);
         assert_eq!(config.log_dir, std::path::PathBuf::from(".cupola/logs"));
         assert!(config.max_concurrent_sessions.is_none());
-        assert_eq!(config.model, "sonnet");
+        assert_eq!(config.models.default_model, "sonnet");
     }
 
     #[test]
@@ -266,7 +317,7 @@ model = "opus"
             log_level: None,
         };
         let config = parsed.into_config(&overrides);
-        assert_eq!(config.model, "opus");
+        assert_eq!(config.models.default_model, "opus");
     }
 
     #[test]
@@ -282,7 +333,7 @@ default_branch = "main"
             log_level: None,
         };
         let config = parsed.into_config(&overrides);
-        assert_eq!(config.model, "sonnet");
+        assert_eq!(config.models.default_model, "sonnet");
     }
 
     #[test]
@@ -294,5 +345,128 @@ default_branch = "main"
             matches!(err, ConfigError::ReadFailed { .. }),
             "expected ReadFailed, got {err:?}"
         );
+    }
+
+    #[test]
+    fn parse_models_section_uniform() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+model = "sonnet"
+
+[models]
+light = "haiku"
+heavy = "opus"
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        assert!(parsed.models.is_some());
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides);
+        assert_eq!(config.models.default_model, "sonnet");
+        assert!(config.models.light.is_some());
+        assert!(config.models.heavy.is_some());
+        assert!(config.models.medium.is_none());
+    }
+
+    #[test]
+    fn parse_models_section_per_phase() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+model = "sonnet"
+
+[models.heavy]
+design = "opus"
+implementation = "opus"
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        assert!(parsed.models.is_some());
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides);
+        assert_eq!(config.models.default_model, "sonnet");
+        assert!(config.models.heavy.is_some());
+    }
+
+    #[test]
+    fn fallback_chain_works() {
+        use crate::domain::phase::Phase;
+        use crate::domain::task_weight::TaskWeight;
+
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+model = "sonnet"
+
+[models]
+heavy = "opus"
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides);
+
+        // Heavy with phase → opus (Uniform)
+        assert_eq!(
+            config
+                .models
+                .resolve(TaskWeight::Heavy, Some(Phase::Design)),
+            "opus"
+        );
+        // Medium (no config) → sonnet (global default)
+        assert_eq!(
+            config
+                .models
+                .resolve(TaskWeight::Medium, Some(Phase::Design)),
+            "sonnet"
+        );
+        // None phase → sonnet
+        assert_eq!(config.models.resolve(TaskWeight::Heavy, None), "sonnet");
+    }
+
+    #[test]
+    fn label_to_weight_both_labels_heavy_wins() {
+        use crate::application::polling_use_case::label_to_weight;
+        use crate::domain::task_weight::TaskWeight;
+
+        let labels = vec!["weight:heavy".to_string(), "weight:light".to_string()];
+        assert_eq!(label_to_weight(&labels), TaskWeight::Heavy);
+    }
+
+    #[test]
+    fn label_to_weight_only_light() {
+        use crate::application::polling_use_case::label_to_weight;
+        use crate::domain::task_weight::TaskWeight;
+
+        let labels = vec!["weight:light".to_string()];
+        assert_eq!(label_to_weight(&labels), TaskWeight::Light);
+    }
+
+    #[test]
+    fn label_to_weight_only_heavy() {
+        use crate::application::polling_use_case::label_to_weight;
+        use crate::domain::task_weight::TaskWeight;
+
+        let labels = vec!["weight:heavy".to_string()];
+        assert_eq!(label_to_weight(&labels), TaskWeight::Heavy);
+    }
+
+    #[test]
+    fn label_to_weight_no_labels_medium() {
+        use crate::application::polling_use_case::label_to_weight;
+        use crate::domain::task_weight::TaskWeight;
+
+        let labels: Vec<String> = vec![];
+        assert_eq!(label_to_weight(&labels), TaskWeight::Medium);
     }
 }

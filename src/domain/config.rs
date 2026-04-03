@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::domain::model_config::ModelConfig;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
     Trace,
@@ -21,7 +23,7 @@ pub struct Config {
     pub log_level: LogLevel,
     pub log_dir: PathBuf,
     pub max_concurrent_sessions: Option<u32>,
-    pub model: String,
+    pub models: ModelConfig,
 }
 
 impl Config {
@@ -37,7 +39,7 @@ impl Config {
             log_level: LogLevel::Info,
             log_dir: PathBuf::from(".cupola/logs"),
             max_concurrent_sessions: None,
-            model: "sonnet".to_string(),
+            models: ModelConfig::new_default("sonnet".to_string()),
         }
     }
 
@@ -57,9 +59,6 @@ impl Config {
         if self.language.is_empty() {
             return Err("language must not be empty".to_string());
         }
-        if self.model.is_empty() {
-            return Err("model must not be empty".to_string());
-        }
         if self.polling_interval_secs < 10 {
             return Err("polling_interval_secs must be at least 10".to_string());
         }
@@ -73,6 +72,9 @@ impl Config {
         }
         if let Some(0) = self.max_concurrent_sessions {
             return Err("max_concurrent_sessions must be greater than 0".to_string());
+        }
+        if self.models.default_model.is_empty() {
+            return Err("models.default_model must not be empty".to_string());
         }
         Ok(())
     }
@@ -96,7 +98,7 @@ mod tests {
         assert_eq!(config.log_level, LogLevel::Info);
         assert_eq!(config.log_dir, PathBuf::from(".cupola/logs"));
         assert!(config.max_concurrent_sessions.is_none());
-        assert_eq!(config.model, "sonnet");
+        assert_eq!(config.models.default_model, "sonnet");
     }
 
     #[test]
@@ -187,12 +189,11 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_empty_model() {
+    fn validate_rejects_empty_default_model() {
         let mut config =
             Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
-        config.model = String::new();
-        let err = config.validate().unwrap_err();
-        assert_eq!(err, "model must not be empty");
+        config.models.default_model = String::new();
+        assert!(config.validate().is_err());
     }
 
     // Task 2.2: polling_interval_secs validation tests
