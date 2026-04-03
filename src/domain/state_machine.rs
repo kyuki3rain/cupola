@@ -27,7 +27,7 @@ impl StateMachine {
 
             // design_review_waiting (merge takes priority)
             (State::DesignReviewWaiting, Event::DesignPrMerged) => Ok(State::ImplementationRunning),
-            (State::DesignReviewWaiting, Event::UnresolvedThreadsDetected) => {
+            (State::DesignReviewWaiting, Event::FixingRequired) => {
                 Ok(State::DesignFixing)
             }
 
@@ -49,7 +49,7 @@ impl StateMachine {
             (State::ImplementationReviewWaiting, Event::ImplementationPrMerged) => {
                 Ok(State::Completed)
             }
-            (State::ImplementationReviewWaiting, Event::UnresolvedThreadsDetected) => {
+            (State::ImplementationReviewWaiting, Event::FixingRequired) => {
                 Ok(State::ImplementationFixing)
             }
 
@@ -125,7 +125,7 @@ mod tests {
     fn design_review_waiting_to_fixing_on_unresolved() {
         let result = StateMachine::transition(
             &State::DesignReviewWaiting,
-            &Event::UnresolvedThreadsDetected,
+            &Event::FixingRequired,
         );
         assert_eq!(result.unwrap(), State::DesignFixing);
     }
@@ -183,7 +183,7 @@ mod tests {
     fn impl_review_waiting_to_fixing_on_unresolved() {
         let result = StateMachine::transition(
             &State::ImplementationReviewWaiting,
-            &Event::UnresolvedThreadsDetected,
+            &Event::FixingRequired,
         );
         assert_eq!(result.unwrap(), State::ImplementationFixing);
     }
@@ -249,7 +249,7 @@ mod tests {
             Event::RetryExhausted,
             Event::DesignPrMerged,
             Event::ImplementationPrMerged,
-            Event::UnresolvedThreadsDetected,
+            Event::FixingRequired,
         ];
         for event in &invalid_events {
             assert!(
@@ -270,7 +270,7 @@ mod tests {
             Event::RetryExhausted,
             Event::DesignPrMerged,
             Event::ImplementationPrMerged,
-            Event::UnresolvedThreadsDetected,
+            Event::FixingRequired,
         ];
         for event in &events {
             assert!(
@@ -291,7 +291,7 @@ mod tests {
             Event::RetryExhausted,
             Event::DesignPrMerged,
             Event::ImplementationPrMerged,
-            Event::UnresolvedThreadsDetected,
+            Event::FixingRequired,
         ];
         for event in &events {
             assert!(

@@ -456,7 +456,7 @@ async fn design_fixing_flow() {
         .expect("pr");
 
     // DesignReviewWaiting → DesignFixing
-    uc.apply(&mut issue, &Event::UnresolvedThreadsDetected)
+    uc.apply(&mut issue, &Event::FixingRequired)
         .await
         .expect("unresolved");
     assert_eq!(issue.state, State::DesignFixing);
@@ -692,7 +692,7 @@ async fn state_transition_log_does_not_break_representative_transition_paths() {
     assert_eq!(issue.state, State::DesignReviewWaiting);
 
     // Path 4: DesignReviewWaiting → DesignFixing
-    uc.apply(&mut issue, &Event::UnresolvedThreadsDetected)
+    uc.apply(&mut issue, &Event::FixingRequired)
         .await
         .expect("unresolved");
     assert_eq!(issue.state, State::DesignFixing);
