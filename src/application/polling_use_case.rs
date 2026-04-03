@@ -2178,8 +2178,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn step1_closed_implementation_review_waiting_with_merged_pr_emits_implementation_pr_merged(
-    ) {
+    async fn step1_closed_implementation_review_waiting_with_merged_pr_emits_implementation_pr_merged()
+     {
         let issue = review_waiting_issue(State::ImplementationReviewWaiting, 60);
         let github = MockGitHubStep1 {
             ready_issues: vec![],
