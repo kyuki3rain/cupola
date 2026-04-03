@@ -17,7 +17,7 @@
 1. The Cupola domain shall define a `TaskWeight` enum with variants `Light`, `Medium` (default), and `Heavy`.
 2. The Cupola domain shall define a `Phase` enum with variants `Design`, `DesignFix`, `Implementation`, and `ImplementationFix`.
 3. When `Phase::from_state(state)` is called with a valid workflow state, the Cupola domain shall return the corresponding `Phase` variant (`Some(Phase)`).
-4. If `Phase::from_state(state)` is called with a state that has no corresponding phase (例: `Idle`, `Closed`), the Cupola domain shall return `None`.
+4. If `Phase::from_state(state)` is called with a state that has no corresponding phase (例: `Idle`, `Completed`, `Cancelled`), the Cupola domain shall return `None`.
 5. When `phase.base()` is called on `Phase::DesignFix`, the Cupola domain shall return `Some(Phase::Design)`.
 6. When `phase.base()` is called on `Phase::ImplementationFix`, the Cupola domain shall return `Some(Phase::Implementation)`.
 7. When `phase.base()` is called on `Phase::Design` or `Phase::Implementation`, the Cupola domain shall return `None`.
@@ -34,12 +34,12 @@
 2. Where the `[models]` section is included in `cupola.toml`, the Cupola config shall accept per-weight model overrides using either a uniform string (`light = "haiku"`) or a per-phase table (`[models.heavy]`).
 3. When `config.models.resolve(weight, phase)` is called, the Cupola config shall apply the following 4-step fallback chain in order:
    1. `models.<weight>.<exact_phase>`（最も具体的）
-   2. `models.<weight>.<base_phase>`（`design_fix` → `design`、`impl_fix` → `impl`）
+   2. `models.<weight>.<base_phase>`（`design_fix` → `design`、`implementation_fix` → `implementation`）
    3. `models.<weight>`（weight が Uniform 文字列の場合）
    4. `model`（グローバルデフォルト）
 4. When `models.<weight>` is a Uniform string and `resolve(weight, phase)` is called for any phase, the Cupola config shall return that uniform string regardless of phase.
 5. When `models.<weight>` is absent and `resolve(weight, phase)` is called, the Cupola config shall fall back to the global `model` value.
-6. If neither `models.<weight>` nor `model` is configured, the Cupola config shall return an error indicating missing model configuration.
+6. The Cupola config shall treat the global `model` as the final fallback for model resolution, so resolution shall succeed even when `models.<weight>` is not configured.
 7. The Cupola config shall deserialize `ModelTier` as an untagged enum that accepts either a `String` (Uniform) or a struct with optional phase fields (`design`, `design_fix`, `implementation`, `implementation_fix`).
 
 ---
