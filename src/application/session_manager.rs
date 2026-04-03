@@ -4,6 +4,8 @@ use std::process::{Child, ExitStatus};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::domain::state::State;
+
 pub struct SessionManager {
     sessions: HashMap<i64, SessionEntry>,
 }
@@ -11,6 +13,7 @@ pub struct SessionManager {
 struct SessionEntry {
     child: Child,
     started_at: Instant,
+    registered_state: State,
     stdout_handle: Option<JoinHandle<String>>,
     stderr_handle: Option<JoinHandle<String>>,
     log_id: i64,
@@ -22,6 +25,8 @@ pub struct ExitedSession {
     pub stdout: String,
     pub stderr: String,
     pub log_id: i64,
+    /// The issue state at the time this session was registered.
+    pub registered_state: State,
 }
 
 impl SessionManager {
@@ -31,7 +36,7 @@ impl SessionManager {
         }
     }
 
-    pub fn register(&mut self, issue_id: i64, mut child: Child, log_id: i64) {
+    pub fn register(&mut self, issue_id: i64, state: State, mut child: Child) {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
@@ -58,9 +63,10 @@ impl SessionManager {
             SessionEntry {
                 child,
                 started_at: Instant::now(),
+                registered_state: state,
                 stdout_handle,
                 stderr_handle,
-                log_id,
+                log_id: 0,
             },
         );
     }
@@ -111,6 +117,7 @@ impl SessionManager {
                     stdout,
                     stderr,
                     log_id: entry.log_id,
+                    registered_state: entry.registered_state,
                 });
             }
         }
@@ -188,7 +195,7 @@ mod tests {
     fn register_and_is_running() {
         let mut mgr = SessionManager::new();
         let child = spawn_sleep(10);
-        mgr.register(1, child, 0);
+        mgr.register(1, State::DesignRunning, child);
 
         assert!(mgr.is_running(1));
         assert!(!mgr.is_running(2));
@@ -200,7 +207,7 @@ mod tests {
     fn collect_exited_returns_finished_process() {
         let mut mgr = SessionManager::new();
         let child = spawn_echo();
-        mgr.register(1, child, 0);
+        mgr.register(1, State::DesignRunning, child);
 
         // Wait for echo to finish
         std::thread::sleep(Duration::from_millis(200));
@@ -217,7 +224,7 @@ mod tests {
     fn collect_exited_skips_running_process() {
         let mut mgr = SessionManager::new();
         let child = spawn_sleep(10);
-        mgr.register(1, child, 0);
+        mgr.register(1, State::DesignRunning, child);
 
         let exited = mgr.collect_exited();
         assert!(exited.is_empty());
@@ -230,7 +237,7 @@ mod tests {
     fn kill_stops_process() {
         let mut mgr = SessionManager::new();
         let child = spawn_sleep(60);
-        mgr.register(1, child, 0);
+        mgr.register(1, State::DesignRunning, child);
 
         mgr.kill(1).expect("kill should work");
 
@@ -247,11 +254,11 @@ mod tests {
         assert_eq!(mgr.count(), 0);
 
         let child1 = spawn_echo();
-        mgr.register(1, child1, 0);
+        mgr.register(1, State::DesignRunning, child1);
         assert_eq!(mgr.count(), 1);
 
         let child2 = spawn_sleep(10);
-        mgr.register(2, child2, 0);
+        mgr.register(2, State::ImplementationRunning, child2);
         assert_eq!(mgr.count(), 2);
 
         // Wait for echo to finish
@@ -267,7 +274,8 @@ mod tests {
     fn collect_exited_includes_log_id() {
         let mut mgr = SessionManager::new();
         let child = spawn_echo();
-        mgr.register(1, child, 42);
+        mgr.register(1, State::DesignRunning, child);
+        mgr.update_log_id(1, 42);
 
         std::thread::sleep(Duration::from_millis(200));
 
@@ -280,7 +288,7 @@ mod tests {
     fn find_stalled_detects_old_processes() {
         let mut mgr = SessionManager::new();
         let child = spawn_sleep(60);
-        mgr.register(1, child, 0);
+        mgr.register(1, State::DesignRunning, child);
 
         // With a very short timeout, everything is stalled
         let stalled = mgr.find_stalled(Duration::from_nanos(1));
