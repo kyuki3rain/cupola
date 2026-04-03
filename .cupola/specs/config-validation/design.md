@@ -83,8 +83,11 @@ graph TD
 |-------------|---------|------------|------------|-------|
 | 1.1 | owner 空文字チェック | Config::validate | validate() | C1 |
 | 1.2 | repo 空文字チェック | Config::validate | validate() | C2 |
-| 1.3 | 両方空の場合は先に検出したエラーを返す | Config::validate | validate() | C1→C2（早期リターン） |
-| 1.4 | 両方非空なら当チェックはエラーなし | Config::validate | validate() | C1→C2→pass |
+| 1.3 | default_branch 空文字チェック | Config::validate | validate() | C3 |
+| 1.4 | language 空文字チェック | Config::validate | validate() | C4 |
+| 1.5 | model 空文字チェック | Config::validate | validate() | C5 |
+| 1.6 | 複数の文字列フィールドが空の場合は定義順で最初に検出したエラーを返す | Config::validate | validate() | C1→C2→C3→C4→C5（早期リターン） |
+| 1.7 | 5 項目すべて非空なら文字列チェックはエラーなし | Config::validate | validate() | C1→C2→C3→C4→C5→pass |
 | 2.1 | polling_interval_secs < 10 でエラー | Config::validate | validate() | C6 |
 | 2.2 | 値が 10 のときはエラーなし | Config::validate | validate() | C6 pass |
 | 2.3 | 値が 10 超のときはエラーなし | Config::validate | validate() | C6 pass |
@@ -108,7 +111,7 @@ graph TD
 
 | Component | Domain/Layer | Intent | Req Coverage | Key Dependencies | Contracts |
 |-----------|--------------|--------|--------------|------------------|-----------|
-| Config::validate | domain | 設定値の整合性を一括検証して早期エラーを返す | 1.1–6.3 全件 | なし | Service |
+| Config::validate | domain | 設定値の整合性を一括検証して早期エラーを返す | 1.1–1.7, 2.1–6.3 全件 | なし | Service |
 
 ### Domain Layer
 
@@ -117,7 +120,7 @@ graph TD
 | Field | Detail |
 |-------|--------|
 | Intent | 設定値の妥当性を検証し、最初に検出した不正値のエラーを返す |
-| Requirements | 1.1, 1.2, 1.3, 1.4, 2.1, 2.2, 2.3, 2.4, 3.1, 3.2, 3.3, 3.4, 4.1, 4.2, 4.3, 4.4, 5.1, 5.2, 5.3, 6.1, 6.2, 6.3 |
+| Requirements | 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 2.1, 2.2, 2.3, 2.4, 3.1, 3.2, 3.3, 3.4, 4.1, 4.2, 4.3, 4.4, 5.1, 5.2, 5.3, 6.1, 6.2, 6.3 |
 
 **Responsibilities & Constraints**
 - 全フィールドのバリデーション責務を単一メソッドで担う
@@ -185,7 +188,7 @@ impl Config {
 
 **stall_timeout_secs 絶対下限チェック**:
 - `validate_rejects_stall_below_minimum` — 59 でエラー
-- `validate_accepts_stall_at_minimum` — 60 かつ polling=10 未満なら 60 > 10 で OK（相関チェック通過）
+- `validate_accepts_stall_at_minimum` — 60 かつ polling=10 なら OK（polling の下限・相関チェックとも通過）
 - `validate_rejects_stall_typical_misconfig` — 30 でエラー（秒/分取り違えの典型例）
 
 **stall と polling の相関チェック**:
