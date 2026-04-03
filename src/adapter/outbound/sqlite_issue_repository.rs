@@ -217,6 +217,7 @@ impl IssueRepository for SqliteIssueRepository {
                      current_pid = NULL,
                      error_message = NULL,
                      model = NULL,
+                     fixing_causes = '[]',
                      updated_at = datetime('now')
                  WHERE id = ?1",
                 [id],
@@ -268,38 +269,41 @@ fn state_to_str(state: &State) -> &'static str {
     }
 }
 
-pub fn str_to_state(s: &str) -> State {
+pub fn str_to_state(col_idx: usize, s: &str) -> rusqlite::Result<State> {
     match s {
-        "idle" => State::Idle,
-        "initialized" => State::Initialized,
-        "design_running" => State::DesignRunning,
-        "design_review_waiting" => State::DesignReviewWaiting,
-        "design_fixing" => State::DesignFixing,
-        "implementation_running" => State::ImplementationRunning,
-        "implementation_review_waiting" => State::ImplementationReviewWaiting,
-        "implementation_fixing" => State::ImplementationFixing,
-        "completed" => State::Completed,
-        "cancelled" => State::Cancelled,
-        _ => State::Idle,
+        "idle" => Ok(State::Idle),
+        "initialized" => Ok(State::Initialized),
+        "design_running" => Ok(State::DesignRunning),
+        "design_review_waiting" => Ok(State::DesignReviewWaiting),
+        "design_fixing" => Ok(State::DesignFixing),
+        "implementation_running" => Ok(State::ImplementationRunning),
+        "implementation_review_waiting" => Ok(State::ImplementationReviewWaiting),
+        "implementation_fixing" => Ok(State::ImplementationFixing),
+        "completed" => Ok(State::Completed),
+        "cancelled" => Ok(State::Cancelled),
+        _ => Err(rusqlite::Error::InvalidColumnType(
+            col_idx,
+            s.to_owned(),
+            rusqlite::types::Type::Text,
+        )),
     }
 }
 
 fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
     let state_str: String = row.get(2)?;
-    let fixing_causes_json: String = row.get(11).unwrap_or_else(|_| "[]".to_string());
+    let fixing_causes_json: String = row.get(11)?;
     let created_str: String = row.get(12)?;
     let updated_str: String = row.get(13)?;
 
     let fixing_causes: Vec<FixingProblemKind> =
-        serde_json::from_str(&fixing_causes_json).unwrap_or_else(|e| {
-            tracing::warn!(error = %e, raw = %fixing_causes_json, "failed to parse fixing_causes, defaulting to empty");
-            vec![]
-        });
+        serde_json::from_str::<Vec<FixingProblemKind>>(&fixing_causes_json).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(e))
+        })?;
 
     Ok(Issue {
         id: row.get(0)?,
         github_issue_number: row.get(1)?,
-        state: str_to_state(&state_str),
+        state: str_to_state(2, &state_str)?,
         design_pr_number: row.get(3)?,
         impl_pr_number: row.get(4)?,
         worktree_path: row.get(5)?,
@@ -309,15 +313,17 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
         feature_name: row.get(9)?,
         model: row.get(10)?,
         fixing_causes,
-        created_at: parse_sqlite_datetime(&created_str),
-        updated_at: parse_sqlite_datetime(&updated_str),
+        created_at: parse_sqlite_datetime(12, &created_str)?,
+        updated_at: parse_sqlite_datetime(13, &updated_str)?,
     })
 }
 
-fn parse_sqlite_datetime(s: &str) -> DateTime<Utc> {
+fn parse_sqlite_datetime(col_idx: usize, s: &str) -> rusqlite::Result<DateTime<Utc>> {
     chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
         .map(|naive| naive.and_utc())
-        .unwrap_or_default()
+        .map_err(|_| {
+            rusqlite::Error::InvalidColumnType(col_idx, s.to_owned(), rusqlite::types::Type::Text)
+        })
 }
 
 #[cfg(test)]
@@ -569,7 +575,114 @@ mod tests {
             State::Cancelled,
         ];
         for state in states {
-            assert_eq!(str_to_state(state_to_str(&state)), state);
+            assert_eq!(str_to_state(0, state_to_str(&state)).unwrap(), state);
         }
+    }
+
+    #[test]
+    fn str_to_state_known_states() {
+        let cases = [
+            ("idle", State::Idle),
+            ("initialized", State::Initialized),
+            ("design_running", State::DesignRunning),
+            ("design_review_waiting", State::DesignReviewWaiting),
+            ("design_fixing", State::DesignFixing),
+            ("implementation_running", State::ImplementationRunning),
+            (
+                "implementation_review_waiting",
+                State::ImplementationReviewWaiting,
+            ),
+            ("implementation_fixing", State::ImplementationFixing),
+            ("completed", State::Completed),
+            ("cancelled", State::Cancelled),
+        ];
+        for (s, expected) in cases {
+            assert_eq!(str_to_state(2, s).expect(s), expected);
+        }
+    }
+
+    #[test]
+    fn str_to_state_unknown_returns_err() {
+        assert!(str_to_state(2, "unknown_state").is_err());
+        assert!(str_to_state(2, "").is_err());
+        assert!(str_to_state(2, "IDLE").is_err());
+    }
+
+    #[test]
+    fn parse_sqlite_datetime_valid() {
+        let result = parse_sqlite_datetime(12, "2024-01-15 10:30:00");
+        assert!(result.is_ok());
+        let dt = result.unwrap();
+        assert_eq!(
+            dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2024-01-15 10:30:00"
+        );
+    }
+
+    #[test]
+    fn parse_sqlite_datetime_invalid() {
+        assert!(parse_sqlite_datetime(12, "not-a-date").is_err());
+        assert!(parse_sqlite_datetime(12, "").is_err());
+        assert!(parse_sqlite_datetime(12, "2024/01/15 10:30:00").is_err());
+    }
+
+    #[tokio::test]
+    async fn find_active_with_corrupt_state_returns_err() {
+        let (db, repo) = setup();
+        {
+            let conn = db.conn().lock().expect("lock");
+            conn.execute(
+                "INSERT INTO issues (github_issue_number, state, fixing_causes, created_at, updated_at)
+                 VALUES (999, 'unknown_corrupt_state', '[]', datetime('now'), datetime('now'))",
+                [],
+            )
+            .expect("insert corrupt row");
+        }
+
+        let result = repo.find_active().await;
+        assert!(
+            result.is_err(),
+            "find_active should return Err for corrupt state"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_active_with_corrupt_fixing_causes_returns_err() {
+        let (db, repo) = setup();
+        {
+            let conn = db.conn().lock().expect("lock");
+            conn.execute(
+                "INSERT INTO issues (github_issue_number, state, fixing_causes, created_at, updated_at)
+                 VALUES (998, 'idle', 'not_json', datetime('now'), datetime('now'))",
+                [],
+            )
+            .expect("insert corrupt row");
+        }
+
+        let result = repo.find_active().await;
+        assert!(
+            result.is_err(),
+            "find_active should return Err for corrupt fixing_causes"
+        );
+    }
+
+    #[tokio::test]
+    async fn reset_for_restart_clears_fixing_causes() {
+        use crate::domain::fixing_problem_kind::FixingProblemKind;
+
+        let (_db, repo) = setup();
+        let id = repo.save(&new_issue(300)).await.expect("save");
+
+        let mut issue = repo.find_by_id(id).await.expect("find").expect("exists");
+        issue.fixing_causes = vec![FixingProblemKind::CiFailure];
+        repo.update(&issue).await.expect("update");
+
+        repo.reset_for_restart(id).await.expect("reset");
+
+        let found = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert!(
+            found.fixing_causes.is_empty(),
+            "fixing_causes should be empty after reset"
+        );
     }
 }

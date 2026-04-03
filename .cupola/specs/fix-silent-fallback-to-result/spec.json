@@ -1,0 +1,22 @@
+{
+  "feature_name": "fix-silent-fallback-to-result",
+  "created_at": "2026-04-03T09:12:47Z",
+  "updated_at": "2026-04-03T09:15:31Z",
+  "language": "ja",
+  "phase": "implementation-complete",
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": true
+    },
+    "design": {
+      "generated": true,
+      "approved": true
+    },
+    "tasks": {
+      "generated": true,
+      "approved": true
+    }
+  },
+  "ready_for_implementation": true
+}
