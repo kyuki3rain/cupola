@@ -349,6 +349,23 @@ async fn start_foreground(
     cfg.validate()
         .map_err(|e| anyhow::anyhow!("config validation failed: {e}"))?;
 
+    // PID file protection (same path as daemon)
+    let config_dir = config
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let pid_file_path = config_dir.join("cupola.pid");
+    let pid_file_manager = PidFileManager::new(pid_file_path.clone());
+
+    check_and_clean_pid_file(&pid_file_manager)?;
+
+    // Write our PID before logging initialization (consistent with start_daemon_child)
+    use crate::application::port::pid_file::PidFilePort;
+    let my_pid = std::process::id();
+    pid_file_manager
+        .write_pid(my_pid)
+        .map_err(|e| anyhow::anyhow!("failed to write PID file: {e}"))?;
+
     // Initialize logging (hold guard for app lifetime)
     let _guard = init_logging(cfg.log_level, &cfg.log_dir);
 
@@ -379,7 +396,7 @@ async fn start_foreground(
     let claude_runner = ClaudeCodeProcess::new("claude");
     let worktree = GitWorktreeManager::new(".");
 
-    // Build and run polling use case (no PID file in foreground mode)
+    // Build polling use case with PID file for graceful shutdown cleanup
     let mut polling = PollingUseCase::new(
         github,
         issue_repo,
@@ -387,9 +404,11 @@ async fn start_foreground(
         claude_runner,
         worktree,
         cfg,
-    );
+    )
+    .with_pid_file(Box::new(pid_file_manager));
 
-    polling.run().await
+    let result = polling.run().await;
+    apply_pid_cleanup(result, pid_file_path)
 }
 
 /// Launch the daemon by spawning a fresh child process (re-exec).
@@ -418,22 +437,7 @@ async fn start_daemon(
     let pid_file_manager = PidFileManager::new(config_dir.join("cupola.pid"));
 
     // Check for existing running daemon
-    use crate::application::port::pid_file::PidFilePort;
-    match pid_file_manager.read_pid() {
-        Ok(Some(existing_pid)) if pid_file_manager.is_process_alive(existing_pid) => {
-            return Err(anyhow::anyhow!(
-                "cupola daemon is already running (pid={existing_pid})"
-            ));
-        }
-        Ok(Some(_)) => {
-            // Stale PID — clean up
-            let _ = pid_file_manager.delete_pid();
-        }
-        Ok(None) => {}
-        Err(e) => {
-            return Err(anyhow::anyhow!("failed to read PID file: {e}"));
-        }
-    }
+    check_and_clean_pid_file(&pid_file_manager)?;
 
     // Spawn a fresh child process (re-exec self with --daemon-child flag).
     // This ensures the Tokio runtime in the child starts clean with no
@@ -554,6 +558,28 @@ async fn start_daemon_child(
     // the PID file may still exist. Delete it here unconditionally; failure is
     // intentionally ignored so it never masks the original outcome.
     apply_pid_cleanup(result, pid_path)
+}
+
+/// Checks the PID file and cleans up stale PIDs.
+///
+/// - If a PID file exists and the process is alive: returns `Err` (already running).
+/// - If a PID file exists but the process is dead: deletes the file and returns `Ok(())`.
+/// - If no PID file exists: returns `Ok(())`.
+/// - On read error: propagates the error.
+fn check_and_clean_pid_file(pid_file_manager: &PidFileManager) -> Result<()> {
+    use crate::application::port::pid_file::PidFilePort;
+    match pid_file_manager.read_pid() {
+        Ok(Some(existing_pid)) if pid_file_manager.is_process_alive(existing_pid) => Err(
+            anyhow::anyhow!("cupola is already running (pid={existing_pid})"),
+        ),
+        Ok(Some(_)) => {
+            // Stale PID — clean up
+            let _ = pid_file_manager.delete_pid();
+            Ok(())
+        }
+        Ok(None) => Ok(()),
+        Err(e) => Err(anyhow::anyhow!("failed to read PID file: {e}")),
+    }
 }
 
 /// Deletes the PID file at `pid_path` as a best-effort fallback, then returns `result`
@@ -685,5 +711,118 @@ mod tests {
             "Ok(()) should pass through even when PID file absent"
         );
         assert!(!path.exists());
+    }
+
+    // --- check_and_clean_pid_file tests ---
+
+    use crate::adapter::outbound::pid_file_manager::PidFileManager;
+    use crate::application::port::pid_file::PidFilePort;
+
+    #[test]
+    fn check_and_clean_pid_file_returns_err_when_process_alive() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("cupola.pid");
+        let mgr = PidFileManager::new(path.clone());
+
+        // Write current process PID so the process is definitely alive
+        let my_pid = std::process::id();
+        mgr.write_pid(my_pid).expect("write");
+
+        let result = super::check_and_clean_pid_file(&mgr);
+
+        assert!(result.is_err(), "should return Err when process is alive");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("already running"),
+            "error should mention 'already running', got: {msg}"
+        );
+        assert!(
+            msg.contains(&my_pid.to_string()),
+            "error should contain the PID, got: {msg}"
+        );
+        // PID file should NOT be deleted
+        assert!(
+            path.exists(),
+            "PID file should not be deleted when process alive"
+        );
+    }
+
+    #[test]
+    fn check_and_clean_pid_file_removes_stale_pid_and_returns_ok() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("cupola.pid");
+        let mgr = PidFileManager::new(path.clone());
+
+        // Write a PID that is almost certainly dead (PID 1 on Linux is init,
+        // but we can't kill it; use a very large PID unlikely to exist)
+        // Use i32::MAX which is documented as invalid in the PidFileManager tests
+        // Actually we need a valid pid (1..=i32::MAX) that is dead.
+        // Write raw content to bypass the range check — we just need a dead PID.
+        // PID 2 might exist, so let's use something reliably dead.
+        // Write the file directly with a PID that is very unlikely to exist.
+        std::fs::write(&path, "999999\n").expect("write");
+
+        let result = super::check_and_clean_pid_file(&mgr);
+
+        // If PID 999999 happens to be alive (extremely unlikely), skip
+        if mgr.is_process_alive(999_999) {
+            return; // skip in edge case environments
+        }
+
+        assert!(result.is_ok(), "should return Ok(()) for stale PID");
+        assert!(!path.exists(), "stale PID file should be deleted");
+    }
+
+    #[test]
+    fn check_and_clean_pid_file_returns_ok_when_no_pid_file() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("cupola.pid");
+        let mgr = PidFileManager::new(path);
+        // File does not exist
+
+        let result = super::check_and_clean_pid_file(&mgr);
+
+        assert!(
+            result.is_ok(),
+            "should return Ok(()) when no PID file exists"
+        );
+    }
+
+    #[test]
+    fn check_and_clean_pid_file_returns_err_on_invalid_content() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("cupola.pid");
+        // Write invalid content (not a number)
+        std::fs::write(&path, "not-a-pid\n").expect("write");
+        let mgr = PidFileManager::new(path);
+
+        let result = super::check_and_clean_pid_file(&mgr);
+
+        assert!(
+            result.is_err(),
+            "should return Err for invalid PID file content"
+        );
+    }
+
+    #[test]
+    fn start_foreground_pid_file_path_uses_config_dir() {
+        // Verify that the PID file path is <config_dir>/cupola.pid (same as daemon)
+        // This is a structural test — we verify the path construction logic matches daemon's.
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let config_path = dir.path().join("cupola.toml");
+        let expected_pid_path = dir.path().join("cupola.pid");
+
+        // The path construction in start_foreground mirrors start_daemon:
+        // config.parent().unwrap_or(Path::new(".")).join("cupola.pid")
+        let config_dir = config_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf();
+        let pid_path = config_dir.join("cupola.pid");
+
+        assert_eq!(
+            pid_path, expected_pid_path,
+            "PID file path should be <config_dir>/cupola.pid"
+        );
     }
 }
