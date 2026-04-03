@@ -291,44 +291,15 @@ pub async fn run(cli: Cli) -> Result<()> {
                 None
             };
 
-            let issues = repo.find_active().await?;
-            if issues.is_empty() {
-                println!("No active issues.");
-            } else {
-                let running_count = issues
-                    .iter()
-                    .filter(|i| i.state.needs_process() && i.current_pid.is_some())
-                    .count();
-
-                match max_sessions {
-                    Some(max) => println!("Running: {running_count}/{max}"),
-                    None => println!("Running: {running_count}"),
-                }
-
-                for issue in &issues {
-                    let pr_info = match (issue.design_pr_number, issue.impl_pr_number) {
-                        (Some(d), Some(i)) => format!("design_pr:#{d} impl_pr:#{i}"),
-                        (Some(d), None) => format!("design_pr:#{d}"),
-                        (None, Some(i)) => format!("impl_pr:#{i}"),
-                        (None, None) => String::new(),
-                    };
-                    let err_info = issue
-                        .error_message
-                        .as_deref()
-                        .map(|e| format!(" \"{e}\""))
-                        .unwrap_or_default();
-                    println!(
-                        "  #{:<5} {:<30} {:<20} retry:{} {}{}",
-                        issue.github_issue_number,
-                        format!("{:?}", issue.state),
-                        pr_info,
-                        issue.retry_count,
-                        issue.worktree_path.as_deref().unwrap_or(""),
-                        err_info,
-                    );
-                }
-            }
-            Ok(())
+            let pid_file_manager =
+                PidFileManager::new(Path::new(".cupola/cupola.pid").to_path_buf());
+            handle_status(
+                &mut std::io::stdout(),
+                &pid_file_manager,
+                &repo,
+                max_sessions,
+            )
+            .await
         }
     }
 }
@@ -556,6 +527,89 @@ async fn start_daemon_child(
     apply_pid_cleanup(result, pid_path)
 }
 
+async fn handle_status<W: std::io::Write>(
+    out: &mut W,
+    pid_mgr: &impl crate::application::port::pid_file::PidFilePort,
+    repo: &impl IssueRepository,
+    max_sessions: Option<u32>,
+) -> Result<()> {
+    // Daemon status check (always before issue list)
+    match pid_mgr.read_pid() {
+        Ok(Some(pid)) => {
+            if pid_mgr.is_process_alive(pid) {
+                writeln!(out, "Daemon: running (pid={pid})")?;
+            } else {
+                match pid_mgr.delete_pid() {
+                    Ok(()) => writeln!(out, "Daemon: not running (stale PID file cleaned)")?,
+                    Err(e) => {
+                        tracing::warn!("failed to delete stale PID file: {e}");
+                        writeln!(
+                            out,
+                            "Daemon: not running (stale PID file exists, but cleanup failed)"
+                        )?;
+                    }
+                }
+            }
+        }
+        Ok(None) | Err(_) => writeln!(out, "Daemon: not running")?,
+    }
+
+    let issues = repo.find_active().await?;
+    if issues.is_empty() {
+        writeln!(out, "No active issues.")?;
+    } else {
+        let running_count = issues
+            .iter()
+            .filter(|i| {
+                i.state.needs_process()
+                    && i.current_pid
+                        .is_some_and(|pid| pid_mgr.is_process_alive(pid))
+            })
+            .count();
+
+        match max_sessions {
+            Some(max) => writeln!(out, "Running: {running_count}/{max}")?,
+            None => writeln!(out, "Running: {running_count}")?,
+        }
+
+        for issue in &issues {
+            let pr_info = match (issue.design_pr_number, issue.impl_pr_number) {
+                (Some(d), Some(i)) => format!("design_pr:#{d} impl_pr:#{i}"),
+                (Some(d), None) => format!("design_pr:#{d}"),
+                (None, Some(i)) => format!("impl_pr:#{i}"),
+                (None, None) => String::new(),
+            };
+            let err_info = issue
+                .error_message
+                .as_deref()
+                .map(|e| format!(" \"{e}\""))
+                .unwrap_or_default();
+            let pid_info = match issue.current_pid {
+                Some(pid) => {
+                    if pid_mgr.is_process_alive(pid) {
+                        format!(" pid:{pid} (alive)")
+                    } else {
+                        format!(" pid:{pid} (dead)")
+                    }
+                }
+                None => String::new(),
+            };
+            writeln!(
+                out,
+                "  #{:<5} {:<30} {:<20} retry:{} {}{}{}",
+                issue.github_issue_number,
+                format!("{:?}", issue.state),
+                pr_info,
+                issue.retry_count,
+                issue.worktree_path.as_deref().unwrap_or(""),
+                err_info,
+                pid_info,
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Deletes the PID file at `pid_path` as a best-effort fallback, then returns `result`
 /// unchanged. Deletion errors are silently ignored so they never mask the original outcome.
 fn apply_pid_cleanup(
@@ -570,11 +624,86 @@ fn apply_pid_cleanup(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use crate::adapter::outbound::sqlite_connection::SqliteConnection;
     use crate::adapter::outbound::sqlite_issue_repository::SqliteIssueRepository;
     use crate::application::port::issue_repository::IssueRepository;
+    use crate::application::port::pid_file::{PidFileError, PidFilePort};
     use crate::domain::issue::Issue;
     use crate::domain::state::State;
+
+    // ---------------------------------------------------------------------------
+    // Mock PidFilePort
+    // ---------------------------------------------------------------------------
+
+    struct MockPidFilePort {
+        pid: Option<u32>,
+        alive_pids: HashSet<u32>,
+        deleted: std::sync::Mutex<bool>,
+    }
+
+    impl MockPidFilePort {
+        fn new() -> Self {
+            Self {
+                pid: None,
+                alive_pids: HashSet::new(),
+                deleted: std::sync::Mutex::new(false),
+            }
+        }
+
+        fn with_pid(mut self, pid: u32) -> Self {
+            self.pid = Some(pid);
+            self
+        }
+
+        fn with_alive_pid(mut self, pid: u32) -> Self {
+            self.alive_pids.insert(pid);
+            self
+        }
+
+        fn was_deleted(&self) -> bool {
+            *self.deleted.lock().unwrap()
+        }
+    }
+
+    impl PidFilePort for MockPidFilePort {
+        fn write_pid(&self, _pid: u32) -> Result<(), PidFileError> {
+            Ok(())
+        }
+
+        fn read_pid(&self) -> Result<Option<u32>, PidFileError> {
+            Ok(self.pid)
+        }
+
+        fn delete_pid(&self) -> Result<(), PidFileError> {
+            *self.deleted.lock().unwrap() = true;
+            Ok(())
+        }
+
+        fn is_process_alive(&self, pid: u32) -> bool {
+            self.alive_pids.contains(&pid)
+        }
+    }
+
+    fn make_issue(issue_number: u64, state: State, current_pid: Option<u32>) -> Issue {
+        Issue {
+            id: 0,
+            github_issue_number: issue_number,
+            state,
+            design_pr_number: None,
+            impl_pr_number: None,
+            worktree_path: None,
+            retry_count: 0,
+            current_pid,
+            error_message: None,
+            feature_name: None,
+            fixing_causes: vec![],
+            weight: crate::domain::task_weight::TaskWeight::Medium,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
 
     #[tokio::test]
     async fn status_with_no_active_issues() {
@@ -685,5 +814,193 @@ mod tests {
             "Ok(()) should pass through even when PID file absent"
         );
         assert!(!path.exists());
+    }
+
+    // --- handle_status: Task 3.1 daemon status display tests ---
+
+    #[tokio::test]
+    async fn daemon_status_running_when_pid_is_alive() {
+        let db = SqliteConnection::open_in_memory().expect("open");
+        db.init_schema().expect("init");
+        let repo = SqliteIssueRepository::new(db);
+
+        let pid_mgr = MockPidFilePort::new().with_pid(1234).with_alive_pid(1234);
+
+        let mut out = Vec::new();
+        super::handle_status(&mut out, &pid_mgr, &repo, None)
+            .await
+            .expect("handle");
+        let output = String::from_utf8(out).expect("utf8");
+
+        assert!(
+            output.contains("Daemon: running (pid=1234)"),
+            "output: {output}"
+        );
+    }
+
+    #[tokio::test]
+    async fn daemon_status_not_running_when_no_pid_file() {
+        let db = SqliteConnection::open_in_memory().expect("open");
+        db.init_schema().expect("init");
+        let repo = SqliteIssueRepository::new(db);
+
+        let pid_mgr = MockPidFilePort::new();
+
+        let mut out = Vec::new();
+        super::handle_status(&mut out, &pid_mgr, &repo, None)
+            .await
+            .expect("handle");
+        let output = String::from_utf8(out).expect("utf8");
+
+        assert!(output.contains("Daemon: not running"), "output: {output}");
+    }
+
+    #[tokio::test]
+    async fn daemon_status_stale_pid_cleaned() {
+        let db = SqliteConnection::open_in_memory().expect("open");
+        db.init_schema().expect("init");
+        let repo = SqliteIssueRepository::new(db);
+
+        // PID in file but process is not alive
+        let pid_mgr = MockPidFilePort::new().with_pid(5678);
+
+        let mut out = Vec::new();
+        super::handle_status(&mut out, &pid_mgr, &repo, None)
+            .await
+            .expect("handle");
+        let output = String::from_utf8(out).expect("utf8");
+
+        assert!(pid_mgr.was_deleted(), "PID file should be deleted");
+        assert!(
+            output.contains("Daemon: not running (stale PID file cleaned)"),
+            "output: {output}"
+        );
+    }
+
+    #[tokio::test]
+    async fn daemon_status_appears_before_issue_list() {
+        let db = SqliteConnection::open_in_memory().expect("open");
+        db.init_schema().expect("init");
+        let repo = SqliteIssueRepository::new(db);
+
+        repo.save(&make_issue(42, State::DesignRunning, None))
+            .await
+            .expect("save");
+
+        let pid_mgr = MockPidFilePort::new();
+
+        let mut out = Vec::new();
+        super::handle_status(&mut out, &pid_mgr, &repo, None)
+            .await
+            .expect("handle");
+        let output = String::from_utf8(out).expect("utf8");
+
+        let daemon_pos = output.find("Daemon:").expect("should have daemon line");
+        let issue_pos = output.find("#42").expect("should have issue line");
+        assert!(
+            daemon_pos < issue_pos,
+            "Daemon status should appear before issue list; output: {output}"
+        );
+    }
+
+    // --- handle_status: Task 3.2 issue process alive/dead tests ---
+
+    #[tokio::test]
+    async fn issue_with_alive_pid_shows_alive() {
+        let db = SqliteConnection::open_in_memory().expect("open");
+        db.init_schema().expect("init");
+        let repo = SqliteIssueRepository::new(db);
+
+        repo.save(&make_issue(10, State::DesignRunning, Some(100)))
+            .await
+            .expect("save");
+
+        let pid_mgr = MockPidFilePort::new().with_alive_pid(100);
+
+        let mut out = Vec::new();
+        super::handle_status(&mut out, &pid_mgr, &repo, None)
+            .await
+            .expect("handle");
+        let output = String::from_utf8(out).expect("utf8");
+
+        assert!(output.contains("pid:100 (alive)"), "output: {output}");
+    }
+
+    #[tokio::test]
+    async fn issue_with_dead_pid_shows_dead() {
+        let db = SqliteConnection::open_in_memory().expect("open");
+        db.init_schema().expect("init");
+        let repo = SqliteIssueRepository::new(db);
+
+        repo.save(&make_issue(11, State::DesignRunning, Some(200)))
+            .await
+            .expect("save");
+
+        // 200 is not in alive_pids → dead
+        let pid_mgr = MockPidFilePort::new();
+
+        let mut out = Vec::new();
+        super::handle_status(&mut out, &pid_mgr, &repo, None)
+            .await
+            .expect("handle");
+        let output = String::from_utf8(out).expect("utf8");
+
+        assert!(output.contains("pid:200 (dead)"), "output: {output}");
+    }
+
+    #[tokio::test]
+    async fn issue_with_no_pid_shows_no_pid_info() {
+        let db = SqliteConnection::open_in_memory().expect("open");
+        db.init_schema().expect("init");
+        let repo = SqliteIssueRepository::new(db);
+
+        repo.save(&make_issue(12, State::DesignRunning, None))
+            .await
+            .expect("save");
+
+        let pid_mgr = MockPidFilePort::new();
+
+        let mut out = Vec::new();
+        super::handle_status(&mut out, &pid_mgr, &repo, None)
+            .await
+            .expect("handle");
+        let output = String::from_utf8(out).expect("utf8");
+
+        let issue_line = output
+            .lines()
+            .find(|l| l.contains("#12"))
+            .expect("should have issue line");
+        assert!(
+            !issue_line.contains("pid:"),
+            "should not contain pid info; line: {issue_line}"
+        );
+    }
+
+    #[tokio::test]
+    async fn running_count_only_counts_alive_processes() {
+        let db = SqliteConnection::open_in_memory().expect("open");
+        db.init_schema().expect("init");
+        let repo = SqliteIssueRepository::new(db);
+
+        // Two issues with PIDs, only pid 300 is alive
+        repo.save(&make_issue(20, State::DesignRunning, Some(300)))
+            .await
+            .expect("save");
+        repo.save(&make_issue(21, State::DesignRunning, Some(301)))
+            .await
+            .expect("save");
+
+        let pid_mgr = MockPidFilePort::new().with_alive_pid(300);
+
+        let mut out = Vec::new();
+        super::handle_status(&mut out, &pid_mgr, &repo, None)
+            .await
+            .expect("handle");
+        let output = String::from_utf8(out).expect("utf8");
+
+        assert!(
+            output.contains("Running: 1"),
+            "expected Running: 1; output: {output}"
+        );
     }
 }
