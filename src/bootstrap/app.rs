@@ -174,12 +174,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             };
             let cfg = toml.into_config(&overrides);
 
-            let log_dir = match cfg.log_dir {
-                Some(dir) => dir,
-                None => {
-                    return Err(anyhow::anyhow!("log.dir is not configured in cupola.toml"));
-                }
-            };
+            let log_dir = cfg.log_dir;
 
             if !log_dir.exists() {
                 return Err(anyhow::anyhow!(
@@ -355,7 +350,7 @@ async fn start_foreground(
         .map_err(|e| anyhow::anyhow!("config validation failed: {e}"))?;
 
     // Initialize logging (hold guard for app lifetime)
-    let _guard = init_logging(cfg.log_level, cfg.log_dir.as_deref());
+    let _guard = init_logging(cfg.log_level, &cfg.log_dir);
 
     tracing::info!(
         owner = %cfg.owner,
@@ -415,13 +410,6 @@ async fn start_daemon(
     let cfg = toml.into_config(&overrides);
     cfg.validate()
         .map_err(|e| anyhow::anyhow!("config validation failed: {e}"))?;
-
-    // log_dir must be set for daemon mode (no terminal to log to)
-    if cfg.log_dir.is_none() {
-        return Err(anyhow::anyhow!(
-            "daemon mode requires [log] dir to be set in cupola.toml"
-        ));
-    }
 
     let config_dir = config
         .parent()
@@ -514,13 +502,14 @@ async fn start_daemon_child(
 
     let pid_path = config_dir.join("cupola.pid");
 
+    // Initialize logging to file
+    let _guard = init_logging(cfg.log_level, &cfg.log_dir);
+
     // Wrap all post-write_pid work in a single async block so that any `?` propagation
     // (DB open, token resolution, client construction, polling) is captured as a Result
     // rather than causing an early function return. This ensures apply_pid_cleanup is
     // always reached regardless of where the failure occurs.
     let result: anyhow::Result<()> = async {
-        // Initialize logging to file
-        let _guard = init_logging(cfg.log_level, cfg.log_dir.as_deref());
 
         tracing::info!(
             owner = %cfg.owner,

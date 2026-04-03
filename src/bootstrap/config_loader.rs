@@ -43,7 +43,8 @@ impl CupolaToml {
             .log
             .as_ref()
             .and_then(|l| l.dir.as_deref())
-            .map(Into::into);
+            .map(Into::into)
+            .unwrap_or_else(|| std::path::PathBuf::from(".cupola/logs"));
 
         Config {
             owner: self.owner,
@@ -182,7 +183,7 @@ default_branch = "main"
         assert_eq!(config.max_retries, 3);
         assert_eq!(config.stall_timeout_secs, 1800);
         assert_eq!(config.log_level, LogLevel::Info);
-        assert!(config.log_dir.is_none());
+        assert_eq!(config.log_dir, std::path::PathBuf::from(".cupola/logs"));
         assert!(config.max_concurrent_sessions.is_none());
         assert_eq!(config.model, "sonnet");
     }

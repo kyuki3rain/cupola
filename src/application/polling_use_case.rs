@@ -308,6 +308,19 @@ where
                 _ => continue,
             };
 
+            // Stale exit guard: skip if the issue state has changed since this session was
+            // registered (covers both transitions to non-process states and transitions between
+            // needs_process states, e.g. DesignRunning → ImplementationRunning after a PR merge).
+            if issue.state != session.registered_state || !issue.state.needs_process() {
+                tracing::info!(
+                    issue_id = issue.id,
+                    registered_state = ?session.registered_state,
+                    current_state = ?issue.state,
+                    "ignoring stale process exit"
+                );
+                continue;
+            }
+
             // Clear PID in DB
             if issue.current_pid.is_some() {
                 issue.current_pid = None;
@@ -729,7 +742,7 @@ where
                         pid,
                         "spawned Claude Code process"
                     );
-                    self.session_mgr.register(issue.id, child);
+                    self.session_mgr.register(issue.id, issue.state, child);
 
                     // Persist PID to DB
                     let mut updated_issue = issue.clone();
@@ -1713,5 +1726,124 @@ mod tests {
         let log = "2026-04-02T10:53:01.0418115Z error: something wrong\n";
         let result = extract_error_lines(log).unwrap();
         assert_eq!(result, "error: something wrong");
+    }
+
+    // --- Step 3: stale exit guard tests ---
+
+    fn spawn_fail() -> std::process::Child {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 1")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("sh should work")
+    }
+
+    fn issue_with_state(id: i64, state: State) -> Issue {
+        Issue {
+            id,
+            github_issue_number: (id as u64) + 100,
+            state,
+            design_pr_number: None,
+            impl_pr_number: None,
+            worktree_path: None,
+            retry_count: 0,
+            current_pid: None,
+            error_message: None,
+            feature_name: None,
+            fixing_causes: vec![],
+            model: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn step3_stale_failed_exit_does_not_emit_event_for_design_review_waiting() {
+        // Session was registered during DesignRunning; issue has since transitioned to
+        // DesignReviewWaiting — the exit is stale and must be ignored.
+        let issue = issue_with_state(1, State::DesignReviewWaiting);
+        let (repo, _) = MockIssueRepo::new(vec![issue]);
+        let github = MockGitHub::new(false, None, vec![], false);
+        let mut uc = make_uc(github, repo);
+        uc.session_mgr
+            .register(1, State::DesignRunning, spawn_fail());
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let mut events = vec![];
+        uc.step3_process_exit_check(&mut events).await;
+        assert!(
+            events.is_empty(),
+            "stale exit should not emit events: {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn step3_stale_failed_exit_does_not_emit_event_for_completed() {
+        // Session was registered during ImplementationRunning; issue is now Completed.
+        let issue = issue_with_state(1, State::Completed);
+        let (repo, _) = MockIssueRepo::new(vec![issue]);
+        let github = MockGitHub::new(false, None, vec![], false);
+        let mut uc = make_uc(github, repo);
+        uc.session_mgr
+            .register(1, State::ImplementationRunning, spawn_fail());
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let mut events = vec![];
+        uc.step3_process_exit_check(&mut events).await;
+        assert!(
+            events.is_empty(),
+            "stale exit should not emit events: {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn step3_stale_failed_exit_does_not_emit_event_for_cancelled() {
+        // Session was registered during DesignRunning; issue is now Cancelled.
+        let issue = issue_with_state(1, State::Cancelled);
+        let (repo, _) = MockIssueRepo::new(vec![issue]);
+        let github = MockGitHub::new(false, None, vec![], false);
+        let mut uc = make_uc(github, repo);
+        uc.session_mgr
+            .register(1, State::DesignRunning, spawn_fail());
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let mut events = vec![];
+        uc.step3_process_exit_check(&mut events).await;
+        assert!(
+            events.is_empty(),
+            "stale exit should not emit events: {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn step3_multiple_stale_exits_all_skipped_active_issue_emits_event() {
+        // Two stale issues + one active issue — only the active one should emit an event.
+        // stale1: DesignRunning → DesignReviewWaiting (state changed)
+        // stale2: ImplementationRunning → Cancelled (state changed)
+        // active: ImplementationRunning → ImplementationRunning (no change, needs_process)
+        let stale1 = issue_with_state(1, State::DesignReviewWaiting);
+        let stale2 = issue_with_state(2, State::Cancelled);
+        let active = issue_with_state(3, State::ImplementationRunning);
+        let (repo, _) = MockIssueRepo::new(vec![stale1, stale2, active]);
+        let github = MockGitHub::new(false, None, vec![], false);
+        let mut uc = make_uc(github, repo);
+        uc.session_mgr
+            .register(1, State::DesignRunning, spawn_fail());
+        uc.session_mgr
+            .register(2, State::ImplementationRunning, spawn_fail());
+        uc.session_mgr
+            .register(3, State::ImplementationRunning, spawn_fail());
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let mut events = vec![];
+        uc.step3_process_exit_check(&mut events).await;
+        assert_eq!(
+            events.len(),
+            1,
+            "only active issue should emit event: {:?}",
+            events
+        );
+        assert_eq!(events[0].0, 3, "event should be for active issue id=3");
     }
 }
