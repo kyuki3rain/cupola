@@ -109,7 +109,7 @@ sequenceDiagram
 | 2.1 | stale exit では retry_count をインクリメントしない | handle_failed_exit（呼び出さない） | RetryPolicy | stale exit 判定フロー |
 | 2.2 | ProcessFailed は needs_process 時のみ | handle_failed_exit | Event::ProcessFailed | stale exit 判定フロー |
 | 2.3 | RetryExhausted は needs_process 時のみ | handle_failed_exit | Event::RetryExhausted | stale exit 判定フロー |
-| 3.1 | PR merge 後の stale exit を無視 | step3_process_exit_check + guard | State.needs_process | 競合シナリオ |
+| 3.1 | PR merge 後の stale exit を無視 | step3_process_exit_check + registered_state guard | SessionManager.registered_state, State.needs_process | 競合シナリオ |
 | 3.2 | Issue close 後の stale exit をスキップ | step3_process_exit_check + guard | State.needs_process | 競合シナリオ |
 | 3.3 | 複数 stale exit を個別に評価 | step3_process_exit_check ループ | 各 session ごとにチェック | 競合シナリオ |
 
@@ -117,8 +117,9 @@ sequenceDiagram
 
 | Component | Domain/Layer | Intent | Req Coverage | Key Dependencies | Contracts |
 |-----------|--------------|--------|--------------|------------------|-----------|
-| step3_process_exit_check | Application | プロセス終了の検知とイベント生成 | 1.1-1.4, 2.1-2.3, 3.1-3.3 | IssueRepository (P0), State.needs_process (P0) | State |
+| step3_process_exit_check | Application | プロセス終了の検知とイベント生成 | 1.1-1.4, 2.1-2.3, 3.1-3.3 | IssueRepository (P0), SessionManager.registered_state (P0), State.needs_process (P0) | State |
 | State.needs_process | Domain | プロセスが必要な状態かどうかを判定 | 1.2, 2.1-2.3 | なし | Service |
+| SessionManager.registered_state | Application | セッション登録時の issue 状態を保持 | 3.1 | なし | State |
 
 ### Application Layer
 
@@ -132,29 +133,45 @@ sequenceDiagram
 **Responsibilities & Constraints**
 
 - 終了セッション一覧を `SessionManager` から取得し、各 issue の最新状態に基づいてイベントを生成する
-- `needs_process()` が false の issue に対してはいかなるイベントも発行しない
+- セッション登録時の状態（`registered_state`）と現在の DB 状態が異なる場合、またはいずれかが `needs_process() == false` の場合は stale と判定してスキップする
 - stale exit をスキップした場合は INFO ログを出力する
+- stale ガードは `record_start`（実行ログ記録）より前に評価し、不完全なログレコードが残らないようにする
+
+**Stale 判定の詳細**
+
+`needs_process() == false` のみでガードすると、以下のケースで stale exit が見逃される：
+
+- `DesignRunning` でセッション登録 → PR merge により `ImplementationRunning` へ遷移 → プロセス終了
+- この時点で issue の `needs_process()` は `true` のまま → 旧ガードではスキップされない
+
+このため、`ExitedSession` にセッション登録時の状態（`registered_state`）を保持し、現在の issue 状態と比較することで stale を正確に判定する。
+
+```
+stale := (session.registered_state != issue.state) || !issue.state.needs_process()
+```
 
 **Dependencies**
 
 - Inbound: PollingUseCase.run_cycle — ポーリングサイクルからの呼び出し (P0)
 - Outbound: IssueRepository.find_by_id — 最新 issue 状態の取得 (P0)
-- Outbound: ExecLogRepository.record_start — 実行ログ記録 (P2)
-- Outbound: State.needs_process — stale exit 判定 (P0)
+- Outbound: ExecLogRepository.record_start — 実行ログ記録（stale ガード後にのみ呼び出す） (P2)
+- Outbound: SessionManager.registered_state — セッション登録時の状態 (P0)
+- Outbound: State.needs_process — stale exit 補完判定 (P0)
 
 **Contracts**: State [x]
 
 ##### State Management
 
-- 状態モデル: `State` enum の `needs_process()` メソッドによる判定
-- ガード条件: `!issue.state.needs_process()` が true の場合、そのセッションの処理を `continue` でスキップ
-- ログ: `tracing::info!(issue_id = issue.id, state = ?issue.state, "ignoring stale process exit")`
+- 状態モデル: `State` enum の `needs_process()` メソッドと `SessionManager` が保持する `registered_state` の組み合わせによる判定
+- ガード条件: `session.registered_state != issue.state || !issue.state.needs_process()` が true の場合、そのセッションの処理を `continue` でスキップ
+- ガード位置: `record_start` の呼び出し前。これにより stale セッションに対して不完全な実行ログレコードが生成されない。
+- ログ: `tracing::info!(issue_id, registered_state, current_state, "ignoring stale process exit")`
 
 **Implementation Notes**
 
-- Integration: `issue.state` は `find_by_id` で取得した最新の DB 状態。ポーリングサイクル内での競合（同サイクル内で他ステップが遷移を先行させた場合）については、イベントバッチ適用は step6 で行われるため、DB 状態は前サイクル終了時点のものを反映する。これは許容範囲内。
+- Integration: `issue.state` は `find_by_id` で取得した最新の DB 状態。`registered_state` は `SessionManager.register()` 呼び出し時に渡した state で、スポーン直前の状態を反映する。
 - Validation: `needs_process()` は既存の純粋関数。外部入力の検証は不要。
-- Risks: stale exit と判定されたが実際にはアクティブだった場合のイベント欠落リスクは存在しない。`needs_process()` は DB の最新状態に基づくため、issue がアクティブであれば必ず `true` を返す。
+- Risks: `registered_state` と現在の state が一致しているにもかかわらず stale と誤判定されるケースはない。同一状態内で複数プロセスが連続起動される場合（リトライなど）は、各スポーン時に `registered_state` が更新されるため、常に最新のスポーンのみが有効となる。
 
 ## Error Handling
 

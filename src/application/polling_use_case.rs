@@ -308,6 +308,19 @@ where
                 _ => continue,
             };
 
+            // Stale exit guard: skip if the issue state has changed since this session was
+            // registered (covers both transitions to non-process states and transitions between
+            // needs_process states, e.g. DesignRunning → ImplementationRunning after a PR merge).
+            if issue.state != session.registered_state || !issue.state.needs_process() {
+                tracing::info!(
+                    issue_id = issue.id,
+                    registered_state = ?session.registered_state,
+                    current_state = ?issue.state,
+                    "ignoring stale process exit"
+                );
+                continue;
+            }
+
             // Clear PID in DB
             if issue.current_pid.is_some() {
                 issue.current_pid = None;
@@ -322,16 +335,6 @@ where
                 .record_start(issue.id, issue.state)
                 .await
                 .unwrap_or(0);
-
-            // Stale exit guard: skip if the issue has already transitioned to a non-process state
-            if !issue.state.needs_process() {
-                tracing::info!(
-                    issue_id = issue.id,
-                    state = ?issue.state,
-                    "ignoring stale process exit"
-                );
-                continue;
-            }
 
             if session.exit_status.success() {
                 tracing::info!(
@@ -739,7 +742,7 @@ where
                         pid,
                         "spawned Claude Code process"
                     );
-                    self.session_mgr.register(issue.id, child);
+                    self.session_mgr.register(issue.id, issue.state, child);
 
                     // Persist PID to DB
                     let mut updated_issue = issue.clone();
@@ -1758,12 +1761,15 @@ mod tests {
 
     #[tokio::test]
     async fn step3_stale_failed_exit_does_not_emit_event_for_design_review_waiting() {
+        // Session was registered during DesignRunning; issue has since transitioned to
+        // DesignReviewWaiting — the exit is stale and must be ignored.
         let issue = issue_with_state(1, State::DesignReviewWaiting);
         let (repo, _) = MockIssueRepo::new(vec![issue]);
         let github = MockGitHub::new(false, None, vec![], false);
         let mut uc = make_uc(github, repo);
-        uc.session_mgr.register(1, spawn_fail());
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        uc.session_mgr
+            .register(1, State::DesignRunning, spawn_fail());
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         let mut events = vec![];
         uc.step3_process_exit_check(&mut events).await;
         assert!(
@@ -1775,12 +1781,14 @@ mod tests {
 
     #[tokio::test]
     async fn step3_stale_failed_exit_does_not_emit_event_for_completed() {
+        // Session was registered during ImplementationRunning; issue is now Completed.
         let issue = issue_with_state(1, State::Completed);
         let (repo, _) = MockIssueRepo::new(vec![issue]);
         let github = MockGitHub::new(false, None, vec![], false);
         let mut uc = make_uc(github, repo);
-        uc.session_mgr.register(1, spawn_fail());
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        uc.session_mgr
+            .register(1, State::ImplementationRunning, spawn_fail());
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         let mut events = vec![];
         uc.step3_process_exit_check(&mut events).await;
         assert!(
@@ -1792,12 +1800,14 @@ mod tests {
 
     #[tokio::test]
     async fn step3_stale_failed_exit_does_not_emit_event_for_cancelled() {
+        // Session was registered during DesignRunning; issue is now Cancelled.
         let issue = issue_with_state(1, State::Cancelled);
         let (repo, _) = MockIssueRepo::new(vec![issue]);
         let github = MockGitHub::new(false, None, vec![], false);
         let mut uc = make_uc(github, repo);
-        uc.session_mgr.register(1, spawn_fail());
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        uc.session_mgr
+            .register(1, State::DesignRunning, spawn_fail());
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         let mut events = vec![];
         uc.step3_process_exit_check(&mut events).await;
         assert!(
@@ -1809,17 +1819,23 @@ mod tests {
 
     #[tokio::test]
     async fn step3_multiple_stale_exits_all_skipped_active_issue_emits_event() {
-        // Two stale issues + one active issue — only the active one should emit an event
+        // Two stale issues + one active issue — only the active one should emit an event.
+        // stale1: DesignRunning → DesignReviewWaiting (state changed)
+        // stale2: ImplementationRunning → Cancelled (state changed)
+        // active: ImplementationRunning → ImplementationRunning (no change, needs_process)
         let stale1 = issue_with_state(1, State::DesignReviewWaiting);
         let stale2 = issue_with_state(2, State::Cancelled);
         let active = issue_with_state(3, State::ImplementationRunning);
         let (repo, _) = MockIssueRepo::new(vec![stale1, stale2, active]);
         let github = MockGitHub::new(false, None, vec![], false);
         let mut uc = make_uc(github, repo);
-        uc.session_mgr.register(1, spawn_fail());
-        uc.session_mgr.register(2, spawn_fail());
-        uc.session_mgr.register(3, spawn_fail());
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        uc.session_mgr
+            .register(1, State::DesignRunning, spawn_fail());
+        uc.session_mgr
+            .register(2, State::ImplementationRunning, spawn_fail());
+        uc.session_mgr
+            .register(3, State::ImplementationRunning, spawn_fail());
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         let mut events = vec![];
         uc.step3_process_exit_check(&mut events).await;
         assert_eq!(

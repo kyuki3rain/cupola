@@ -489,7 +489,7 @@ async fn session_manager_lifecycle() {
         .spawn()
         .expect("spawn echo");
 
-    mgr.register(999, child);
+    mgr.register(999, State::DesignRunning, child);
     assert!(mgr.is_running(999));
 
     // Wait for it to finish
@@ -518,7 +518,7 @@ async fn session_manager_stall_detection() {
         .spawn()
         .expect("spawn sleep");
 
-    mgr.register(888, child);
+    mgr.register(888, State::DesignRunning, child);
 
     // Immediate stall check with 0 timeout → stalled
     let stalled = mgr.find_stalled(Duration::from_nanos(1));
@@ -911,9 +911,9 @@ async fn session_count_decreases_after_process_exit() {
         .spawn()
         .expect("spawn");
 
-    mgr.register(1, echo1);
-    mgr.register(2, echo2);
-    mgr.register(3, sleep);
+    mgr.register(1, State::DesignRunning, echo1);
+    mgr.register(2, State::DesignRunning, echo2);
+    mgr.register(3, State::ImplementationRunning, sleep);
     assert_eq!(mgr.count(), 3);
 
     // Wait for echo processes to finish
