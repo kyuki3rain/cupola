@@ -49,6 +49,7 @@ pub struct CupolaToml {
     pub language: Option<String>,
     pub polling_interval_secs: Option<u64>,
     pub max_retries: Option<u32>,
+    pub max_ci_fix_cycles: Option<u32>,
     pub stall_timeout_secs: Option<u64>,
     pub max_concurrent_sessions: Option<u32>,
     pub model: Option<String>,
@@ -107,6 +108,7 @@ impl CupolaToml {
                 .or(self.polling_interval_secs)
                 .unwrap_or(60),
             max_retries: self.max_retries.unwrap_or(3),
+            max_ci_fix_cycles: self.max_ci_fix_cycles.unwrap_or(3),
             stall_timeout_secs: self.stall_timeout_secs.unwrap_or(1800),
             log_level,
             log_dir,
@@ -459,6 +461,60 @@ heavy = "opus"
 
         let labels = vec!["weight:heavy".to_string()];
         assert_eq!(label_to_weight(&labels), TaskWeight::Heavy);
+    }
+
+    #[test]
+    fn into_config_max_ci_fix_cycles_default() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides);
+        assert_eq!(config.max_ci_fix_cycles, 3);
+    }
+
+    #[test]
+    fn into_config_max_ci_fix_cycles_from_toml() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+max_ci_fix_cycles = 5
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides);
+        assert_eq!(config.max_ci_fix_cycles, 5);
+    }
+
+    #[test]
+    fn into_config_max_ci_fix_cycles_zero_fails_validation() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+max_ci_fix_cycles = 0
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides);
+        assert!(config.validate().is_err());
+        assert_eq!(
+            config.validate().unwrap_err(),
+            "max_ci_fix_cycles must be greater than 0"
+        );
     }
 
     #[test]

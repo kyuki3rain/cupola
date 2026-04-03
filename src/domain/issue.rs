@@ -13,6 +13,7 @@ pub struct Issue {
     pub impl_pr_number: Option<u64>,
     pub worktree_path: Option<String>,
     pub retry_count: u32,
+    pub ci_fix_count: u32,
     pub current_pid: Option<u32>,
     pub error_message: Option<String>,
     pub feature_name: Option<String>,
