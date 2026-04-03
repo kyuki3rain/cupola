@@ -127,6 +127,9 @@ impl GitWorktree for MockGitWorktree {
     fn fetch(&self) -> Result<()> {
         Ok(())
     }
+    fn merge(&self, _p: &Path, _b: &str) -> Result<()> {
+        Ok(())
+    }
     fn exists(&self, _p: &Path) -> bool {
         false
     }
@@ -962,6 +965,13 @@ impl GitWorktree for TrackingGitWorktree {
         if self.fetch_fails {
             anyhow::bail!("fetch failed: network error");
         }
+        Ok(())
+    }
+    fn merge(&self, _p: &Path, branch: &str) -> Result<()> {
+        self.call_log
+            .lock()
+            .unwrap()
+            .push(format!("merge:{}", branch));
         Ok(())
     }
     fn exists(&self, _p: &Path) -> bool {

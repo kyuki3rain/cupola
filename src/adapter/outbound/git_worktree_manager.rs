@@ -3,7 +3,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, anyhow};
 
-use crate::application::port::git_worktree::GitWorktree;
+use crate::application::port::git_worktree::{GitWorktree, MergeConflictError};
 
 pub struct GitWorktreeManager {
     repo_root: std::path::PathBuf,
@@ -57,6 +57,31 @@ impl GitWorktree for GitWorktreeManager {
     fn fetch(&self) -> Result<()> {
         self.run_git(&["fetch", "origin"])
             .context("failed to fetch from origin")
+    }
+
+    fn merge(&self, worktree_path: &Path, branch: &str) -> Result<()> {
+        let remote_branch = format!("origin/{branch}");
+        let output = Command::new("git")
+            .args(["merge", "--no-edit", &remote_branch])
+            .current_dir(worktree_path)
+            .output()
+            .with_context(|| format!("failed to execute git merge {remote_branch}"))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        // Exit code 1 means merge conflict; anything else is a fatal error.
+        if output.status.code() == Some(1) {
+            return Err(anyhow::Error::from(MergeConflictError));
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(anyhow!(
+            "git merge {} failed: {}",
+            remote_branch,
+            stderr.trim()
+        ))
     }
 
     fn exists(&self, path: &Path) -> bool {
@@ -227,5 +252,265 @@ mod tests {
         let mgr = GitWorktreeManager::new("/tmp");
         let result = mgr.delete_branch("nonexistent-branch-xyz");
         assert!(result.is_ok(), "deleting nonexistent branch should succeed");
+    }
+
+    /// Set the initial branch name to "main" before any commits are made.
+    fn set_initial_branch_main(dir: &std::path::Path) {
+        // git symbolic-ref changes HEAD to point to refs/heads/main so the first
+        // commit creates the "main" branch regardless of git's default config.
+        let status = Command::new("git")
+            .args(["symbolic-ref", "HEAD", "refs/heads/main"])
+            .current_dir(dir)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    fn make_commit(dir: &std::path::Path, filename: &str, content: &str, msg: &str) {
+        let path = dir.join(filename);
+        std::fs::write(&path, content).unwrap();
+        assert!(
+            Command::new("git")
+                .args(["add", filename])
+                .current_dir(dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["commit", "-m", msg])
+                .current_dir(dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    #[test]
+    fn merge_clean_merge_succeeds() {
+        // Set up a bare origin repo
+        let origin_dir = tempfile::tempdir().unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "--bare"])
+                .current_dir(origin_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        // Set up local repo with initial commit and push to origin
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_git_repo(repo_dir.path());
+        set_initial_branch_main(repo_dir.path());
+        assert!(
+            Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    origin_dir.path().to_str().unwrap(),
+                ])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        make_commit(repo_dir.path(), "base.txt", "base", "init");
+        assert!(
+            Command::new("git")
+                .args(["push", "-u", "origin", "main"])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        // Create a feature branch from main
+        assert!(
+            Command::new("git")
+                .args(["checkout", "-b", "feature"])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        make_commit(repo_dir.path(), "feature.txt", "feature change", "feat");
+
+        // Add another commit to main on origin (simulate another PR merged)
+        let other_dir = tempfile::tempdir().unwrap();
+        init_git_repo(other_dir.path());
+        assert!(
+            Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    origin_dir.path().to_str().unwrap(),
+                ])
+                .current_dir(other_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["fetch", "origin"])
+                .current_dir(other_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["checkout", "-b", "main", "origin/main"])
+                .current_dir(other_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        make_commit(other_dir.path(), "other.txt", "other change", "other");
+        assert!(
+            Command::new("git")
+                .args(["push", "origin", "main"])
+                .current_dir(other_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        // Fetch origin updates in repo_dir
+        assert!(
+            Command::new("git")
+                .args(["fetch", "origin"])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        // merge() should succeed (clean merge, different files)
+        let mgr = GitWorktreeManager::new(repo_dir.path());
+        let result = mgr.merge(repo_dir.path(), "main");
+        assert!(result.is_ok(), "clean merge should succeed: {result:?}");
+    }
+
+    #[test]
+    fn merge_conflict_returns_err() {
+        // Set up a bare origin repo
+        let origin_dir = tempfile::tempdir().unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "--bare"])
+                .current_dir(origin_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        // Set up local repo with initial commit
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_git_repo(repo_dir.path());
+        set_initial_branch_main(repo_dir.path());
+        assert!(
+            Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    origin_dir.path().to_str().unwrap(),
+                ])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        make_commit(repo_dir.path(), "conflict.txt", "original content", "init");
+        assert!(
+            Command::new("git")
+                .args(["push", "-u", "origin", "main"])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        // Create feature branch with conflicting change
+        assert!(
+            Command::new("git")
+                .args(["checkout", "-b", "feature"])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        make_commit(repo_dir.path(), "conflict.txt", "feature content", "feat");
+
+        // Push conflicting commit to origin/main from another clone
+        let other_dir = tempfile::tempdir().unwrap();
+        init_git_repo(other_dir.path());
+        assert!(
+            Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    origin_dir.path().to_str().unwrap(),
+                ])
+                .current_dir(other_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["fetch", "origin"])
+                .current_dir(other_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["checkout", "-b", "main", "origin/main"])
+                .current_dir(other_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        make_commit(
+            other_dir.path(),
+            "conflict.txt",
+            "main content (different)",
+            "main change",
+        );
+        assert!(
+            Command::new("git")
+                .args(["push", "origin", "main"])
+                .current_dir(other_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        // Fetch origin updates in repo_dir
+        assert!(
+            Command::new("git")
+                .args(["fetch", "origin"])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        // merge() should fail with MergeConflictError (exit code 1)
+        let mgr = GitWorktreeManager::new(repo_dir.path());
+        let result = mgr.merge(repo_dir.path(), "main");
+        assert!(result.is_err(), "conflicting merge should return Err");
+        assert!(
+            result.unwrap_err().is::<MergeConflictError>(),
+            "conflicting merge should return MergeConflictError"
+        );
     }
 }

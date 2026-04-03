@@ -234,6 +234,9 @@ mod tests {
         fn fetch(&self) -> Result<()> {
             Ok(())
         }
+        fn merge(&self, _: &Path, _: &str) -> Result<()> {
+            Ok(())
+        }
         fn exists(&self, _: &Path) -> bool {
             false
         }
