@@ -629,14 +629,15 @@ mod tests {
     #[tokio::test]
     async fn find_active_with_corrupt_state_returns_err() {
         let (db, repo) = setup();
-        let conn = db.conn().lock().expect("lock");
-        conn.execute(
-            "INSERT INTO issues (github_issue_number, state, fixing_causes, created_at, updated_at)
-             VALUES (999, 'unknown_corrupt_state', '[]', datetime('now'), datetime('now'))",
-            [],
-        )
-        .expect("insert corrupt row");
-        drop(conn);
+        {
+            let conn = db.conn().lock().expect("lock");
+            conn.execute(
+                "INSERT INTO issues (github_issue_number, state, fixing_causes, created_at, updated_at)
+                 VALUES (999, 'unknown_corrupt_state', '[]', datetime('now'), datetime('now'))",
+                [],
+            )
+            .expect("insert corrupt row");
+        }
 
         let result = repo.find_active().await;
         assert!(
@@ -648,14 +649,15 @@ mod tests {
     #[tokio::test]
     async fn find_active_with_corrupt_fixing_causes_returns_err() {
         let (db, repo) = setup();
-        let conn = db.conn().lock().expect("lock");
-        conn.execute(
-            "INSERT INTO issues (github_issue_number, state, fixing_causes, created_at, updated_at)
-             VALUES (998, 'idle', 'not_json', datetime('now'), datetime('now'))",
-            [],
-        )
-        .expect("insert corrupt row");
-        drop(conn);
+        {
+            let conn = db.conn().lock().expect("lock");
+            conn.execute(
+                "INSERT INTO issues (github_issue_number, state, fixing_causes, created_at, updated_at)
+                 VALUES (998, 'idle', 'not_json', datetime('now'), datetime('now'))",
+                [],
+            )
+            .expect("insert corrupt row");
+        }
 
         let result = repo.find_active().await;
         assert!(
