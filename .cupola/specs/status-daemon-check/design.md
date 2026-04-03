@@ -83,16 +83,16 @@ sequenceDiagram
     else PIDファイルあり
         PidMgr-->>Status: Ok(Some(pid))
         Status->>PidMgr: is_process_alive(pid)
-        PidMgr->>OS: kill(pid, Signal 0)
+        PidMgr->>OS: nix::sys::signal::kill(pid, None)
         alt プロセス生存
             OS-->>PidMgr: Ok / EPERM
             PidMgr-->>Status: true
-            Status-->>User: Daemon running pid=PID
+            Status-->>User: Daemon: running (pid=<PID>)
         else プロセス不在
             OS-->>PidMgr: ESRCH
             PidMgr-->>Status: false
             Status->>PidMgr: delete_pid()
-            Status-->>User: Daemon not running stale PID file cleaned
+            Status-->>User: Daemon: not running (stale PID file cleaned)
         end
     end
     Status->>Status: issue一覧の表示処理へ
@@ -111,11 +111,11 @@ sequenceDiagram
             Status->>Status: PID情報なしで表示
         else current_pid が Some(pid)
             Status->>PidMgr: is_process_alive(pid)
-            PidMgr->>OS: kill(pid, Signal 0)
+            PidMgr->>OS: nix::sys::signal::kill(pid, None)
             alt alive
-                Status->>Status: pid:PID alive を付加して表示
+                Status->>Status: pid:<PID> (alive) を付加して表示
             else dead
-                Status->>Status: pid:PID dead を付加して表示
+                Status->>Status: pid:<PID> (dead) を付加して表示
             end
         end
     end
@@ -191,7 +191,7 @@ fn handle_status(
 
 - Integration: `PidFileManager::new(Path::new(".cupola/cupola.pid").to_path_buf())` で初期化し、`PidFilePort` トレイトメソッドを呼び出す
 - Validation: `read_pid()` が `Err` を返した場合は `not running` として扱い、エラーを出力しない（stale PIDファイルの破損ケース）
-- Risks: PIDファイル削除失敗時（パーミッションエラー等）は削除をスキップしてメッセージ表示のみ行う
+- Risks: PIDファイル削除失敗時（パーミッションエラー等）は `tracing::warn!` でログを記録し、`Daemon: not running (stale PID file exists, but cleanup failed)` を表示する（削除成功時のみ `cleaned` メッセージを使用）
 
 ### Adapter/Outbound（既存、変更なし）
 
@@ -219,14 +219,14 @@ fn handle_status(
 ### Error Strategy
 
 - `read_pid()` が `Err` を返した場合（PIDファイル破損など）: `Daemon: not running` として表示し、エラーをユーザーに露出しない
-- `delete_pid()` が `Err` を返した場合（パーミッションエラーなど）: エラーを無視し、メッセージは `not running (stale PID file cleaned)` のままとする（削除失敗はログ出力を検討）
+- `delete_pid()` が `Err` を返した場合（パーミッションエラーなど）: `tracing::warn!` でエラーをログに記録し、`Daemon: not running (stale PID file exists, but cleanup failed)` として表示する（削除成功時のみ `cleaned` メッセージを使用する）
 - `is_process_alive()` は `bool` を返し、エラーなし
 
 ### Error Categories and Responses
 
 **System Errors**:
 - PIDファイル読み取り失敗 → `Daemon: not running` として扱う（ユーザーへのエラー表示なし）
-- PIDファイル削除失敗 → サイレントに無視（ログ記録推奨）
+- PIDファイル削除失敗 → `tracing::warn!` でログ記録し、`Daemon: not running (stale PID file exists, but cleanup failed)` として表示
 
 ### Monitoring
 
