@@ -20,7 +20,7 @@ Clean Architecture (4 layers). Dependencies point inward only.
 
 | Purpose | Crate | Pattern |
 |---------|-------|---------|
-| CLI | clap (derive) | Subcommands: start / stop / init / status / doctor |
+| CLI | clap (derive) | Core subcommands include: start / stop / init / status / doctor |
 | GitHub REST | octocrab | Personal token authentication |
 | GitHub GraphQL | reqwest + serde_json | Direct POST, Value parsing |
 | DB | rusqlite | Arc<Mutex<Connection>>, spawn_blocking |
