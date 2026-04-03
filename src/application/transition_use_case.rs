@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use rust_i18n::t;
 
 use crate::application::port::git_worktree::GitWorktree;
@@ -63,7 +63,7 @@ impl<G: GitHubClient, I: IssueRepository, W: GitWorktree> TransitionUseCase<'_, 
                     .issue_repo
                     .find_by_id(existing.id)
                     .await?
-                    .expect("just reset");
+                    .context("issue not found after reset_for_restart")?;
                 // Apply IssueDetected to go Idle → Initialized
                 let event = Event::IssueDetected { issue_number };
                 self.apply(&mut reset, &event).await?;

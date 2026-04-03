@@ -696,14 +696,20 @@ where
                 _ => None,
             };
 
-            let session_config = build_session_config(
+            let session_config = match build_session_config(
                 issue.state,
                 issue.github_issue_number,
                 &self.config,
                 pr_number,
                 issue.feature_name.as_deref(),
                 &issue.fixing_causes,
-            );
+            ) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    tracing::warn!(issue_id = issue.id, error = %e, "failed to build session config, skipping issue");
+                    continue;
+                }
+            };
 
             let schema = match session_config.output_schema {
                 OutputSchemaKind::PrCreation => Some(PR_CREATION_SCHEMA),
