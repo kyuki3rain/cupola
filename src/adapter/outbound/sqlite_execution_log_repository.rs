@@ -87,7 +87,7 @@ impl ExecutionLogRepository for SqliteExecutionLogRepository {
                     Ok(ExecutionLog {
                         id: row.get(0)?,
                         issue_id: row.get(1)?,
-                        state: str_to_state(&state_str),
+                        state: str_to_state(2, &state_str)?,
                         started_at: parse_sqlite_datetime(&started_str),
                         finished_at: finished_str.as_deref().map(parse_sqlite_datetime),
                         exit_code: row.get(5)?,
