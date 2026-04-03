@@ -12,7 +12,7 @@
 - **Key Findings**:
   - `build_session_config` は `src/application/prompt.rs:22` で `SessionConfig` を返す純粋関数。戻り値型を `Result<SessionConfig, anyhow::Error>` に変更することで、呼び出し元へのエラー伝播が可能になる
   - `step7_spawn_processes`（`src/application/polling_use_case.rs`）がすでに各Issueをループ処理しており、`build_session_config` のエラーを `continue` でスキップするパターンが自然に適合する
-  - `Cargo.toml` にはすでに `[lints.clippy] all = "warn"` が存在するため、`expect_used = "deny"` の追記のみでよい
+  - `Cargo.toml` の `[lints.clippy]` では `all` が `all = { level = "warn", priority = -1 }` に更新されているため、`expect_used = "deny"` は単純な追記ではなく、実際の設定形式に合わせて記述を更新する必要がある
 
 ## Research Log
 
@@ -49,8 +49,8 @@
 - **Context**: `expect_used = "deny"` 追加の要件
 - **Sources Consulted**: `Cargo.toml:36-37`
 - **Findings**:
-  - `[lints.clippy]` セクションは既存。`all = "warn"` のみ設定済み
-  - `expect_used = "deny"` 追記で対応可能
+  - `[lints.clippy]` セクションは既存。`all = { level = "warn", priority = -1 }` に更新済み
+  - `expect_used = "deny"` を同セクションへ追記することで対応可能
 - **Implications**: セクション新規作成は不要
 
 ### src/lib.rs の現状確認
