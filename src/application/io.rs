@@ -5,6 +5,32 @@ use serde::{Deserialize, Serialize};
 
 use crate::application::port::github_client::{GitHubIssueDetail, ReviewThread};
 
+// === Input directory management ===
+
+/// `.cupola/inputs/` ディレクトリを削除してから再作成する。
+///
+/// # Preconditions
+/// - `worktree_path` はワークツリーのルートパスである
+///
+/// # Postconditions
+/// - `worktree_path/.cupola/inputs/` が空のディレクトリとして存在する
+///
+/// # Errors
+/// - `ErrorKind::NotFound` 以外のファイルシステムエラー
+pub fn clear_inputs_dir(worktree_path: &Path) -> Result<()> {
+    let inputs_dir = worktree_path.join(".cupola/inputs");
+    match std::fs::remove_dir_all(&inputs_dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(e).with_context(|| format!("failed to remove {}", inputs_dir.display()));
+        }
+    }
+    std::fs::create_dir_all(&inputs_dir)
+        .with_context(|| format!("failed to create {}", inputs_dir.display()))?;
+    Ok(())
+}
+
 // === Input file writing ===
 
 pub fn write_issue_input(worktree_path: &Path, detail: &GitHubIssueDetail) -> Result<()> {
@@ -175,6 +201,57 @@ mod tests {
     use super::*;
     use crate::application::port::github_client::ReviewComment;
     use tempfile::TempDir;
+
+    // === clear_inputs_dir tests ===
+
+    #[test]
+    fn clear_inputs_dir_removes_files_and_leaves_empty_dir() {
+        let tmp = TempDir::new().expect("tempdir");
+        let inputs_dir = tmp.path().join(".cupola/inputs");
+        std::fs::create_dir_all(&inputs_dir).expect("create inputs dir");
+        std::fs::write(inputs_dir.join("issue.md"), "old content").expect("write file");
+        std::fs::write(inputs_dir.join("review_threads.json"), "[]").expect("write file");
+
+        clear_inputs_dir(tmp.path()).expect("clear should succeed");
+
+        assert!(inputs_dir.exists(), "inputs dir should exist after clear");
+        let entries: Vec<_> = std::fs::read_dir(&inputs_dir).expect("read dir").collect();
+        assert!(entries.is_empty(), "inputs dir should be empty after clear");
+    }
+
+    #[test]
+    fn clear_inputs_dir_succeeds_when_dir_does_not_exist() {
+        let tmp = TempDir::new().expect("tempdir");
+        // inputs dir does not exist
+
+        clear_inputs_dir(tmp.path()).expect("clear should succeed even if dir missing");
+
+        let inputs_dir = tmp.path().join(".cupola/inputs");
+        assert!(inputs_dir.exists(), "inputs dir should be created");
+        let entries: Vec<_> = std::fs::read_dir(&inputs_dir).expect("read dir").collect();
+        assert!(entries.is_empty(), "inputs dir should be empty");
+    }
+
+    #[test]
+    fn clear_inputs_dir_is_idempotent() {
+        let tmp = TempDir::new().expect("tempdir");
+        let inputs_dir = tmp.path().join(".cupola/inputs");
+        std::fs::create_dir_all(&inputs_dir).expect("create inputs dir");
+        std::fs::write(inputs_dir.join("issue.md"), "content").expect("write file");
+
+        clear_inputs_dir(tmp.path()).expect("first clear should succeed");
+        clear_inputs_dir(tmp.path()).expect("second clear should also succeed");
+
+        assert!(
+            inputs_dir.exists(),
+            "inputs dir should exist after second clear"
+        );
+        let entries: Vec<_> = std::fs::read_dir(&inputs_dir).expect("read dir").collect();
+        assert!(
+            entries.is_empty(),
+            "inputs dir should be empty after second clear"
+        );
+    }
 
     #[test]
     fn write_issue_input_creates_file() {
