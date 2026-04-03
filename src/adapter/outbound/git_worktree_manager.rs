@@ -509,9 +509,7 @@ mod tests {
         let result = mgr.merge(repo_dir.path(), "main");
         assert!(result.is_err(), "conflicting merge should return Err");
         assert!(
-            result
-                .unwrap_err()
-                .is::<MergeConflictError>(),
+            result.unwrap_err().is::<MergeConflictError>(),
             "conflicting merge should return MergeConflictError"
         );
     }
