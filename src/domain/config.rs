@@ -19,7 +19,7 @@ pub struct Config {
     pub max_retries: u32,
     pub stall_timeout_secs: u64,
     pub log_level: LogLevel,
-    pub log_dir: Option<PathBuf>,
+    pub log_dir: PathBuf,
     pub max_concurrent_sessions: Option<u32>,
     pub model: String,
 }
@@ -35,13 +35,42 @@ impl Config {
             max_retries: 3,
             stall_timeout_secs: 1800,
             log_level: LogLevel::Info,
-            log_dir: None,
+            log_dir: PathBuf::from(".cupola/logs"),
             max_concurrent_sessions: None,
             model: "sonnet".to_string(),
         }
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.log_dir.as_os_str().is_empty() {
+            return Err("log_dir must not be empty".to_string());
+        }
+        if self.owner.is_empty() {
+            return Err("owner must not be empty".to_string());
+        }
+        if self.repo.is_empty() {
+            return Err("repo must not be empty".to_string());
+        }
+        if self.default_branch.is_empty() {
+            return Err("default_branch must not be empty".to_string());
+        }
+        if self.language.is_empty() {
+            return Err("language must not be empty".to_string());
+        }
+        if self.model.is_empty() {
+            return Err("model must not be empty".to_string());
+        }
+        if self.polling_interval_secs < 10 {
+            return Err("polling_interval_secs must be at least 10".to_string());
+        }
+        if self.stall_timeout_secs < 60 {
+            return Err("stall_timeout_secs must be at least 60".to_string());
+        }
+        if self.stall_timeout_secs <= self.polling_interval_secs {
+            return Err(
+                "stall_timeout_secs must be greater than polling_interval_secs".to_string(),
+            );
+        }
         if let Some(0) = self.max_concurrent_sessions {
             return Err("max_concurrent_sessions must be greater than 0".to_string());
         }
@@ -65,7 +94,7 @@ mod tests {
         assert_eq!(config.max_retries, 3);
         assert_eq!(config.stall_timeout_secs, 1800);
         assert_eq!(config.log_level, LogLevel::Info);
-        assert!(config.log_dir.is_none());
+        assert_eq!(config.log_dir, PathBuf::from(".cupola/logs"));
         assert!(config.max_concurrent_sessions.is_none());
         assert_eq!(config.model, "sonnet");
     }
@@ -90,6 +119,196 @@ mod tests {
     fn validate_accepts_none_max_concurrent_sessions() {
         let config =
             Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        assert!(config.validate().is_ok());
+    }
+
+    // Task 2.0: log_dir validation tests
+    #[test]
+    fn validate_rejects_empty_log_dir() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.log_dir = PathBuf::from("");
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "log_dir must not be empty"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_nonempty_log_dir() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.log_dir = PathBuf::from(".cupola/logs");
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn default_with_repo_log_dir_is_default_path() {
+        let config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        assert_eq!(config.log_dir, PathBuf::from(".cupola/logs"));
+    }
+
+    // Task 2.1: String field empty checks
+    #[test]
+    fn validate_rejects_empty_owner() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.owner = String::new();
+        let err = config.validate().unwrap_err();
+        assert_eq!(err, "owner must not be empty");
+    }
+
+    #[test]
+    fn validate_rejects_empty_repo() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.repo = String::new();
+        let err = config.validate().unwrap_err();
+        assert_eq!(err, "repo must not be empty");
+    }
+
+    #[test]
+    fn validate_rejects_empty_default_branch() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.default_branch = String::new();
+        let err = config.validate().unwrap_err();
+        assert_eq!(err, "default_branch must not be empty");
+    }
+
+    #[test]
+    fn validate_rejects_empty_language() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.language = String::new();
+        let err = config.validate().unwrap_err();
+        assert_eq!(err, "language must not be empty");
+    }
+
+    #[test]
+    fn validate_rejects_empty_model() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.model = String::new();
+        let err = config.validate().unwrap_err();
+        assert_eq!(err, "model must not be empty");
+    }
+
+    // Task 2.2: polling_interval_secs validation tests
+    #[test]
+    fn validate_rejects_polling_below_minimum() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.polling_interval_secs = 9;
+        let err = config.validate().unwrap_err();
+        assert_eq!(err, "polling_interval_secs must be at least 10");
+    }
+
+    #[test]
+    fn validate_rejects_polling_zero() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.polling_interval_secs = 0;
+        let err = config.validate().unwrap_err();
+        assert_eq!(err, "polling_interval_secs must be at least 10");
+    }
+
+    #[test]
+    fn validate_accepts_polling_at_minimum() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.polling_interval_secs = 10;
+        // stall_timeout_secs must be > polling_interval_secs, default is 1800
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_polling_above_minimum() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.polling_interval_secs = 11;
+        assert!(config.validate().is_ok());
+    }
+
+    // Task 2.3: stall_timeout_secs validation and correlation tests
+    #[test]
+    fn validate_rejects_stall_below_minimum() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.stall_timeout_secs = 59;
+        let err = config.validate().unwrap_err();
+        assert_eq!(err, "stall_timeout_secs must be at least 60");
+    }
+
+    #[test]
+    fn validate_rejects_stall_typical_misconfig() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.stall_timeout_secs = 30;
+        let err = config.validate().unwrap_err();
+        assert_eq!(err, "stall_timeout_secs must be at least 60");
+    }
+
+    #[test]
+    fn validate_accepts_stall_at_minimum_with_smaller_polling() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.stall_timeout_secs = 60;
+        config.polling_interval_secs = 10;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_stall_equal_to_polling() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.polling_interval_secs = 60;
+        config.stall_timeout_secs = 60;
+        let err = config.validate().unwrap_err();
+        assert_eq!(
+            err,
+            "stall_timeout_secs must be greater than polling_interval_secs"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_stall_less_than_polling() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.polling_interval_secs = 120;
+        config.stall_timeout_secs = 60;
+        // stall=60 >= 60, but stall <= polling -> correlation error
+        let err = config.validate().unwrap_err();
+        assert_eq!(
+            err,
+            "stall_timeout_secs must be greater than polling_interval_secs"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_stall_greater_than_polling() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.polling_interval_secs = 60;
+        config.stall_timeout_secs = 61;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_skips_correlation_check_when_polling_too_small() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.polling_interval_secs = 5;
+        // Even though stall_timeout_secs > polling_interval_secs, polling absolute check fires first
+        let err = config.validate().unwrap_err();
+        assert_eq!(err, "polling_interval_secs must be at least 10");
+    }
+
+    #[test]
+    fn validate_accepts_valid_default_config() {
+        let config =
+            Config::default_with_repo("owner".to_string(), "repo".to_string(), "main".to_string());
         assert!(config.validate().is_ok());
     }
 }
