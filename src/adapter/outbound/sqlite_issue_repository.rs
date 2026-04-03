@@ -332,7 +332,6 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
         impl_pr_number: row.get(4)?,
         worktree_path: row.get(5)?,
         retry_count: row.get(6)?,
-        ci_fix_count: 0,
         current_pid: row.get(7)?,
         error_message: row.get(8)?,
         feature_name: row.get(9)?,
