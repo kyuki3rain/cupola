@@ -128,7 +128,10 @@ mod tests {
         let mut config =
             Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
         config.log_dir = PathBuf::from("");
-        assert!(config.validate().is_err());
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "log_dir must not be empty"
+        );
     }
 
     #[test]
