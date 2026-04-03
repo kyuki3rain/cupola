@@ -88,6 +88,52 @@ impl ModelConfig {
             heavy: None,
         }
     }
+
+    /// モデル設定の整合性を検証する。空文字列のモデル名は拒否する。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.default_model.is_empty() {
+            return Err("models.default_model must not be empty".to_string());
+        }
+        for (name, wc) in [
+            ("light", &self.light),
+            ("medium", &self.medium),
+            ("heavy", &self.heavy),
+        ] {
+            if let Some(wc) = wc {
+                wc.validate(name)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl WeightModelConfig {
+    fn validate(&self, weight_name: &str) -> Result<(), String> {
+        match self {
+            Self::Uniform(model) => {
+                if model.is_empty() {
+                    return Err(format!("models.{weight_name} must not be empty"));
+                }
+            }
+            Self::PerPhase(per_phase) => {
+                for (phase_name, val) in [
+                    ("design", &per_phase.design),
+                    ("design_fix", &per_phase.design_fix),
+                    ("implementation", &per_phase.implementation),
+                    ("implementation_fix", &per_phase.implementation_fix),
+                ] {
+                    if let Some(model) = val
+                        && model.is_empty()
+                    {
+                        return Err(format!(
+                            "models.{weight_name}.{phase_name} must not be empty"
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -247,5 +293,50 @@ mod tests {
             config.resolve(TaskWeight::Heavy, Some(Phase::Design)),
             "opus"
         );
+    }
+
+    #[test]
+    fn validate_accepts_valid_config() {
+        let config = config_with_heavy_uniform("sonnet", "opus");
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_empty_default_model() {
+        let config = uniform_config("");
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_empty_uniform_weight_model() {
+        let config = config_with_heavy_uniform("sonnet", "");
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("heavy"), "error should mention field: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_empty_per_phase_model() {
+        let config = ModelConfig {
+            default_model: "sonnet".to_string(),
+            light: None,
+            medium: None,
+            heavy: Some(WeightModelConfig::PerPhase(PerPhaseModels {
+                design: Some("".to_string()),
+                design_fix: None,
+                implementation: None,
+                implementation_fix: None,
+            })),
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("heavy") && err.contains("design"),
+            "error should mention field: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_per_phase_with_none_fields() {
+        let config = config_with_heavy_per_phase("sonnet", Some("opus"), None);
+        assert!(config.validate().is_ok());
     }
 }

@@ -549,17 +549,26 @@ where
                 match uc.handle_issue_detected(*issue_number).await {
                     Ok(mut issue) => {
                         // Detect weight label from GitHub and update if different from default
-                        if let Ok(detail) = self.github.get_issue(*issue_number).await {
-                            let weight = label_to_weight(&detail.labels);
-                            if weight != issue.weight {
-                                issue.weight = weight;
-                                if let Err(e) = self.issue_repo.update(&issue).await {
-                                    tracing::warn!(
-                                        issue_number,
-                                        error = %e,
-                                        "failed to update weight for issue"
-                                    );
+                        match self.github.get_issue(*issue_number).await {
+                            Ok(detail) => {
+                                let weight = label_to_weight(&detail.labels);
+                                if weight != issue.weight {
+                                    issue.weight = weight;
+                                    if let Err(e) = self.issue_repo.update(&issue).await {
+                                        tracing::warn!(
+                                            issue_number,
+                                            error = %e,
+                                            "failed to update weight for issue"
+                                        );
+                                    }
                                 }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    issue_number,
+                                    error = %e,
+                                    "failed to fetch issue details for weight detection"
+                                );
                             }
                         }
                     }

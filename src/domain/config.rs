@@ -73,9 +73,7 @@ impl Config {
         if let Some(0) = self.max_concurrent_sessions {
             return Err("max_concurrent_sessions must be greater than 0".to_string());
         }
-        if self.models.default_model.is_empty() {
-            return Err("models.default_model must not be empty".to_string());
-        }
+        self.models.validate()?;
         Ok(())
     }
 }
