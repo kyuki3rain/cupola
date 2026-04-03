@@ -87,7 +87,7 @@
 ## Risks & Mitigations
 - worktreeがmerging状態でagentがspawnされると、agentがコンフリクト解消前に別の作業を始めるリスク — プロンプト先頭にコンフリクト解消指示を記載し、最初に対応させる
 - fetch/mergeを毎回のspawn前に実行するとパフォーマンスへの影響が生じる可能性 — Fixing状態のみに限定しているため影響は最小限
-- `git merge --no-edit` 実行後のworktreeがmerging状態のままspawnがスキップされる場合、次のポーリングでも再度mergeを試みる — worktreeはmering状態なので `git merge --continue` 等が必要だが、agentに解決させることが前提のため許容範囲
+- `git merge --no-edit` 実行後のworktreeがmerging状態のままspawnがスキップされる場合、次のポーリングでも再度mergeを試みる — worktreeはmerging状態なので `git merge --continue` 等が必要だが、agentに解決させることが前提のため許容範囲
 
 ## References
 - `src/application/port/git_worktree.rs` — 既存GitWorktreeトレイト定義
