@@ -6,7 +6,7 @@
 
 **Users**: cupola 運用者が `cupola stop` または SIGTERM で daemon を停止した後、次回の `cupola start` でクリーンな起動ログを得られるようになる。
 
-**Impact**: `src/bootstrap/app.rs` の `start_daemon_child` 関数に 1 行追加するだけの最小変更。application 層以下への影響はない。
+**Impact**: `src/bootstrap/app.rs` の `start_daemon_child` 関数内で完結する小さな変更。application 層以下への影響はない。
 
 ### Goals
 
