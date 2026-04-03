@@ -1717,13 +1717,15 @@ mod tests {
 
     // --- Mocks for record_start tracking tests ---
 
+    type RecordStartCalls = Arc<Mutex<Vec<(i64, State)>>>;
+
     struct TrackingExecLogRepo {
-        record_start_calls: Arc<Mutex<Vec<(i64, State)>>>,
+        record_start_calls: RecordStartCalls,
         return_log_id: i64,
     }
 
     impl TrackingExecLogRepo {
-        fn new(return_log_id: i64) -> (Self, Arc<Mutex<Vec<(i64, State)>>>) {
+        fn new(return_log_id: i64) -> (Self, RecordStartCalls) {
             let calls = Arc::new(Mutex::new(vec![]));
             (
                 Self {
@@ -1789,7 +1791,7 @@ mod tests {
     fn make_tracking_uc(
         issues: Vec<Issue>,
         return_log_id: i64,
-    ) -> (TrackingTestUseCase, Arc<Mutex<Vec<(i64, State)>>>) {
+    ) -> (TrackingTestUseCase, RecordStartCalls) {
         let (repo, _) = MockIssueRepo::new(issues);
         let github = MockGitHub::new(false, None, vec![], false);
         let (exec_log_repo, record_start_calls) = TrackingExecLogRepo::new(return_log_id);
