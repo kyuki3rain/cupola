@@ -13,6 +13,7 @@ struct SessionEntry {
     started_at: Instant,
     stdout_handle: Option<JoinHandle<String>>,
     stderr_handle: Option<JoinHandle<String>>,
+    log_id: i64,
 }
 
 pub struct ExitedSession {
@@ -20,6 +21,7 @@ pub struct ExitedSession {
     pub exit_status: ExitStatus,
     pub stdout: String,
     pub stderr: String,
+    pub log_id: i64,
 }
 
 impl SessionManager {
@@ -29,7 +31,7 @@ impl SessionManager {
         }
     }
 
-    pub fn register(&mut self, issue_id: i64, mut child: Child) {
+    pub fn register(&mut self, issue_id: i64, mut child: Child, log_id: i64) {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
@@ -58,6 +60,7 @@ impl SessionManager {
                 started_at: Instant::now(),
                 stdout_handle,
                 stderr_handle,
+                log_id,
             },
         );
     }
@@ -107,6 +110,7 @@ impl SessionManager {
                     exit_status,
                     stdout,
                     stderr,
+                    log_id: entry.log_id,
                 });
             }
         }
@@ -178,7 +182,7 @@ mod tests {
     fn register_and_is_running() {
         let mut mgr = SessionManager::new();
         let child = spawn_sleep(10);
-        mgr.register(1, child);
+        mgr.register(1, child, 0);
 
         assert!(mgr.is_running(1));
         assert!(!mgr.is_running(2));
@@ -190,7 +194,7 @@ mod tests {
     fn collect_exited_returns_finished_process() {
         let mut mgr = SessionManager::new();
         let child = spawn_echo();
-        mgr.register(1, child);
+        mgr.register(1, child, 0);
 
         // Wait for echo to finish
         std::thread::sleep(Duration::from_millis(200));
@@ -207,7 +211,7 @@ mod tests {
     fn collect_exited_skips_running_process() {
         let mut mgr = SessionManager::new();
         let child = spawn_sleep(10);
-        mgr.register(1, child);
+        mgr.register(1, child, 0);
 
         let exited = mgr.collect_exited();
         assert!(exited.is_empty());
@@ -220,7 +224,7 @@ mod tests {
     fn kill_stops_process() {
         let mut mgr = SessionManager::new();
         let child = spawn_sleep(60);
-        mgr.register(1, child);
+        mgr.register(1, child, 0);
 
         mgr.kill(1).expect("kill should work");
 
@@ -237,11 +241,11 @@ mod tests {
         assert_eq!(mgr.count(), 0);
 
         let child1 = spawn_echo();
-        mgr.register(1, child1);
+        mgr.register(1, child1, 0);
         assert_eq!(mgr.count(), 1);
 
         let child2 = spawn_sleep(10);
-        mgr.register(2, child2);
+        mgr.register(2, child2, 0);
         assert_eq!(mgr.count(), 2);
 
         // Wait for echo to finish
@@ -254,10 +258,23 @@ mod tests {
     }
 
     #[test]
+    fn collect_exited_includes_log_id() {
+        let mut mgr = SessionManager::new();
+        let child = spawn_echo();
+        mgr.register(1, child, 42);
+
+        std::thread::sleep(Duration::from_millis(200));
+
+        let exited = mgr.collect_exited();
+        assert_eq!(exited.len(), 1);
+        assert_eq!(exited[0].log_id, 42);
+    }
+
+    #[test]
     fn find_stalled_detects_old_processes() {
         let mut mgr = SessionManager::new();
         let child = spawn_sleep(60);
-        mgr.register(1, child);
+        mgr.register(1, child, 0);
 
         // With a very short timeout, everything is stalled
         let stalled = mgr.find_stalled(Duration::from_nanos(1));

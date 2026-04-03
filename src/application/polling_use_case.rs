@@ -316,12 +316,7 @@ where
                 }
             }
 
-            // Record execution log
-            let log_id = self
-                .exec_log_repo
-                .record_start(issue.id, issue.state)
-                .await
-                .unwrap_or(0);
+            let log_id = session.log_id;
 
             if session.exit_status.success() {
                 tracing::info!(
@@ -729,7 +724,12 @@ where
                         pid,
                         "spawned Claude Code process"
                     );
-                    self.session_mgr.register(issue.id, child);
+                    let log_id = self
+                        .exec_log_repo
+                        .record_start(issue.id, issue.state)
+                        .await
+                        .unwrap_or(0);
+                    self.session_mgr.register(issue.id, child, log_id);
 
                     // Persist PID to DB
                     let mut updated_issue = issue.clone();
@@ -1713,5 +1713,148 @@ mod tests {
         let log = "2026-04-02T10:53:01.0418115Z error: something wrong\n";
         let result = extract_error_lines(log).unwrap();
         assert_eq!(result, "error: something wrong");
+    }
+
+    // --- Mocks for record_start tracking tests ---
+
+    struct TrackingExecLogRepo {
+        record_start_calls: Arc<Mutex<Vec<(i64, State)>>>,
+        return_log_id: i64,
+    }
+
+    impl TrackingExecLogRepo {
+        fn new(return_log_id: i64) -> (Self, Arc<Mutex<Vec<(i64, State)>>>) {
+            let calls = Arc::new(Mutex::new(vec![]));
+            (
+                Self {
+                    record_start_calls: calls.clone(),
+                    return_log_id,
+                },
+                calls,
+            )
+        }
+    }
+
+    impl crate::application::port::execution_log_repository::ExecutionLogRepository
+        for TrackingExecLogRepo
+    {
+        async fn record_start(&self, issue_id: i64, state: State) -> anyhow::Result<i64> {
+            self.record_start_calls
+                .lock()
+                .unwrap()
+                .push((issue_id, state));
+            Ok(self.return_log_id)
+        }
+        async fn record_finish(
+            &self,
+            _: i64,
+            _: Option<i32>,
+            _: Option<&str>,
+            _: Option<&str>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn find_by_issue(&self, _: i64) -> anyhow::Result<Vec<ExecutionLog>> {
+            Ok(vec![])
+        }
+    }
+
+    // Spawns `false` (exits with code 1) to exercise the non-zero exit path in step3,
+    // which avoids triggering PR-creation GitHub API calls that are not mocked here.
+    struct FalseClaudeRunner;
+    impl crate::application::port::claude_code_runner::ClaudeCodeRunner for FalseClaudeRunner {
+        fn spawn(
+            &self,
+            _: &str,
+            _: &Path,
+            _: Option<&str>,
+            _: &str,
+        ) -> anyhow::Result<std::process::Child> {
+            use std::process::{Command, Stdio};
+            Ok(Command::new("false")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?)
+        }
+    }
+
+    type TrackingTestUseCase = PollingUseCase<
+        MockGitHub,
+        MockIssueRepo,
+        TrackingExecLogRepo,
+        FalseClaudeRunner,
+        NoopWorktree,
+    >;
+
+    fn make_tracking_uc(
+        issues: Vec<Issue>,
+        return_log_id: i64,
+    ) -> (TrackingTestUseCase, Arc<Mutex<Vec<(i64, State)>>>) {
+        let (repo, _) = MockIssueRepo::new(issues);
+        let github = MockGitHub::new(false, None, vec![], false);
+        let (exec_log_repo, record_start_calls) = TrackingExecLogRepo::new(return_log_id);
+        let config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        let uc = PollingUseCase::new(
+            github,
+            repo,
+            exec_log_repo,
+            FalseClaudeRunner,
+            NoopWorktree,
+            config,
+        );
+        (uc, record_start_calls)
+    }
+
+    #[tokio::test]
+    async fn step7_calls_record_start_and_step3_does_not() {
+        let issue = Issue {
+            id: 10,
+            github_issue_number: 99,
+            state: State::DesignRunning,
+            design_pr_number: None,
+            impl_pr_number: None,
+            worktree_path: Some("/tmp".to_string()),
+            retry_count: 0,
+            current_pid: None,
+            error_message: None,
+            feature_name: None,
+            fixing_causes: vec![],
+            model: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let (mut uc, record_start_calls) = make_tracking_uc(vec![issue], 42);
+
+        // step7: spawn → record_start should be called once
+        uc.step7_spawn_processes().await;
+
+        let calls_after_step7 = record_start_calls.lock().unwrap().clone();
+        assert_eq!(
+            calls_after_step7.len(),
+            1,
+            "record_start should be called exactly once in step7"
+        );
+        assert_eq!(calls_after_step7[0].0, 10, "issue_id should match");
+        assert_eq!(
+            calls_after_step7[0].1,
+            State::DesignRunning,
+            "state should match"
+        );
+
+        // Wait for echo to exit
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        // step3: collect exited → record_start should NOT be called again
+        let mut events = vec![];
+        uc.step3_process_exit_check(&mut events).await;
+
+        let calls_after_step3 = record_start_calls.lock().unwrap().clone();
+        assert_eq!(
+            calls_after_step3.len(),
+            1,
+            "record_start must not be called in step3"
+        );
     }
 }
