@@ -36,6 +36,8 @@ Cupola is a locally-resident agent that uses GitHub Issues and PRs as its sole i
 
 ## Prerequisites
 
+> **Platform**: Unix (macOS / Linux) only. Windows is not supported due to the dependency on the `nix` crate (`cfg(unix)`).
+
 | Tool | Purpose | Notes |
 |------|---------|-------|
 | Rust stable | Build | Managed via devbox |

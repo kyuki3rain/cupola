@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Automated detection and fixing of CI failures and conflicts
 - Concurrent session limit (`max_concurrent_sessions`)
 - Model selection (cupola.toml + Issue labels)
+- `cupola start --daemon`: Option to run as a background daemon
+- `cupola stop`: Subcommand to stop a running daemon
 - `cupola doctor` / `cupola init` commands
 - Graceful shutdown
 
