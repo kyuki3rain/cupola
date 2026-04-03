@@ -38,9 +38,10 @@
 
 1. The cupola system shall add `expect_used = "deny"` under `[lints.clippy]` in `Cargo.toml`.
 2. The cupola system shall add `[lints.clippy] all = "warn"` in `Cargo.toml` if not already present.
-3. Where test code is present, the cupola system shall allow `clippy::expect_used` via `#![cfg_attr(test, allow(clippy::expect_used))]` in `src/lib.rs`.
-4. When `cargo clippy` is run, the cupola system shall report a `deny`-level error for any new `expect()` call in non-test production code.
-5. The cupola system shall not flag `expect()` usage inside `#[cfg(test)]` blocks as an error.
+3. Where unit test code is present in the main library crate, the cupola system shall allow `clippy::expect_used` via `#![cfg_attr(test, allow(clippy::expect_used))]` in `src/lib.rs`.
+4. Where integration tests under `tests/` retain `expect()` usage, the cupola system shall also allow `clippy::expect_used` in those integration test crates, for example via `#![allow(clippy::expect_used)]` in `tests/integration_test.rs`, unless those `expect()` calls are replaced.
+5. When `cargo clippy --all-targets` is run, the cupola system shall report a `deny`-level error for any new `expect()` call in non-test production code.
+6. The cupola system shall not flag permitted `expect()` usage in test code, including `#[cfg(test)]` unit tests and integration tests under `tests/`, as an error.
 
 ### Requirement 4: 対象外 expect() の非変更
 

@@ -32,7 +32,13 @@
 - [ ] 4.2 (P) src/lib.rs でテストコードの expect_used lint を許可する
   - `#![cfg_attr(test, allow(clippy::expect_used))]` をクレートレベルアトリビュートとして `src/lib.rs` 先頭付近に追記する
   - `#[cfg(test)]` ブロック内の `expect()` がエラーにならないことが目的
-  - _Requirements: 3.3, 3.5_
+  - _Requirements: 3.3, 3.6_
+
+- [ ] 4.3 (P) tests/ 配下の integration test ファイルで expect_used lint を許可する
+  - `tests/integration_test.rs` の先頭に `#![allow(clippy::expect_used)]` を追記する
+  - `cfg_attr(test, ...)` は `tests/` 配下のクレートには伝播しないため、統合テストファイルへの直接指定が必要
+  - 統合テストで `expect()` を排除する場合はこのタスクを不要とみなしてよい
+  - _Requirements: 3.4, 3.6_
 
 - [ ] 5. テスト・lint 検証を実施する
 - [ ] 5.1 build_session_config の各状態に対するユニットテストを追加する
@@ -47,7 +53,7 @@
   - _Requirements: 2.1, 2.2_
 
 - [ ] 5.3 cargo clippy で全エラーなしを確認する
-  - `cargo clippy -- -D warnings` を実行し、エラーが0件であることを確認する
-  - テストコード内の `expect()` が `deny` エラーにならないことを確認する（`cfg_attr` の効果確認）
+  - `cargo clippy --all-targets -- -D warnings` を実行し、エラーが0件であることを確認する
+  - テストターゲットを含めて、テストコード内の `expect()` が `deny` エラーにならないことを確認する（`cfg_attr` および `allow` アトリビュートの効果確認）
   - `cargo test` を実行し、既存テストがすべてパスすることを確認する
-  - _Requirements: 3.4, 3.5_
+  - _Requirements: 3.5, 3.6_
