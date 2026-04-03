@@ -17,7 +17,7 @@ fix: spawn前に.cupola/inputs/をクリアする - prepare_inputsの冒頭でin
 
 #### 受け入れ基準
 
-1. When `prepare_inputs` が呼ばれたとき、the PollingUseCase shall `.cupola/inputs/` ディレクトリ（`wt.join("../.cupola/inputs")` のパス）内の全ファイルを削除してから新規ファイルの書き込みを行う。
+1. When `prepare_inputs` が呼ばれたとき、the PollingUseCase shall `.cupola/inputs/` ディレクトリ（`worktree_path.join(".cupola/inputs")` のパス）内の全ファイルを削除してから新規ファイルの書き込みを行う。
 2. When `.cupola/inputs/` ディレクトリが存在しない状態で `prepare_inputs` が呼ばれたとき、the PollingUseCase shall ディレクトリを新規作成してファイル書き込みを正常に完了する。
 3. When `.cupola/inputs/` ディレクトリのクリアに失敗したとき、the PollingUseCase shall エラーログを出力してエラーを呼び出し元に伝播する。
 4. The PollingUseCase shall クリア後に `prepare_inputs` が書き込む対象ファイルのみが `.cupola/inputs/` に存在することを保証する。
@@ -30,7 +30,7 @@ fix: spawn前に.cupola/inputs/をクリアする - prepare_inputsの冒頭でin
 
 1. When `prepare_inputs` が同一 Issue に対して複数回呼ばれたとき、the PollingUseCase shall 毎回ディレクトリをクリアしてから現在の `fixing_causes` に対応するファイルのみを書き込む。
 2. While `.cupola/inputs/` ディレクトリが空のとき、the PollingUseCase shall クリア処理を正常に完了しエラーを発生させない。
-3. The PollingUseCase shall クリア対象は `.cupola/inputs/` ディレクトリ直下のファイルのみとし、ディレクトリ自体や worktree 外のファイルを削除しない。
+3. The PollingUseCase shall クリア対象を worktree 配下の `.cupola/inputs/` ディレクトリのみに限定し、その配下は再帰的に削除して再作成してよいが、worktree 外のファイルやディレクトリを削除しない。
 
 ### 要件 3: 既存の書き込みロジックとの一貫性
 
@@ -40,6 +40,6 @@ fix: spawn前に.cupola/inputs/をクリアする - prepare_inputsの冒頭でin
 
 1. When `State::DesignRunning` で `prepare_inputs` が呼ばれたとき、the PollingUseCase shall クリア後に `issue.md` のみを書き込む。
 2. When `State::DesignFixing` または `State::ImplementationFixing` で `fixing_causes` に `ReviewComments` が含まれるとき、the PollingUseCase shall クリア後に `review_threads.json` を書き込む。
-3. When `State::DesignFixing` または `State::ImplementationFixing` で `fixing_causes` に `CiFailure` が含まれるとき、the PollingUseCase shall クリア後に `ci_errors.json` を書き込む。
-4. When `State::DesignFixing` または `State::ImplementationFixing` で `fixing_causes` に `Conflict` が含まれるとき、the PollingUseCase shall クリア後に `conflict_info.json` を書き込む。
+3. When `State::DesignFixing` または `State::ImplementationFixing` で `fixing_causes` に `CiFailure` が含まれるとき、the PollingUseCase shall クリア後に `ci_errors.txt` を書き込む。
+4. When `State::DesignFixing` または `State::ImplementationFixing` で `fixing_causes` に `Conflict` が含まれるとき、the PollingUseCase shall クリア後に `conflict_info.txt` を書き込む。
 5. If `fixing_causes` が空のとき（後方互換フォールバック）、the PollingUseCase shall クリア後に `review_threads.json` を書き込む。
