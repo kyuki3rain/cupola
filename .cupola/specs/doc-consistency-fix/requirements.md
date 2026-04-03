@@ -12,9 +12,9 @@ v0.1プレリリース監査で発見された4件のドキュメント・設定
 
 #### Acceptance Criteria
 
-1. The docs shall `Subcommands: run / init / status` の記述を `start / stop / init / status / doctor` に更新する。
-2. The docs shall `cargo run -- run` の使用例を `cargo run -- start` に更新する。
-3. When `.cupola/steering/tech.md` を参照したとき、the docs shall 実装済みのサブコマンド一覧と一致した内容を提供する。
+1. The tech.md shall `Subcommands: run / init / status` の記述を `start / stop / init / status / doctor` に更新する。
+2. The tech.md shall `cargo run -- run` の使用例を `cargo run -- start` に更新する。
+3. When `.cupola/steering/tech.md` を参照したとき、the tech.md shall 実装済みのサブコマンド一覧と一致した内容を提供する。
 
 ### Requirement 2: CHANGELOG.md への start/stop 機能記載追加
 
@@ -43,6 +43,6 @@ v0.1プレリリース監査で発見された4件のドキュメント・設定
 
 #### Acceptance Criteria
 
-1. The docs shall `.gitignore` に `.env` エントリを追加する。
-2. When `.env` ファイルが存在するとき、the system shall Git のトラッキング対象から除外する。
-3. If `.env` に GitHub トークンが保存されていても、the system shall リポジトリへのコミットを防止する。
+1. `.gitignore` shall contain a `.env` ignore entry.
+2. When `.env` ファイルが存在するとき、Git shall not track it because it is ignored by `.gitignore`.
+3. If `.env` に GitHub トークンが保存されていても、Git shall treat `.env` as an ignored file and not include it in tracked changes.
