@@ -510,7 +510,6 @@ async fn start_daemon_child(
     // rather than causing an early function return. This ensures apply_pid_cleanup is
     // always reached regardless of where the failure occurs.
     let result: anyhow::Result<()> = async {
-
         tracing::info!(
             owner = %cfg.owner,
             repo = %cfg.repo,
