@@ -573,6 +573,15 @@ where
                                 "failed to post ci_fix_count limit comment"
                             );
                         }
+                        // コメント投稿済みであることを記録するため max+1 に進める（次サイクルで再投稿しないように）
+                        issue.ci_fix_count = max + 1;
+                        if let Err(e) = self.issue_repo.update(&issue).await {
+                            tracing::warn!(
+                                issue_id = issue.id,
+                                error = %e,
+                                "failed to update ci_fix_count after limit comment"
+                            );
+                        }
                     }
                 }
             }
@@ -1675,6 +1684,114 @@ mod tests {
         assert!(causes.contains(&FixingProblemKind::Conflict));
         assert!(causes.contains(&FixingProblemKind::ReviewComments));
         assert_eq!(causes.len(), 3);
+    }
+
+    // --- Step4 ci_fix_count limit tests ---
+
+    fn review_waiting_issue_with_ci_fix_count(
+        state: State,
+        pr_num: u64,
+        ci_fix_count: u32,
+    ) -> Issue {
+        let (design_pr, impl_pr) = match state {
+            State::DesignReviewWaiting => (Some(pr_num), None),
+            State::ImplementationReviewWaiting => (None, Some(pr_num)),
+            _ => (None, None),
+        };
+        Issue {
+            id: 1,
+            github_issue_number: 42,
+            state,
+            design_pr_number: design_pr,
+            impl_pr_number: impl_pr,
+            worktree_path: None,
+            retry_count: 0,
+            ci_fix_count,
+            current_pid: None,
+            error_message: None,
+            feature_name: None,
+            fixing_causes: vec![],
+            weight: TaskWeight::Medium,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn make_uc_with_max_ci_fix(
+        github: MockGitHub,
+        repo: MockIssueRepo,
+        max_ci_fix_cycles: u32,
+    ) -> TestUseCase {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.max_ci_fix_cycles = max_ci_fix_cycles;
+        PollingUseCase::new(
+            github,
+            repo,
+            NoopExecLogRepo,
+            NoopClaudeRunner,
+            NoopWorktree,
+            config,
+        )
+    }
+
+    #[tokio::test]
+    async fn step4_ci_fix_count_below_max_emits_fixing_required_and_increments() {
+        // ci_fix_count=1, max=3 → 上限未満: FixingRequired を emit し ci_fix_count を 2 に更新
+        let issue =
+            review_waiting_issue_with_ci_fix_count(State::ImplementationReviewWaiting, 20, 1);
+        let (repo, updated) = MockIssueRepo::new(vec![issue]);
+        let github = MockGitHub::new(false, Some(true), vec!["build"], false);
+        let mut uc = make_uc_with_max_ci_fix(github, repo, 3);
+        let mut events = vec![];
+        uc.step4_pr_monitoring(&mut events).await;
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], (1, Event::FixingRequired)));
+        let updates = updated.lock().unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].ci_fix_count, 2);
+    }
+
+    #[tokio::test]
+    async fn step4_ci_fix_count_at_max_no_event_posts_comment_once_and_increments() {
+        // ci_fix_count=3, max=3 → 上限到達: FixingRequired を emit せず Issue コメントを1回だけ投稿し、ci_fix_count を 4 に更新
+        let issue =
+            review_waiting_issue_with_ci_fix_count(State::ImplementationReviewWaiting, 20, 3);
+        let (repo, updated) = MockIssueRepo::new(vec![issue]);
+        let github = MockGitHub::new(false, Some(true), vec!["build"], false);
+        let comments = github.comments.clone();
+        let mut uc = make_uc_with_max_ci_fix(github, repo, 3);
+        let mut events = vec![];
+        uc.step4_pr_monitoring(&mut events).await;
+        assert!(
+            events.is_empty(),
+            "上限到達後は FixingRequired を emit しない"
+        );
+        let posted = comments.lock().unwrap();
+        assert_eq!(posted.len(), 1, "コメントは1回だけ投稿される");
+        let updates = updated.lock().unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].ci_fix_count, 4, "ci_fix_count が max+1 に進む");
+    }
+
+    #[tokio::test]
+    async fn step4_ci_fix_count_above_max_no_event_no_comment() {
+        // ci_fix_count=4 (max+1), max=3 → 上限超過済み: FixingRequired も emit せず コメントも投稿しない
+        let issue =
+            review_waiting_issue_with_ci_fix_count(State::ImplementationReviewWaiting, 20, 4);
+        let (repo, updated) = MockIssueRepo::new(vec![issue]);
+        let github = MockGitHub::new(false, Some(true), vec!["build"], false);
+        let comments = github.comments.clone();
+        let mut uc = make_uc_with_max_ci_fix(github, repo, 3);
+        let mut events = vec![];
+        uc.step4_pr_monitoring(&mut events).await;
+        assert!(
+            events.is_empty(),
+            "上限超過済みは FixingRequired を emit しない"
+        );
+        let posted = comments.lock().unwrap();
+        assert!(posted.is_empty(), "上限超過済みはコメントを投稿しない");
+        assert!(updated.lock().unwrap().is_empty(), "DB 更新も不要");
     }
 
     // --- Step7 PR check tests (Task 8.5) ---
