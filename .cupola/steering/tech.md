@@ -20,7 +20,7 @@ Clean Architecture (4 layers). Dependencies point inward only.
 
 | Purpose | Crate | Pattern |
 |---------|-------|---------|
-| CLI | clap (derive) | Subcommands: run / init / status |
+| CLI | clap (derive) | Subcommands: start / stop / init / status / doctor |
 | GitHub REST | octocrab | Personal token authentication |
 | GitHub GraphQL | reqwest + serde_json | Direct POST, Value parsing |
 | DB | rusqlite | Arc<Mutex<Connection>>, spawn_blocking |
@@ -56,7 +56,7 @@ cargo build          # Build
 cargo test           # Run all tests
 cargo clippy         # Static analysis
 cargo fmt --check    # Format check
-cargo run -- run     # Start polling loop
+cargo run -- start   # Start polling loop
 cargo run -- init    # Initialize SQLite schema
 cargo run -- status  # List Issue states
 ```
