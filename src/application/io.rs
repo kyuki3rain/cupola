@@ -215,7 +215,10 @@ mod tests {
         clear_inputs_dir(tmp.path()).expect("clear should succeed");
 
         assert!(inputs_dir.exists(), "inputs dir should exist after clear");
-        let entries: Vec<_> = std::fs::read_dir(&inputs_dir).expect("read dir").collect();
+        let entries = std::fs::read_dir(&inputs_dir)
+            .expect("read dir")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read dir entries");
         assert!(entries.is_empty(), "inputs dir should be empty after clear");
     }
 
@@ -228,7 +231,10 @@ mod tests {
 
         let inputs_dir = tmp.path().join(".cupola/inputs");
         assert!(inputs_dir.exists(), "inputs dir should be created");
-        let entries: Vec<_> = std::fs::read_dir(&inputs_dir).expect("read dir").collect();
+        let entries = std::fs::read_dir(&inputs_dir)
+            .expect("read dir")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read dir entries");
         assert!(entries.is_empty(), "inputs dir should be empty");
     }
 
@@ -246,7 +252,10 @@ mod tests {
             inputs_dir.exists(),
             "inputs dir should exist after second clear"
         );
-        let entries: Vec<_> = std::fs::read_dir(&inputs_dir).expect("read dir").collect();
+        let entries = std::fs::read_dir(&inputs_dir)
+            .expect("read dir")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read dir entries");
         assert!(
             entries.is_empty(),
             "inputs dir should be empty after second clear"
