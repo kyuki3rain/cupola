@@ -236,7 +236,7 @@ PID ファイル操作に関するエラーを Fast-Fail で処理する。
 | エラー | 発生箇所 | 対応 |
 |--------|----------|------|
 | PID ファイル読み取り失敗 | `check_and_clean_pid_file` | `Err` を即時返却、起動中断 |
-| プロセス生存確認（二重起動検出） | `check_and_clean_pid_file` | `"cupola is already running (pid=<N>)"` エラー返却 |
+| プロセス生存確認（二重起動検出） | `check_and_clean_pid_file` | `already running` と PID（`pid=<N>`）を含むエラーを返却。既存の daemon 経路の `"cupola daemon is already running (pid=<N>)"` と foreground 向けの `"cupola is already running (pid=<N>)"` のいずれも許容する |
 | PID ファイル書き込み失敗 | `start_foreground` | `"failed to write PID file: <e>"` エラー返却 |
 | PID ファイル削除失敗 | `apply_pid_cleanup` (既存) | エラー握り潰し、元の結果を返す |
 
