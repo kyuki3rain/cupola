@@ -93,8 +93,8 @@
 
 ## Risks & Mitigations
 
-- **リスク**: 既存の SQLite データに破損した `fixing_causes` JSON が存在する場合、そのIssueが `find_active`/`find_by_state` でスキップされる
-  - **緩和**: これが本修正の目的であり、破損Issueがサイレントに処理されるより明示的にエラーログへ記録される方が望ましい
+- **リスク**: 既存の SQLite データに破損した `fixing_causes` JSON が存在する場合、`find_active`/`find_by_state` は当該Issueだけをスキップするのではなく、`query_map(...).collect::<Result<Vec<_>, _>>()` によりクエリ全体が `Err` になる
+  - **緩和**: これが本修正の目的であり、破損Issueをサイレントに空配列へフォールバックさせるのではなく、明示的なクエリエラーとして記録・検知できる方が望ましい
 
 - **リスク**: `str_to_state` が `pub` から `pub(crate)` または非公開に変わる場合、外部テストが壊れる
   - **緩和**: テストコード内の `str_to_state` 使用箇所を確認し、可視性を適切に設定する

@@ -4,7 +4,7 @@
 
 `sqlite_issue_repository.rs` の `row_to_issue` 関連関数では、DBデータの異常（不明な state 文字列、カラム取得失敗、JSON パース失敗、日時パース失敗）をサイレントに飲み込み、デフォルト値にフォールバックしている。これにより、破損したデータを持つ Issue が「Idle 状態」として再処理されたり、stall timeout が誤判定されるなど、予期しない動作を引き起こすリスクがある。
 
-本仕様では、これらのサイレントフォールバックをすべて `Result` へのエラー伝播に変更し、DBデータ異常時に適切なエラーログを出力してその Issue をスキップする挙動に統一する。また、関連する `sqlite_connection.rs` のマイグレーションエラー無視と `reset_for_restart` の `fixing_causes` リセット漏れも合わせて修正する。
+本仕様では、これらのサイレントフォールバックをすべて `Result` へのエラー伝播に変更し、DBデータ異常時は適切なエラーログを出力したうえで `row_to_issue` / `find_active` などのクエリ処理全体を `Err` として失敗させ、呼び出し元へ伝播する挙動に統一する。また、関連する `sqlite_connection.rs` のマイグレーションエラー無視と `reset_for_restart` の `fixing_causes` リセット漏れも合わせて修正する。
 
 ## Requirements
 

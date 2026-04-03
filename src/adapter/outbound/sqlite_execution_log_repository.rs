@@ -88,8 +88,11 @@ impl ExecutionLogRepository for SqliteExecutionLogRepository {
                         id: row.get(0)?,
                         issue_id: row.get(1)?,
                         state: str_to_state(2, &state_str)?,
-                        started_at: parse_sqlite_datetime(&started_str),
-                        finished_at: finished_str.as_deref().map(parse_sqlite_datetime),
+                        started_at: parse_sqlite_datetime(3, &started_str)?,
+                        finished_at: finished_str
+                            .as_deref()
+                            .map(|s| parse_sqlite_datetime(4, s))
+                            .transpose()?,
                         exit_code: row.get(5)?,
                         structured_output: row.get(6)?,
                         error_message: row.get(7)?,
@@ -119,10 +122,15 @@ fn state_to_str(state: &State) -> &'static str {
     }
 }
 
-fn parse_sqlite_datetime(s: &str) -> chrono::DateTime<chrono::Utc> {
+fn parse_sqlite_datetime(
+    col_idx: usize,
+    s: &str,
+) -> rusqlite::Result<chrono::DateTime<chrono::Utc>> {
     chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
         .map(|naive| naive.and_utc())
-        .unwrap_or_default()
+        .map_err(|_| {
+            rusqlite::Error::InvalidColumnType(col_idx, s.to_string(), rusqlite::types::Type::Text)
+        })
 }
 
 #[cfg(test)]
