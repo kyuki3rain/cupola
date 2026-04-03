@@ -512,49 +512,60 @@ async fn start_daemon_child(
         .write_pid(my_pid)
         .map_err(|e| anyhow::anyhow!("failed to write PID file: {e}"))?;
 
-    // Initialize logging to file
-    let _guard = init_logging(cfg.log_level, cfg.log_dir.as_deref());
+    let pid_path = config_dir.join("cupola.pid");
 
-    tracing::info!(
-        owner = %cfg.owner,
-        repo = %cfg.repo,
-        pid = my_pid,
-        "starting cupola daemon"
-    );
+    // Wrap all post-write_pid work in a single async block so that any `?` propagation
+    // (DB open, token resolution, client construction, polling) is captured as a Result
+    // rather than causing an early function return. This ensures apply_pid_cleanup is
+    // always reached regardless of where the failure occurs.
+    let result: anyhow::Result<()> = async {
+        // Initialize logging to file
+        let _guard = init_logging(cfg.log_level, cfg.log_dir.as_deref());
 
-    // Initialize SQLite
-    let db_path = config_dir.join("cupola.db");
-    let db = SqliteConnection::open(&db_path)?;
-    db.init_schema()?;
+        tracing::info!(
+            owner = %cfg.owner,
+            repo = %cfg.repo,
+            pid = my_pid,
+            "starting cupola daemon"
+        );
 
-    // Resolve GitHub token
-    let token = gh_token::get()?;
+        // Initialize SQLite
+        let db_path = config_dir.join("cupola.db");
+        let db = SqliteConnection::open(&db_path)?;
+        db.init_schema()?;
 
-    // Build adapters
-    let rest = OctocrabRestClient::new(token.clone(), cfg.owner.clone(), cfg.repo.clone())?;
-    let graphql = GraphQLClient::new(token, cfg.owner.clone(), cfg.repo.clone());
-    let github = GitHubClientImpl::new(rest, graphql);
-    let issue_repo = SqliteIssueRepository::new(db.clone());
-    let exec_log_repo = SqliteExecutionLogRepository::new(db);
-    let claude_runner = ClaudeCodeProcess::new("claude");
-    let worktree = GitWorktreeManager::new(".");
+        // Resolve GitHub token
+        let token = gh_token::get()?;
 
-    // Build polling use case with PID file
-    let mut polling = PollingUseCase::new(
-        github,
-        issue_repo,
-        exec_log_repo,
-        claude_runner,
-        worktree,
-        cfg,
-    )
-    .with_pid_file(Box::new(pid_file_manager));
+        // Build adapters
+        let rest = OctocrabRestClient::new(token.clone(), cfg.owner.clone(), cfg.repo.clone())?;
+        let graphql = GraphQLClient::new(token, cfg.owner.clone(), cfg.repo.clone());
+        let github = GitHubClientImpl::new(rest, graphql);
+        let issue_repo = SqliteIssueRepository::new(db.clone());
+        let exec_log_repo = SqliteExecutionLogRepository::new(db);
+        let claude_runner = ClaudeCodeProcess::new("claude");
+        let worktree = GitWorktreeManager::new(".");
 
-    let result = polling.run().await;
+        // Build polling use case with PID file
+        let mut polling = PollingUseCase::new(
+            github,
+            issue_repo,
+            exec_log_repo,
+            claude_runner,
+            worktree,
+            cfg,
+        )
+        .with_pid_file(Box::new(pid_file_manager));
+
+        polling.run().await
+    }
+    .await;
+
     // Fallback cleanup: graceful_shutdown() handles the normal SIGTERM/SIGINT path,
-    // but if run() returns via any other exit (error, early return, etc.) the PID file
-    // may still exist. Delete it here unconditionally; failure is intentionally ignored.
-    apply_pid_cleanup(result, config_dir.join("cupola.pid"))
+    // but if the async block above returns via any other exit (error, early return, etc.)
+    // the PID file may still exist. Delete it here unconditionally; failure is
+    // intentionally ignored so it never masks the original outcome.
+    apply_pid_cleanup(result, pid_path)
 }
 
 /// Deletes the PID file at `pid_path` as a best-effort fallback, then returns `result`
@@ -657,17 +668,18 @@ mod tests {
 
     #[test]
     fn apply_pid_cleanup_preserves_original_err_when_deletion_fails() {
-        // Use a non-existent directory so delete_pid() is irrelevant (file absent → Ok(()))
-        // For the case where deletion fails, the function uses `let _ = ...`, so we only
-        // verify that the original Result is returned unchanged.
+        // Create a directory at the PID path so remove_file() fails deterministically
+        // (you cannot remove_file() a directory on most platforms).
         let dir = tempfile::TempDir::new().expect("temp dir");
         let path = dir.path().join("cupola.pid");
-        // No PID file created — deletion will be a no-op (Ok(()))
+        std::fs::create_dir(&path).expect("create directory at pid path");
+        assert!(path.is_dir(), "test setup: pid path must be a directory");
 
         let original_err = anyhow::anyhow!("some polling error");
         let err_msg = original_err.to_string();
         let result = super::apply_pid_cleanup(Err(original_err), path);
 
+        // The function must return the original Err, not the deletion error.
         let err = result.expect_err("should return Err");
         assert_eq!(err.to_string(), err_msg, "original error message preserved");
     }

@@ -110,6 +110,25 @@ mod tests {
     }
 
     #[test]
+    fn read_pid_returns_none_after_delete_pid() {
+        // Simulates the "next startup" scenario: after a normal daemon shutdown that
+        // deletes the PID file, read_pid() must return Ok(None) so the next startup
+        // does not trigger stale-PID cleanup.
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("cupola.pid");
+        let mgr = PidFileManager::new(path);
+
+        mgr.write_pid(12345).expect("write");
+        mgr.delete_pid().expect("delete");
+
+        let result = mgr.read_pid().expect("read_pid should succeed");
+        assert!(
+            result.is_none(),
+            "read_pid should return Ok(None) after the PID file has been deleted"
+        );
+    }
+
+    #[test]
     fn is_process_alive_returns_true_for_self() {
         let dir = tempfile::TempDir::new().expect("temp dir");
         let mgr = PidFileManager::new(dir.path().join("alive.pid"));
