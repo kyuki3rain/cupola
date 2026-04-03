@@ -724,12 +724,15 @@ where
                         pid,
                         "spawned Claude Code process"
                     );
+                    // Register first to start draining stdout/stderr before any await,
+                    // preventing pipe buffer exhaustion if the child writes large output.
+                    self.session_mgr.register(issue.id, child, 0);
                     let log_id = self
                         .exec_log_repo
                         .record_start(issue.id, issue.state)
                         .await
                         .unwrap_or(0);
-                    self.session_mgr.register(issue.id, child, log_id);
+                    self.session_mgr.update_log_id(issue.id, log_id);
 
                     // Persist PID to DB
                     let mut updated_issue = issue.clone();
@@ -1845,8 +1848,8 @@ mod tests {
             "state should match"
         );
 
-        // Wait for echo to exit
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        // Wait for the spawned `false` process to exit
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         // step3: collect exited → record_start should NOT be called again
         let mut events = vec![];

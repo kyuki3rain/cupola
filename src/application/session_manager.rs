@@ -139,6 +139,12 @@ impl SessionManager {
         }
     }
 
+    pub fn update_log_id(&mut self, issue_id: i64, log_id: i64) {
+        if let Some(entry) = self.sessions.get_mut(&issue_id) {
+            entry.log_id = log_id;
+        }
+    }
+
     pub fn find_stalled(&self, timeout: Duration) -> Vec<i64> {
         let now = Instant::now();
         self.sessions
