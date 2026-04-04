@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use anyhow::Result;
 
 use crate::application::port::command_runner::{CommandOutput, CommandRunner};
@@ -6,8 +8,12 @@ use crate::application::port::command_runner::{CommandOutput, CommandRunner};
 pub struct ProcessCommandRunner;
 
 impl CommandRunner for ProcessCommandRunner {
-    fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput> {
-        match std::process::Command::new(program).args(args).output() {
+    fn run_in_dir(&self, program: &str, args: &[&str], dir: &Path) -> Result<CommandOutput> {
+        match std::process::Command::new(program)
+            .args(args)
+            .current_dir(dir)
+            .output()
+        {
             Ok(output) => Ok(CommandOutput {
                 success: output.status.success(),
                 stdout: String::from_utf8_lossy(&output.stdout).into_owned(),

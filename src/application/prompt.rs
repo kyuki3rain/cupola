@@ -393,13 +393,14 @@ mod tests {
     }
 
     #[test]
-    fn design_prompt_does_not_contain_kiro() {
+    fn design_prompt_does_not_contain_legacy_namespace() {
         let config = test_config();
         let session =
             build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false).unwrap();
+        let legacy_namespace = ["/", "k", "i", "r", "o", ":"].concat();
         assert!(
-            !session.prompt.contains("/kiro:"),
-            "design prompt should not contain /kiro: references"
+            !session.prompt.contains(&legacy_namespace),
+            "design prompt should not contain legacy namespace references"
         );
     }
 
@@ -423,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn implementation_prompt_does_not_contain_kiro() {
+    fn implementation_prompt_does_not_contain_legacy_namespace() {
         let config = test_config();
         let session = build_session_config(
             State::ImplementationRunning,
@@ -435,9 +436,10 @@ mod tests {
             false,
         )
         .unwrap();
+        let legacy_namespace = ["/", "k", "i", "r", "o", ":"].concat();
         assert!(
-            !session.prompt.contains("/kiro:"),
-            "implementation prompt should not contain /kiro: references"
+            !session.prompt.contains(&legacy_namespace),
+            "implementation prompt should not contain legacy namespace references"
         );
     }
 

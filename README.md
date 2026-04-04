@@ -23,11 +23,11 @@ Issue-driven local agent control plane for spec-driven development.
 
 ## Project Overview
 
-Cupola is a locally-resident agent that uses GitHub Issues and PRs as its sole interface, driving Claude Code + [cc-sdd](https://github.com/gotalab/cc-sdd) to automate design and implementation. Humans only create Issues, assign labels, and review PRs — Cupola handles everything from design document generation to implementation, review response, and completion cleanup. By leveraging GitHub's existing workflow (Issues + PRs + reviews), Cupola achieves both quality assurance and automation without any dedicated UI.
+Cupola is a locally-resident agent that uses GitHub Issues and PRs as its sole interface, driving Claude Code to automate design and implementation. Humans only create Issues, assign labels, and review PRs. Cupola handles everything from design document generation to implementation, review response, and completion cleanup. By leveraging GitHub's existing workflow (Issues + PRs + reviews), Cupola achieves both quality assurance and automation without any dedicated UI.
 
 **Key Features:**
 
-- **Automated design generation**: Detects GitHub Issues and uses cc-sdd to automatically generate requirements, design, and tasks
+- **Automated design generation**: Detects GitHub Issues and generates requirements, design, and tasks through bundled Cupola skills
 - **Automatic PR creation**: Creates design PRs and implementation PRs without manual intervention
 - **Review thread handling**: Automatically fixes, replies, and resolves review threads on PRs
 - **CI failure auto-fix**: Detects CI (GitHub Actions, etc.) failures and automatically attempts to fix them
@@ -48,7 +48,7 @@ Cupola is a locally-resident agent that uses GitHub Issues and PRs as its sole i
 | Git | Version control | — |
 | devbox | Development environment management | Nix-based |
 
-**cc-sdd (spec-driven development)** is a specification-driven development methodology that progressively advances through requirements definition, design, task decomposition, and implementation. Cupola internally drives cc-sdd to automatically generate requirements, design, and tasks from Issue content before proceeding with implementation.
+Cupola bootstraps its own rules, templates, and Claude Code skills into the target repository via `cupola init`. Design and implementation then run through bundled `/cupola:*` commands rather than an external skill dependency.
 
 When using devbox, run `devbox shell` at the repository root to set up all required tools (Rust, etc.) at once.
 
@@ -77,21 +77,15 @@ When using devbox, run `devbox shell` at the repository root to set up all requi
 
    > `cargo install` places the `cupola` binary in `~/.cargo/bin/`. Make sure `~/.cargo/bin` is in your PATH.
 
-4. Create `.cupola/cupola.toml`
-
-   ```toml
-   owner = "your-github-username"
-   repo = "your-repo-name"
-   default_branch = "main"
-   ```
-
-   See [Configuration Reference](#configuration-reference) for details on all settings.
-
-5. Initialize the SQLite schema
+4. Bootstrap Cupola into the repository
 
    ```bash
    cupola init
    ```
+
+   This creates `.cupola/cupola.toml`, installs bundled Cupola assets, updates `.gitignore`, initializes the SQLite DB, and attempts to generate initial steering with Claude Code.
+
+5. Fill in `.cupola/cupola.toml`
 
 6. Create the `agent:ready` label in your GitHub repository
 
@@ -111,7 +105,7 @@ Workflow from Issue creation to merge:
 
 1. **[Human]** Create a GitHub Issue and describe the requirements
 2. **[Human]** Add the `agent:ready` label to the Issue — this triggers Cupola
-3. **[Cupola]** Detects the Issue and auto-generates design documents (requirements / design / tasks) using cc-sdd
+3. **[Cupola]** Detects the Issue and auto-generates design documents (requirements / design / tasks) using bundled Cupola skills
 4. **[Cupola]** Creates a design PR
 5. **[Human]** Reviews and approves the design PR
 6. **[Cupola]** Auto-generates the implementation based on the tasks
@@ -168,7 +162,7 @@ cupola doctor
 
 ### `cupola init`
 
-Initializes the SQLite schema. Run once during initial setup.
+Bootstraps Cupola into the current repository for the target agent runtime.
 
 ```bash
 cupola init

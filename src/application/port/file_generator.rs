@@ -5,8 +5,8 @@ use anyhow::Result;
 pub trait FileGenerator: Send + Sync {
     /// cupola.toml テンプレートを生成する（冪等）。
     fn generate_toml_template(&self) -> Result<bool>;
-    /// ステアリングテンプレートをコピーする（冪等）。
-    fn copy_steering_templates(&self) -> Result<bool>;
+    /// Claude Code 向けの Cupola assets を導入する（冪等）。
+    fn install_claude_code_assets(&self) -> Result<bool>;
     /// .gitignore に cupola エントリを追記する（冪等）。
     fn append_gitignore_entries(&self) -> Result<bool>;
     /// spec ディレクトリ（spec.json + requirements.md）を生成する（冪等）。

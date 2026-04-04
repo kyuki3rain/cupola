@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -11,6 +11,12 @@ use clap::{Parser, Subcommand};
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum InitAgent {
+    #[value(name = "claude-code")]
+    ClaudeCode,
 }
 
 #[derive(Subcommand, Debug)]
@@ -43,8 +49,12 @@ pub enum Command {
         #[arg(long, default_value = ".cupola/cupola.toml")]
         config: PathBuf,
     },
-    /// Initialize the SQLite schema
-    Init,
+    /// Bootstrap Cupola into the current repository
+    Init {
+        /// Agent runtime to install assets for
+        #[arg(long, value_enum, default_value_t = InitAgent::ClaudeCode)]
+        agent: InitAgent,
+    },
     /// Show status of all issues
     Status,
     /// Run environment diagnostics
@@ -174,7 +184,23 @@ mod tests {
     #[test]
     fn parse_init_command() {
         let cli = Cli::parse_from(["cupola", "init"]);
-        assert!(matches!(cli.command, Command::Init));
+        assert!(matches!(
+            cli.command,
+            Command::Init {
+                agent: InitAgent::ClaudeCode
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_init_with_agent() {
+        let cli = Cli::parse_from(["cupola", "init", "--agent", "claude-code"]);
+        assert!(matches!(
+            cli.command,
+            Command::Init {
+                agent: InitAgent::ClaudeCode
+            }
+        ));
     }
 
     #[test]

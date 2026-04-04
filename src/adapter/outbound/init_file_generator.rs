@@ -4,6 +4,212 @@ use anyhow::{Context, Result};
 
 use crate::application::port::file_generator::FileGenerator;
 
+const CLAUDE_CODE_ASSETS: &[(&str, &str)] = &[
+    (
+        ".claude/commands/cupola/spec-compress.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.claude/commands/cupola/spec-compress.md"
+        )),
+    ),
+    (
+        ".claude/commands/cupola/spec-design.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.claude/commands/cupola/spec-design.md"
+        )),
+    ),
+    (
+        ".claude/commands/cupola/spec-impl.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.claude/commands/cupola/spec-impl.md"
+        )),
+    ),
+    (
+        ".claude/commands/cupola/steering.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.claude/commands/cupola/steering.md"
+        )),
+    ),
+    (
+        ".cupola/settings/rules/design-discovery-full.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/rules/design-discovery-full.md"
+        )),
+    ),
+    (
+        ".cupola/settings/rules/design-discovery-light.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/rules/design-discovery-light.md"
+        )),
+    ),
+    (
+        ".cupola/settings/rules/design-principles.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/rules/design-principles.md"
+        )),
+    ),
+    (
+        ".cupola/settings/rules/design-review.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/rules/design-review.md"
+        )),
+    ),
+    (
+        ".cupola/settings/rules/ears-format.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/rules/ears-format.md"
+        )),
+    ),
+    (
+        ".cupola/settings/rules/gap-analysis.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/rules/gap-analysis.md"
+        )),
+    ),
+    (
+        ".cupola/settings/rules/steering-principles.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/rules/steering-principles.md"
+        )),
+    ),
+    (
+        ".cupola/settings/rules/tasks-generation.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/rules/tasks-generation.md"
+        )),
+    ),
+    (
+        ".cupola/settings/rules/tasks-parallel-analysis.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/rules/tasks-parallel-analysis.md"
+        )),
+    ),
+    (
+        ".cupola/settings/templates/specs/design.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/templates/specs/design.md"
+        )),
+    ),
+    (
+        ".cupola/settings/templates/specs/init.json",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/templates/specs/init.json"
+        )),
+    ),
+    (
+        ".cupola/settings/templates/specs/requirements-init.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/templates/specs/requirements-init.md"
+        )),
+    ),
+    (
+        ".cupola/settings/templates/specs/requirements.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/templates/specs/requirements.md"
+        )),
+    ),
+    (
+        ".cupola/settings/templates/specs/research.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/templates/specs/research.md"
+        )),
+    ),
+    (
+        ".cupola/settings/templates/specs/tasks.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/templates/specs/tasks.md"
+        )),
+    ),
+    (
+        ".cupola/settings/templates/steering/product.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/templates/steering/product.md"
+        )),
+    ),
+    (
+        ".cupola/settings/templates/steering/structure.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/templates/steering/structure.md"
+        )),
+    ),
+    (
+        ".cupola/settings/templates/steering/tech.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/templates/steering/tech.md"
+        )),
+    ),
+    (
+        ".cupola/settings/templates/steering-custom/api-standards.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/templates/steering-custom/api-standards.md"
+        )),
+    ),
+    (
+        ".cupola/settings/templates/steering-custom/authentication.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/templates/steering-custom/authentication.md"
+        )),
+    ),
+    (
+        ".cupola/settings/templates/steering-custom/database.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/templates/steering-custom/database.md"
+        )),
+    ),
+    (
+        ".cupola/settings/templates/steering-custom/deployment.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/templates/steering-custom/deployment.md"
+        )),
+    ),
+    (
+        ".cupola/settings/templates/steering-custom/error-handling.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/templates/steering-custom/error-handling.md"
+        )),
+    ),
+    (
+        ".cupola/settings/templates/steering-custom/security.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/templates/steering-custom/security.md"
+        )),
+    ),
+    (
+        ".cupola/settings/templates/steering-custom/testing.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.cupola/settings/templates/steering-custom/testing.md"
+        )),
+    ),
+];
+
 const CUPOLA_TOML_TEMPLATE: &str = r#"owner = ""
 repo = ""
 default_branch = ""
@@ -52,8 +258,6 @@ impl InitFileGenerator {
         Self { base_dir }
     }
 
-    /// cupola.toml 雛形を生成する。既に存在する場合はスキップ。
-    /// 戻り値: true = 生成した, false = スキップ
     pub fn generate_toml_template(&self) -> Result<bool> {
         let toml_path = self.base_dir.join(".cupola").join("cupola.toml");
         if toml_path.exists() {
@@ -69,23 +273,25 @@ impl InitFileGenerator {
         Ok(true)
     }
 
-    /// steering テンプレートをコピーする。
-    /// テンプレート不在時・既にファイルがある場合はスキップ。
-    /// 戻り値: true = コピーした, false = スキップ
-    pub fn copy_steering_templates(&self) -> Result<bool> {
-        let template_dir = self
-            .base_dir
-            .join(".cupola")
-            .join("settings")
-            .join("templates")
-            .join("steering");
+    pub fn install_claude_code_assets(&self) -> Result<bool> {
+        let mut wrote_any = false;
 
-        if !template_dir.exists() {
-            tracing::info!(
-                path = %template_dir.display(),
-                "steering template directory not found (cc-sdd not installed?), skipping"
-            );
-            return Ok(false);
+        for (relative_path, content) in CLAUDE_CODE_ASSETS {
+            let path = self.base_dir.join(relative_path);
+            if path.exists() {
+                continue;
+            }
+
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).with_context(|| {
+                    format!("failed to create parent directory at {}", parent.display())
+                })?;
+            }
+
+            std::fs::write(&path, content)
+                .with_context(|| format!("failed to write asset at {}", path.display()))?;
+            tracing::info!(path = %path.display(), "installed Cupola asset");
+            wrote_any = true;
         }
 
         let steering_dir = self.base_dir.join(".cupola").join("steering");
@@ -96,62 +302,9 @@ impl InitFileGenerator {
             )
         })?;
 
-        // steering/ が空かどうかを確認
-        let is_empty = std::fs::read_dir(&steering_dir)
-            .with_context(|| {
-                format!(
-                    "failed to read steering directory at {}",
-                    steering_dir.display()
-                )
-            })?
-            .next()
-            .is_none();
-
-        if !is_empty {
-            tracing::info!(
-                path = %steering_dir.display(),
-                "steering directory already has files, skipping"
-            );
-            return Ok(false);
-        }
-
-        // テンプレートファイルをコピー
-        let entries = std::fs::read_dir(&template_dir).with_context(|| {
-            format!(
-                "failed to read template directory at {}",
-                template_dir.display()
-            )
-        })?;
-
-        for entry in entries {
-            let entry = entry.with_context(|| {
-                format!(
-                    "failed to read entry in template directory {}",
-                    template_dir.display()
-                )
-            })?;
-            let file_name = entry.file_name();
-            let dest = steering_dir.join(&file_name);
-            std::fs::copy(entry.path(), &dest).with_context(|| {
-                format!(
-                    "failed to copy {} to {}",
-                    entry.path().display(),
-                    dest.display()
-                )
-            })?;
-            tracing::info!(
-                src = %entry.path().display(),
-                dst = %dest.display(),
-                "steering template copied"
-            );
-        }
-
-        Ok(true)
+        Ok(wrote_any)
     }
 
-    /// .gitignore に cupola 用エントリを追記する。
-    /// マーカーが既に存在する場合はスキップ。
-    /// 戻り値: true = 追記した, false = スキップ
     pub fn append_gitignore_entries(&self) -> Result<bool> {
         let gitignore_path = self.base_dir.join(".gitignore");
 
@@ -166,7 +319,6 @@ impl InitFileGenerator {
                 );
                 return Ok(false);
             }
-            // 既存の行末スタイルを検出し、同じ改行コードで追記する
             let line_ending = if content.contains("\r\n") {
                 "\r\n"
             } else {
@@ -186,7 +338,6 @@ impl InitFileGenerator {
                 )
             })?;
         } else {
-            // 新規作成
             std::fs::write(&gitignore_path, GITIGNORE_ENTRIES).with_context(|| {
                 format!(
                     "failed to create .gitignore at {}",
@@ -198,11 +349,7 @@ impl InitFileGenerator {
         tracing::info!(path = %gitignore_path.display(), "cupola entries appended to .gitignore");
         Ok(true)
     }
-}
 
-impl InitFileGenerator {
-    /// spec ディレクトリ（spec.json + requirements.md）を生成する。
-    /// 既に存在する場合はスキップ。
     pub fn generate_spec_directory(
         &self,
         issue_number: u64,
@@ -228,7 +375,6 @@ impl InitFileGenerator {
             format!("failed to create spec directory at {}", spec_dir.display())
         })?;
 
-        // Read templates and substitute placeholders
         let template_dir = self
             .base_dir
             .join(".cupola")
@@ -238,7 +384,6 @@ impl InitFileGenerator {
 
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
-        // spec.json from template
         let spec_json_path = spec_dir.join("spec.json");
         let spec_json_template = template_dir.join("init.json");
         let spec_json_content = if spec_json_template.exists() {
@@ -256,7 +401,6 @@ impl InitFileGenerator {
             format!("failed to write spec.json at {}", spec_json_path.display())
         })?;
 
-        // requirements.md from template
         let req_path = spec_dir.join("requirements.md");
         let req_template = template_dir.join("requirements-init.md");
         let req_content = if req_template.exists() {
@@ -286,8 +430,8 @@ impl FileGenerator for InitFileGenerator {
         InitFileGenerator::generate_toml_template(self)
     }
 
-    fn copy_steering_templates(&self) -> Result<bool> {
-        InitFileGenerator::copy_steering_templates(self)
+    fn install_claude_code_assets(&self) -> Result<bool> {
+        InitFileGenerator::install_claude_code_assets(self)
     }
 
     fn append_gitignore_entries(&self) -> Result<bool> {
@@ -312,22 +456,19 @@ mod tests {
 
     fn setup() -> (TempDir, InitFileGenerator) {
         let tmp = TempDir::new().expect("temp dir");
-        // .cupola/ ディレクトリを事前作成
         fs::create_dir_all(tmp.path().join(".cupola")).expect("create .cupola");
         let generator = InitFileGenerator::new(tmp.path().to_path_buf());
         (tmp, generator)
     }
 
-    // === generate_toml_template ===
-
     #[test]
     fn toml_template_creates_file_when_absent() {
         let (tmp, generator) = setup();
         let result = generator.generate_toml_template().expect("generate");
-        assert!(result, "should return true when file is created");
+        assert!(result);
 
         let toml_path = tmp.path().join(".cupola").join("cupola.toml");
-        assert!(toml_path.exists(), "cupola.toml should exist");
+        assert!(toml_path.exists());
 
         let content = fs::read_to_string(&toml_path).expect("read");
         assert!(content.contains("owner = \"\""));
@@ -343,90 +484,72 @@ mod tests {
         fs::write(&toml_path, "existing content").expect("write");
 
         let result = generator.generate_toml_template().expect("generate");
-        assert!(!result, "should return false when file already exists");
-
-        // 内容が変更されていないことを確認
-        let content = fs::read_to_string(&toml_path).expect("read");
-        assert_eq!(content, "existing content");
-    }
-
-    // === copy_steering_templates ===
-
-    #[test]
-    fn steering_copy_skips_when_template_dir_absent() {
-        let (_, generator) = setup();
-        // テンプレートディレクトリを作成しない
-        let result = generator.copy_steering_templates().expect("copy");
-        assert!(!result, "should return false when template dir is absent");
-    }
-
-    #[test]
-    fn steering_copy_succeeds_when_steering_is_empty() {
-        let (tmp, generator) = setup();
-        // テンプレートディレクトリを作成してファイルを配置
-        let template_dir = tmp
-            .path()
-            .join(".cupola")
-            .join("settings")
-            .join("templates")
-            .join("steering");
-        fs::create_dir_all(&template_dir).expect("create template dir");
-        fs::write(template_dir.join("product.md"), "# Product").expect("write template");
-
-        // steering/ ディレクトリは空のまま（setup() では作成していない）
-        let result = generator.copy_steering_templates().expect("copy");
-        assert!(result, "should return true when copy is performed");
-
-        let dest = tmp
-            .path()
-            .join(".cupola")
-            .join("steering")
-            .join("product.md");
-        assert!(dest.exists(), "product.md should be copied");
-        let content = fs::read_to_string(&dest).expect("read");
-        assert_eq!(content, "# Product");
-    }
-
-    #[test]
-    fn steering_copy_skips_when_steering_has_files() {
-        let (tmp, generator) = setup();
-        // テンプレートディレクトリを作成
-        let template_dir = tmp
-            .path()
-            .join(".cupola")
-            .join("settings")
-            .join("templates")
-            .join("steering");
-        fs::create_dir_all(&template_dir).expect("create template dir");
-        fs::write(template_dir.join("product.md"), "# Product").expect("write template");
-
-        // steering/ に既存ファイルを作成
-        let steering_dir = tmp.path().join(".cupola").join("steering");
-        fs::create_dir_all(&steering_dir).expect("create steering dir");
-        fs::write(steering_dir.join("existing.md"), "existing").expect("write existing");
-
-        let result = generator.copy_steering_templates().expect("copy");
-        assert!(
-            !result,
-            "should return false when steering has existing files"
+        assert!(!result);
+        assert_eq!(
+            fs::read_to_string(&toml_path).expect("read"),
+            "existing content"
         );
-
-        // 既存ファイルが残っていること
-        assert!(steering_dir.join("existing.md").exists());
-        // テンプレートがコピーされていないこと
-        assert!(!steering_dir.join("product.md").exists());
     }
 
-    // === append_gitignore_entries ===
+    #[test]
+    fn install_assets_writes_embedded_files() {
+        let (tmp, generator) = setup();
+        let result = generator.install_claude_code_assets().expect("install");
+        assert!(result);
+
+        assert!(
+            tmp.path()
+                .join(".claude")
+                .join("commands")
+                .join("cupola")
+                .join("spec-design.md")
+                .exists()
+        );
+        assert!(
+            tmp.path()
+                .join(".cupola")
+                .join("settings")
+                .join("templates")
+                .join("steering")
+                .join("product.md")
+                .exists()
+        );
+        assert!(tmp.path().join(".cupola").join("steering").exists());
+    }
+
+    #[test]
+    fn install_assets_preserves_existing_file() {
+        let (tmp, generator) = setup();
+        let existing = tmp
+            .path()
+            .join(".claude")
+            .join("commands")
+            .join("cupola")
+            .join("spec-design.md");
+        fs::create_dir_all(existing.parent().expect("parent")).expect("create parent");
+        fs::write(&existing, "existing").expect("write");
+
+        let result = generator.install_claude_code_assets().expect("install");
+        assert!(result);
+        assert_eq!(fs::read_to_string(existing).expect("read"), "existing");
+    }
+
+    #[test]
+    fn install_assets_returns_false_when_everything_exists() {
+        let (_, generator) = setup();
+        generator.install_claude_code_assets().expect("first");
+        let result = generator.install_claude_code_assets().expect("second");
+        assert!(!result);
+    }
 
     #[test]
     fn gitignore_appends_entries_when_absent() {
         let (tmp, generator) = setup();
         let result = generator.append_gitignore_entries().expect("append");
-        assert!(result, "should return true when entries are appended");
+        assert!(result);
 
         let gitignore_path = tmp.path().join(".gitignore");
-        assert!(gitignore_path.exists(), ".gitignore should exist");
+        assert!(gitignore_path.exists());
         let content = fs::read_to_string(&gitignore_path).expect("read");
         assert!(content.contains(GITIGNORE_MARKER));
         assert!(content.contains(".cupola/cupola.db"));
@@ -440,8 +563,8 @@ mod tests {
         assert!(!gitignore_path.exists());
 
         let result = generator.append_gitignore_entries().expect("append");
-        assert!(result, "should return true when file is created");
-        assert!(gitignore_path.exists(), ".gitignore should be created");
+        assert!(result);
+        assert!(gitignore_path.exists());
     }
 
     #[test]
@@ -451,19 +574,30 @@ mod tests {
         fs::write(&gitignore_path, "# cupola\n.cupola/cupola.db\n").expect("write");
 
         let result = generator.append_gitignore_entries().expect("append");
-        assert!(!result, "should return false when marker already exists");
-
-        // 内容が変わっていないこと
-        let content = fs::read_to_string(&gitignore_path).expect("read");
-        assert_eq!(content, "# cupola\n.cupola/cupola.db\n");
+        assert!(!result);
+        assert_eq!(
+            fs::read_to_string(&gitignore_path).expect("read"),
+            "# cupola\n.cupola/cupola.db\n"
+        );
     }
 
-    // === generate_spec_directory ===
+    #[test]
+    fn gitignore_appends_to_existing_file_without_marker() {
+        let (tmp, generator) = setup();
+        let gitignore_path = tmp.path().join(".gitignore");
+        fs::write(&gitignore_path, "node_modules/\n").expect("write");
+
+        let result = generator.append_gitignore_entries().expect("append");
+        assert!(result);
+
+        let content = fs::read_to_string(&gitignore_path).expect("read");
+        assert!(content.contains("node_modules/"));
+        assert!(content.contains(GITIGNORE_MARKER));
+    }
 
     #[test]
     fn spec_directory_creates_files_when_absent() {
         let (tmp, generator) = setup();
-        // Create settings/templates/specs with init.json and requirements-init.md
         let tmpl_dir = tmp
             .path()
             .join(".cupola")
@@ -485,7 +619,7 @@ mod tests {
         let result = generator
             .generate_spec_directory(42, "Fix the bug", "ja")
             .expect("generate");
-        assert!(result, "should return true when directory is created");
+        assert!(result);
 
         let spec_dir = tmp.path().join(".cupola").join("specs").join("issue-42");
         assert!(spec_dir.join("spec.json").exists());
@@ -509,13 +643,12 @@ mod tests {
         let result = generator
             .generate_spec_directory(42, "Fix the bug", "ja")
             .expect("generate");
-        assert!(!result, "should return false when directory exists");
+        assert!(!result);
     }
 
     #[test]
     fn spec_directory_works_without_templates() {
         let (tmp, generator) = setup();
-        // No template files - should use inline fallback
         let result = generator
             .generate_spec_directory(99, "New feature", "ja")
             .expect("generate");
@@ -527,22 +660,5 @@ mod tests {
 
         let req = fs::read_to_string(spec_dir.join("requirements.md")).expect("read");
         assert!(req.contains("New feature"));
-    }
-
-    #[test]
-    fn gitignore_appends_to_existing_file_without_marker() {
-        let (tmp, generator) = setup();
-        let gitignore_path = tmp.path().join(".gitignore");
-        fs::write(&gitignore_path, "node_modules/\n").expect("write");
-
-        let result = generator.append_gitignore_entries().expect("append");
-        assert!(result, "should return true when entries are appended");
-
-        let content = fs::read_to_string(&gitignore_path).expect("read");
-        assert!(
-            content.contains("node_modules/"),
-            "existing content preserved"
-        );
-        assert!(content.contains(GITIGNORE_MARKER), "cupola marker added");
     }
 }
