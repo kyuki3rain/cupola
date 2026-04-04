@@ -20,12 +20,13 @@ Clean Architecture (4 layers). Dependencies point inward only.
 
 | Purpose | Crate | Pattern |
 |---------|-------|---------|
-| CLI | clap (derive) | Core subcommands include: start / stop / init / status / doctor |
+| CLI | clap (derive) | Subcommands: start / stop / init / status / doctor / cleanup / logs |
 | GitHub REST | octocrab | Personal token authentication |
 | GitHub GraphQL | reqwest + serde_json | Direct POST, Value parsing |
 | DB | rusqlite | Arc<Mutex<Connection>>, spawn_blocking |
 | Logging | tracing + tracing-appender | Structured logging, date-based file output |
 | Error | thiserror (domain/app) + anyhow (adapter/bootstrap) | Layer-specific usage |
+| i18n | rust-i18n | GitHub comments and prompt localization |
 
 ## Development Standards
 
@@ -37,7 +38,7 @@ Clean Architecture (4 layers). Dependencies point inward only.
 ### Code Quality
 - `cargo clippy -- -D warnings` (all warnings treated as errors)
 - `cargo fmt` (unified formatting via rustfmt)
-- `[lints.clippy] all = "warn"` in Cargo.toml
+- `[lints.clippy] all = "warn"`, `expect_used = "deny"` in Cargo.toml
 
 ### Testing
 - Unit tests: `#[cfg(test)]` blocks within each module
@@ -56,9 +57,14 @@ cargo build          # Build
 cargo test           # Run all tests
 cargo clippy         # Static analysis
 cargo fmt --check    # Format check
-cargo run -- start   # Start polling loop
-cargo run -- init    # Initialize SQLite schema
-cargo run -- status  # List Issue states
+cargo run -- start        # Start polling loop (foreground)
+cargo run -- start -d     # Start as daemon (background)
+cargo run -- stop         # Stop daemon (SIGTERM → SIGKILL)
+cargo run -- init         # Initialize SQLite schema + steering files
+cargo run -- status       # List Issue states
+cargo run -- doctor       # Validate config, GitHub, git
+cargo run -- cleanup      # Remove worktrees for Cancelled issues
+cargo run -- logs         # View log files
 ```
 
 ## Key Technical Decisions
@@ -66,3 +72,5 @@ cargo run -- status  # List Issue states
 - **std::process vs tokio::process**: Adopted std::process + try_wait() for natural integration with the polling loop. stdout/stderr accumulated in separate threads
 - **Single GitHubClient trait**: Hides REST/GraphQL distinction from the application layer. Composed using the facade pattern
 - **Event batch application**: Collects all events within a polling cycle and applies them in batch, prioritizing IssueClosed
+- **Daemon mode**: Re-exec strategy (`--daemon-child`) to avoid fork() inside tokio runtime. PID file based lifecycle management
+- **Session management**: HashMap of issue_id → running process, with concurrent session limiting and stall detection
