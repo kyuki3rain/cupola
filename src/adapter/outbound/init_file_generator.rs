@@ -295,6 +295,9 @@ impl InitFileGenerator {
         }
 
         let steering_dir = self.base_dir.join(".cupola").join("steering");
+        if !steering_dir.exists() {
+            wrote_any = true;
+        }
         std::fs::create_dir_all(&steering_dir).with_context(|| {
             format!(
                 "failed to create steering directory at {}",

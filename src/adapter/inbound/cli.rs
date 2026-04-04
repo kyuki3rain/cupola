@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+use crate::application::init_agent::InitAgent as AppInitAgent;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "cupola",
@@ -17,6 +19,14 @@ pub struct Cli {
 pub enum InitAgent {
     #[value(name = "claude-code")]
     ClaudeCode,
+}
+
+impl From<InitAgent> for AppInitAgent {
+    fn from(value: InitAgent) -> Self {
+        match value {
+            InitAgent::ClaudeCode => AppInitAgent::ClaudeCode,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]

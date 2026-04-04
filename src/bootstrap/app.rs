@@ -83,7 +83,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             let db = SqliteConnection::open(&db_path).context("failed to open SQLite database")?;
             let file_gen = InitFileGenerator::new(base_dir.clone());
             let runner = ProcessCommandRunner;
-            let uc = InitUseCase::new(base_dir, db_existed, db, file_gen, runner, agent);
+            let uc = InitUseCase::new(base_dir, db_existed, db, file_gen, runner, agent.into());
             let report = uc.run()?;
 
             println!("cupola init completed:");

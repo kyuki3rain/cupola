@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::adapter::inbound::cli::InitAgent;
+use crate::application::init_agent::InitAgent;
 use crate::application::port::command_runner::CommandRunner;
 use crate::application::port::db_initializer::DbInitializer;
 use crate::application::port::file_generator::FileGenerator;
