@@ -1,6 +1,6 @@
 # AI-DLC and Spec-Driven Development
 
-Kiro-style Spec Driven Development implementation on AI-DLC (AI Development Life Cycle)
+Cupola Spec-Driven Development on AI-DLC (AI Development Life Cycle)
 
 ## Project Context
 
@@ -16,31 +16,22 @@ Kiro-style Spec Driven Development implementation on AI-DLC (AI Development Life
 
 ### Active Specifications
 - Check `.cupola/specs/` for active specifications
-- Use `/kiro:spec-status [feature-name]` to check progress
+- Spec id follows `issue-{number}` naming (created by Cupola CLI)
 
 ## Development Guidelines
 - Think in English, generate responses in Japanese. All Markdown content written to project files (e.g., requirements.md, design.md, tasks.md, research.md, validation reports) MUST be written in the target language configured for this specification (see spec.json.language).
 
 ## Minimal Workflow
-- Phase 0 (optional): `/kiro:steering`, `/kiro:steering-custom`
-- Phase 1 (Specification):
-  - `/kiro:spec-init "description"`
-  - `/kiro:spec-requirements {feature}`
-  - `/kiro:validate-gap {feature}` (optional: for existing codebase)
-  - `/kiro:spec-design {feature} [-y]`
-  - `/kiro:validate-design {feature}` (optional: design review)
-  - `/kiro:spec-tasks {feature} [-y]`
-- Phase 2 (Implementation): `/kiro:spec-impl {feature} [tasks]`
-  - `/kiro:validate-impl {feature}` (optional: after implementation)
-- Progress check: `/kiro:spec-status {feature}` (use anytime)
+- Phase 0 (optional): `/cupola:steering`
+- Phase 1 (Specification): `/cupola:spec-design {spec-id}` (generates requirements + design + tasks in one pass)
+- Phase 2 (Implementation): `/cupola:spec-impl {spec-id} [tasks]`
+- Archival: `/cupola:spec-compress` (summarize completed specs)
 
 ## Development Rules
-- 3-phase approval workflow: Requirements → Design → Tasks → Implementation
-- Human review required each phase; use `-y` only for intentional fast-track
-- Keep steering current and verify alignment with `/kiro:spec-status`
+- Design artifacts are reviewed via PR (single approval gate)
 - Follow the user's instructions precisely, and within that scope act autonomously: gather the necessary context and complete the requested work end-to-end in this run, asking questions only when essential information is missing or the instructions are critically ambiguous.
 
 ## Steering Configuration
 - Load entire `.cupola/steering/` as project memory
 - Default files: `product.md`, `tech.md`, `structure.md`
-- Custom files are supported (managed via `/kiro:steering-custom`)
+- Custom files are supported (managed via `/cupola:steering`)

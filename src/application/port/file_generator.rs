@@ -9,4 +9,11 @@ pub trait FileGenerator: Send + Sync {
     fn copy_steering_templates(&self) -> Result<bool>;
     /// .gitignore に cupola エントリを追記する（冪等）。
     fn append_gitignore_entries(&self) -> Result<bool>;
+    /// spec ディレクトリ（spec.json + requirements.md）を生成する（冪等）。
+    fn generate_spec_directory(
+        &self,
+        issue_number: u64,
+        issue_body: &str,
+        language: &str,
+    ) -> Result<bool>;
 }

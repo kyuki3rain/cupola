@@ -92,6 +92,11 @@ impl SqliteConnection {
         // Migration: add ci_fix_count column for existing databases
         Self::run_add_column_migration(&conn, "ci_fix_count INTEGER NOT NULL DEFAULT 0")?;
 
+        // Migration: backfill NULL feature_name with deterministic issue-{number}
+        conn.execute_batch(
+            "UPDATE issues SET feature_name = 'issue-' || github_issue_number WHERE feature_name IS NULL;"
+        ).context("failed to backfill feature_name")?;
+
         Ok(())
     }
 

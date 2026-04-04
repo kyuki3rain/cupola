@@ -271,7 +271,7 @@ fn check_steering(steering_path: &Path) -> DoctorCheckResult {
         DoctorCheckResult {
             name: "steering".to_string(),
             status: CheckStatus::Fail(
-                "steering ディレクトリにファイルが見つかりません。`/kiro:steering` でステアリングファイルを作成してください".to_string(),
+                "steering ディレクトリにファイルが見つかりません。`/cupola:steering` でステアリングファイルを作成してください".to_string(),
             ),
         }
     }

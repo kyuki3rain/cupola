@@ -122,9 +122,6 @@ impl<I: IssueRepository, W: GitWorktree> CleanupUseCase<I, W> {
             if updated.impl_pr_number.take().is_some() {
                 need_update = true;
             }
-            if updated.feature_name.take().is_some() {
-                need_update = true;
-            }
         } else {
             tracing::warn!(
                 issue_number = n,
@@ -286,7 +283,7 @@ mod tests {
             ci_fix_count: 0,
             current_pid: None,
             error_message: Some("error".to_string()),
-            feature_name: Some("feature".to_string()),
+            feature_name: "issue-10".to_string(),
             fixing_causes: vec![],
             weight: crate::domain::task_weight::TaskWeight::Medium,
             created_at: chrono::Utc::now(),
@@ -325,7 +322,7 @@ mod tests {
         assert!(updates[0].worktree_path.is_none());
         assert!(updates[0].design_pr_number.is_none());
         assert!(updates[0].impl_pr_number.is_none());
-        assert!(updates[0].feature_name.is_none());
+        assert_eq!(updates[0].feature_name, "issue-10");
     }
 
     #[tokio::test]
@@ -341,7 +338,7 @@ mod tests {
             ci_fix_count: 0,
             current_pid: None,
             error_message: None,
-            feature_name: None,
+            feature_name: "issue-99".to_string(),
             fixing_causes: vec![],
             weight: crate::domain::task_weight::TaskWeight::Medium,
             created_at: chrono::Utc::now(),

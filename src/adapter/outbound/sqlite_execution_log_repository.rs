@@ -162,7 +162,7 @@ mod tests {
             ci_fix_count: 0,
             current_pid: None,
             error_message: None,
-            feature_name: None,
+            feature_name: "issue-0".to_string(),
             fixing_causes: vec![],
             weight: crate::domain::task_weight::TaskWeight::Medium,
             created_at: chrono::Utc::now(),

@@ -59,6 +59,8 @@ pub enum Command {
         #[arg(long, default_value = ".cupola/cupola.toml")]
         config: PathBuf,
     },
+    /// Compress completed specs (summarize and archive)
+    Compress,
     /// Show log file contents
     Logs {
         /// Config file path
