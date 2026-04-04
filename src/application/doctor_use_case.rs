@@ -97,9 +97,7 @@ fn check_git(runner: &dyn CommandRunner) -> DoctorCheckResult {
             section: DoctorSection::StartReadiness,
             name: "git".to_string(),
             status: CheckStatus::Fail(format!("git の確認中にエラーが発生しました: {e}")),
-            remediation: Some(
-                "git をインストールしてください: https://git-scm.com/".to_string(),
-            ),
+            remediation: Some("git をインストールしてください: https://git-scm.com/".to_string()),
         },
         Ok(output) if output.success => DoctorCheckResult {
             section: DoctorSection::StartReadiness,
@@ -110,12 +108,8 @@ fn check_git(runner: &dyn CommandRunner) -> DoctorCheckResult {
         Ok(_) => DoctorCheckResult {
             section: DoctorSection::StartReadiness,
             name: "git".to_string(),
-            status: CheckStatus::Fail(
-                "git がインストールされていません".to_string(),
-            ),
-            remediation: Some(
-                "git をインストールしてください: https://git-scm.com/".to_string(),
-            ),
+            status: CheckStatus::Fail("git がインストールされていません".to_string()),
+            remediation: Some("git をインストールしてください: https://git-scm.com/".to_string()),
         },
     }
 }
@@ -125,7 +119,9 @@ fn check_github_token(runner: &dyn CommandRunner) -> DoctorCheckResult {
         Err(e) => DoctorCheckResult {
             section: DoctorSection::StartReadiness,
             name: "github token".to_string(),
-            status: CheckStatus::Fail(format!("GitHub トークンの確認中にエラーが発生しました: {e}")),
+            status: CheckStatus::Fail(format!(
+                "GitHub トークンの確認中にエラーが発生しました: {e}"
+            )),
             remediation: Some("`gh auth login` を実行してください".to_string()),
         },
         Ok(output) if output.success => DoctorCheckResult {
@@ -137,9 +133,7 @@ fn check_github_token(runner: &dyn CommandRunner) -> DoctorCheckResult {
         Ok(_) => DoctorCheckResult {
             section: DoctorSection::StartReadiness,
             name: "github token".to_string(),
-            status: CheckStatus::Fail(
-                "GitHub トークンを取得できません".to_string(),
-            ),
+            status: CheckStatus::Fail("GitHub トークンを取得できません".to_string()),
             remediation: Some("`gh auth login` を実行してください".to_string()),
         },
     }
@@ -151,9 +145,7 @@ fn check_claude(runner: &dyn CommandRunner) -> DoctorCheckResult {
             section: DoctorSection::StartReadiness,
             name: "claude CLI".to_string(),
             status: CheckStatus::Fail(format!("claude CLI の確認中にエラーが発生しました: {e}")),
-            remediation: Some(
-                "https://claude.ai/code からインストールしてください".to_string(),
-            ),
+            remediation: Some("https://claude.ai/code からインストールしてください".to_string()),
         },
         Ok(output) if output.success => DoctorCheckResult {
             section: DoctorSection::StartReadiness,
@@ -167,9 +159,7 @@ fn check_claude(runner: &dyn CommandRunner) -> DoctorCheckResult {
             status: CheckStatus::Fail(
                 "claude CLI がインストールされていないか正常に動作しません".to_string(),
             ),
-            remediation: Some(
-                "https://claude.ai/code からインストールしてください".to_string(),
-            ),
+            remediation: Some("https://claude.ai/code からインストールしてください".to_string()),
         },
     }
 }
@@ -186,9 +176,7 @@ fn check_db(db_path: &Path) -> DoctorCheckResult {
         DoctorCheckResult {
             section: DoctorSection::StartReadiness,
             name: "database".to_string(),
-            status: CheckStatus::Fail(
-                "cupola.db が見つかりません".to_string(),
-            ),
+            status: CheckStatus::Fail("cupola.db が見つかりません".to_string()),
             remediation: Some("`cupola init` を実行してください".to_string()),
         }
     }
@@ -277,9 +265,7 @@ fn check_gh_label(runner: &dyn CommandRunner) -> DoctorCheckResult {
             section: DoctorSection::OperationalReadiness,
             name: "agent:ready ラベル".to_string(),
             status: CheckStatus::Warn(format!("ラベル一覧の取得に失敗しました: {e}")),
-            remediation: Some(
-                "`gh label create agent:ready` を実行してください".to_string(),
-            ),
+            remediation: Some("`gh label create agent:ready` を実行してください".to_string()),
         },
         Ok(output) if !output.success => DoctorCheckResult {
             section: DoctorSection::OperationalReadiness,
@@ -287,17 +273,13 @@ fn check_gh_label(runner: &dyn CommandRunner) -> DoctorCheckResult {
             status: CheckStatus::Warn(
                 "ラベル一覧の取得に失敗しました。gh の認証状態を確認してください".to_string(),
             ),
-            remediation: Some(
-                "`gh label create agent:ready` を実行してください".to_string(),
-            ),
+            remediation: Some("`gh label create agent:ready` を実行してください".to_string()),
         },
         Ok(output) => match parse_label_json(&output.stdout) {
             Ok(true) => DoctorCheckResult {
                 section: DoctorSection::OperationalReadiness,
                 name: "agent:ready ラベル".to_string(),
-                status: CheckStatus::Ok(
-                    "agent:ready ラベルがリポジトリに存在します".to_string(),
-                ),
+                status: CheckStatus::Ok("agent:ready ラベルがリポジトリに存在します".to_string()),
                 remediation: None,
             },
             Ok(false) => DoctorCheckResult {
@@ -306,17 +288,13 @@ fn check_gh_label(runner: &dyn CommandRunner) -> DoctorCheckResult {
                 status: CheckStatus::Warn(
                     "agent:ready ラベルがリポジトリに存在しません".to_string(),
                 ),
-                remediation: Some(
-                    "`gh label create agent:ready` を実行してください".to_string(),
-                ),
+                remediation: Some("`gh label create agent:ready` を実行してください".to_string()),
             },
             Err(e) => DoctorCheckResult {
                 section: DoctorSection::OperationalReadiness,
                 name: "agent:ready ラベル".to_string(),
                 status: CheckStatus::Warn(format!("ラベル一覧の取得に失敗しました: {e}")),
-                remediation: Some(
-                    "`gh label create agent:ready` を実行してください".to_string(),
-                ),
+                remediation: Some("`gh label create agent:ready` を実行してください".to_string()),
             },
         },
     }
@@ -513,7 +491,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("cupola.toml");
 
-        let loader = MockConfigLoader::validation_failed("polling_interval_secs must be at least 10");
+        let loader =
+            MockConfigLoader::validation_failed("polling_interval_secs must be at least 10");
         let result = check_config(&loader, &path);
         assert!(matches!(result.status, CheckStatus::Fail(_)));
         assert!(matches!(result.section, DoctorSection::StartReadiness));
@@ -529,7 +508,10 @@ mod tests {
 
         let result = check_steering(dir.path());
         assert!(matches!(result.status, CheckStatus::Ok(_)));
-        assert!(matches!(result.section, DoctorSection::OperationalReadiness));
+        assert!(matches!(
+            result.section,
+            DoctorSection::OperationalReadiness
+        ));
         assert!(result.remediation.is_none());
     }
 
@@ -539,7 +521,10 @@ mod tests {
 
         let result = check_steering(dir.path());
         assert!(matches!(result.status, CheckStatus::Warn(_)));
-        assert!(matches!(result.section, DoctorSection::OperationalReadiness));
+        assert!(matches!(
+            result.section,
+            DoctorSection::OperationalReadiness
+        ));
         assert!(result.remediation.is_some());
     }
 
@@ -618,8 +603,8 @@ mod tests {
 
     #[test]
     fn check_github_token_with_success_returns_ok() {
-        let runner = MockCommandRunner::new()
-            .with_success("gh", &["auth", "token"], "ghp_xxxxxxxxxxxx");
+        let runner =
+            MockCommandRunner::new().with_success("gh", &["auth", "token"], "ghp_xxxxxxxxxxxx");
         let result = check_github_token(&runner);
         assert!(matches!(result.status, CheckStatus::Ok(_)));
         assert!(matches!(result.section, DoctorSection::StartReadiness));
@@ -649,8 +634,8 @@ mod tests {
 
     #[test]
     fn check_claude_with_success_returns_ok() {
-        let runner = MockCommandRunner::new()
-            .with_success("claude", &["--version"], "Claude CLI 1.0.0");
+        let runner =
+            MockCommandRunner::new().with_success("claude", &["--version"], "Claude CLI 1.0.0");
         let result = check_claude(&runner);
         assert!(matches!(result.status, CheckStatus::Ok(_)));
         assert!(matches!(result.section, DoctorSection::StartReadiness));
@@ -680,7 +665,10 @@ mod tests {
 
         let result = check_assets(&commands_path, &settings_path);
         assert!(matches!(result.status, CheckStatus::Ok(_)));
-        assert!(matches!(result.section, DoctorSection::OperationalReadiness));
+        assert!(matches!(
+            result.section,
+            DoctorSection::OperationalReadiness
+        ));
         assert!(result.remediation.is_none());
     }
 
@@ -693,7 +681,10 @@ mod tests {
 
         let result = check_assets(&commands_path, &settings_path);
         assert!(matches!(result.status, CheckStatus::Warn(_)));
-        assert!(matches!(result.section, DoctorSection::OperationalReadiness));
+        assert!(matches!(
+            result.section,
+            DoctorSection::OperationalReadiness
+        ));
         assert!(result.remediation.is_some());
         let rem = result.remediation.unwrap();
         assert!(rem.contains("cupola init"));
@@ -758,7 +749,10 @@ mod tests {
         );
         let result = check_gh_label(&runner);
         assert!(matches!(result.status, CheckStatus::Ok(_)));
-        assert!(matches!(result.section, DoctorSection::OperationalReadiness));
+        assert!(matches!(
+            result.section,
+            DoctorSection::OperationalReadiness
+        ));
         assert!(result.remediation.is_none());
     }
 
