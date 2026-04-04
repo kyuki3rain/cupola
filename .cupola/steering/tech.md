@@ -27,6 +27,7 @@ Clean Architecture (4 layers). Dependencies point inward only.
 | Logging | tracing + tracing-appender | Structured logging, date-based file output |
 | Error | thiserror (domain/app) + anyhow (adapter/bootstrap) | Layer-specific usage |
 | i18n | rust-i18n | GitHub comments and prompt localization |
+| Signal | nix | POSIX signal sending (SIGTERM/SIGKILL) via `NixSignalSender` implementing `SignalPort` |
 
 ## Development Standards
 
@@ -74,3 +75,5 @@ cargo run -- logs         # View log files
 - **Event batch application**: Collects all events within a polling cycle and applies them in batch, prioritizing IssueClosed
 - **Daemon mode**: Re-exec strategy (`--daemon-child`) to avoid fork() inside tokio runtime. PID file based lifecycle management
 - **Session management**: HashMap of issue_id → running process, with concurrent session limiting and stall detection
+- **Doctor sections**: `DoctorUseCase` outputs results split into `StartReadiness` (prerequisites for starting the daemon) and `OperationalReadiness` (runtime health checks), each check carrying an optional `remediation` hint
+- **Association guard**: `check_label_actor` in `application/association_guard.rs` verifies the `agent:ready` label actor's GitHub association against `TrustedAssociations` config. `All` skips the API call; `Specific(...)` fetches Timeline + Permission APIs and removes the label + posts a comment on rejection
