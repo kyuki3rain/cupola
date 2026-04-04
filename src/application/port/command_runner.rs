@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use anyhow::Result;
 
 /// 外部コマンド実行の結果
@@ -15,7 +17,12 @@ pub struct CommandOutput {
 pub trait CommandRunner: Send + Sync {
     /// プログラム名と引数を受け取り、実行結果を返す。
     /// コマンドが存在しない場合も `CommandOutput { success: false, ... }` を返す（パニックしない）
-    fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput>;
+    fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput> {
+        self.run_in_dir(program, args, Path::new("."))
+    }
+
+    /// 指定ディレクトリでプログラムを実行し、結果を返す。
+    fn run_in_dir(&self, program: &str, args: &[&str], dir: &Path) -> Result<CommandOutput>;
 }
 
 #[cfg(test)]
@@ -82,7 +89,7 @@ pub mod test_support {
     }
 
     impl CommandRunner for MockCommandRunner {
-        fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput> {
+        fn run_in_dir(&self, program: &str, args: &[&str], _dir: &Path) -> Result<CommandOutput> {
             let key = Self::make_key(program, args);
             Ok(self
                 .responses

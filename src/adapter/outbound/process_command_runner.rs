@@ -1,3 +1,6 @@
+use std::path::Path;
+use std::{io, process::Command};
+
 use anyhow::Result;
 
 use crate::application::port::command_runner::{CommandOutput, CommandRunner};
@@ -6,19 +9,36 @@ use crate::application::port::command_runner::{CommandOutput, CommandRunner};
 pub struct ProcessCommandRunner;
 
 impl CommandRunner for ProcessCommandRunner {
-    fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput> {
-        match std::process::Command::new(program).args(args).output() {
+    fn run_in_dir(&self, program: &str, args: &[&str], dir: &Path) -> Result<CommandOutput> {
+        if !dir.is_dir() {
+            return Ok(CommandOutput {
+                success: false,
+                stdout: String::new(),
+                stderr: format!("invalid working directory: {}", dir.display()),
+            });
+        }
+
+        match Command::new(program).args(args).current_dir(dir).output() {
             Ok(output) => Ok(CommandOutput {
                 success: output.status.success(),
                 stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             }),
-            Err(_) => Ok(CommandOutput {
-                success: false,
-                stdout: String::new(),
-                stderr: format!("{program}: command not found"),
-            }),
+            Err(err) => Ok(map_spawn_error(program, err)),
         }
+    }
+}
+
+fn map_spawn_error(program: &str, err: io::Error) -> CommandOutput {
+    let stderr = match err.kind() {
+        io::ErrorKind::NotFound => format!("{program}: command not found"),
+        _ => err.to_string(),
+    };
+
+    CommandOutput {
+        success: false,
+        stdout: String::new(),
+        stderr,
     }
 }
 
@@ -55,5 +75,20 @@ mod tests {
             .run("__cupola_nonexistent_command__", &[])
             .expect("run should not error even for missing commands");
         assert!(!output.success);
+        assert!(output.stderr.contains("command not found"));
+    }
+
+    #[test]
+    fn run_in_dir_reports_invalid_working_directory() {
+        let runner = ProcessCommandRunner;
+        let output = runner
+            .run_in_dir(
+                "git",
+                &["--version"],
+                Path::new("/definitely/missing/cupola-dir"),
+            )
+            .expect("run should not error even for invalid dir");
+        assert!(!output.success);
+        assert!(output.stderr.contains("invalid working directory"));
     }
 }

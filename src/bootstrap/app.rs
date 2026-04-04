@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
-use crate::adapter::inbound::cli::{Cli, Command};
+use crate::adapter::inbound::cli::{Cli, Command, InitAgent};
 use crate::adapter::outbound::claude_code_process::ClaudeCodeProcess;
 use crate::adapter::outbound::git_worktree_manager::GitWorktreeManager;
 use crate::adapter::outbound::github_client_impl::GitHubClientImpl;
@@ -73,7 +73,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
 
-        Command::Init => {
+        Command::Init { agent } => {
             let base_dir = std::env::current_dir().context("failed to get current directory")?;
             let cupola_dir = base_dir.join(".cupola");
             std::fs::create_dir_all(&cupola_dir)
@@ -82,7 +82,8 @@ pub async fn run(cli: Cli) -> Result<()> {
             let db_existed = db_path.exists();
             let db = SqliteConnection::open(&db_path).context("failed to open SQLite database")?;
             let file_gen = InitFileGenerator::new(base_dir.clone());
-            let uc = InitUseCase::new(base_dir, db_existed, db, file_gen);
+            let runner = ProcessCommandRunner;
+            let uc = InitUseCase::new(base_dir, db_existed, db, file_gen, runner, agent.into());
             let report = uc.run()?;
 
             println!("cupola init completed:");
@@ -103,9 +104,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                 }
             );
             println!(
-                "  steering templates: {}",
-                if report.steering_copied {
-                    "copied"
+                "  agent assets: {}",
+                if report.agent_assets_installed {
+                    "installed"
                 } else {
                     "skipped"
                 }
@@ -116,6 +117,19 @@ pub async fn run(cli: Cli) -> Result<()> {
                     "updated"
                 } else {
                     "skipped (already has cupola entries)"
+                }
+            );
+            println!(
+                "  steering bootstrap: {}",
+                match report.steering_bootstrap_message {
+                    Some(ref msg) => msg,
+                    None => "completed",
+                }
+            );
+            println!(
+                "  target agent: {}",
+                match agent {
+                    InitAgent::ClaudeCode => "claude-code",
                 }
             );
             Ok(())
