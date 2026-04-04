@@ -201,7 +201,7 @@ cupola --version
 | `polling_interval_secs` | u64 | `60` | ポーリング間隔（秒） |
 | `max_retries` | u32 | `3` | 最大リトライ回数 |
 | `stall_timeout_secs` | u64 | `1800` | 停滞検知タイムアウト（秒） |
-| `max_concurrent_sessions` | u32（任意） | 無制限 | 同時実行する Cupola セッション数の上限 |
+| `max_concurrent_sessions` | u32 | `3` | 同時実行する Cupola セッション数の上限 |
 | `model` | String | `"sonnet"` | エージェントセッションで使用するデフォルト Claude モデル |
 | `[log] level` | String | `"info"` | ログレベル |
 | `[log] dir` | String | —（任意） | ログ出力ディレクトリ |
@@ -216,7 +216,7 @@ language = "ja"
 polling_interval_secs = 60
 max_retries = 3
 stall_timeout_secs = 1800
-max_concurrent_sessions = 4  # 省略時は無制限
+max_concurrent_sessions = 4  # デフォルト: 3
 model = "sonnet"
 
 [log]

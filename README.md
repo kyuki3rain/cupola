@@ -201,7 +201,7 @@ The configuration file is located at `.cupola/cupola.toml`.
 | `polling_interval_secs` | u64 | `60` | Polling interval (seconds) |
 | `max_retries` | u32 | `3` | Maximum retry count |
 | `stall_timeout_secs` | u64 | `1800` | Stall detection timeout (seconds) |
-| `max_concurrent_sessions` | u32 (optional) | unlimited | Maximum number of concurrent Cupola sessions |
+| `max_concurrent_sessions` | u32 | `3` | Maximum number of concurrent Cupola sessions |
 | `model` | String | `"sonnet"` | Default Claude model for agent sessions |
 | `[log] level` | String | `"info"` | Log level |
 | `[log] dir` | String | — (optional) | Log output directory |
@@ -216,7 +216,7 @@ language = "ja"
 polling_interval_secs = 60
 max_retries = 3
 stall_timeout_secs = 1800
-max_concurrent_sessions = 4  # unlimited if omitted
+max_concurrent_sessions = 4  # default: 3
 model = "sonnet"
 
 [log]

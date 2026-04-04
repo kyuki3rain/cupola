@@ -122,8 +122,9 @@ mod tests {
 
     #[test]
     fn validate_accepts_none_max_concurrent_sessions() {
-        let config =
+        let mut config =
             Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.max_concurrent_sessions = None;
         assert!(config.validate().is_ok());
     }
 
