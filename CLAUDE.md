@@ -7,6 +7,7 @@ Kiro-style Spec Driven Development implementation on AI-DLC (AI Development Life
 ### Paths
 - Steering: `.cupola/steering/`
 - Specs: `.cupola/specs/`
+- ADR: `docs/adr/`（設計判断時に参照すること）
 
 ### Steering vs Specification
 
