@@ -1200,12 +1200,20 @@ where
                         #[cfg(unix)]
                         {
                             if pid == 0 || pid > i32::MAX as u32 {
-                                tracing::warn!(issue_id = issue.id, pid, "invalid PID, skipping kill");
+                                tracing::warn!(
+                                    issue_id = issue.id,
+                                    pid,
+                                    "invalid PID, skipping kill"
+                                );
                             } else if is_process_alive(pid) {
                                 let nix_pid = Pid::from_raw(pid as i32);
                                 match kill(nix_pid, Signal::SIGKILL) {
                                     Ok(()) => {
-                                        tracing::info!(issue_id = issue.id, pid, "killed orphan process on startup");
+                                        tracing::info!(
+                                            issue_id = issue.id,
+                                            pid,
+                                            "killed orphan process on startup"
+                                        );
                                     }
                                     Err(e) => {
                                         tracing::warn!(issue_id = issue.id, pid, error = %e, "failed to kill orphan process, continuing");
@@ -3204,9 +3212,11 @@ mod tests {
         let github = MockGitHub::new(false, None, vec![], false);
         let mut uc = make_uc(github, repo);
         // タイムアウトを設定して、graceful_shutdown が 1 秒以内に完了することを確認
-        let result =
-            tokio::time::timeout(Duration::from_secs(1), uc.graceful_shutdown()).await;
-        assert!(result.is_ok(), "graceful_shutdown should complete quickly with no sessions");
+        let result = tokio::time::timeout(Duration::from_secs(1), uc.graceful_shutdown()).await;
+        assert!(
+            result.is_ok(),
+            "graceful_shutdown should complete quickly with no sessions"
+        );
     }
 
     // --- is_process_alive unit tests (Task 3.2) ---
@@ -3215,10 +3225,7 @@ mod tests {
     #[test]
     fn is_process_alive_returns_true_for_own_process() {
         let own_pid = std::process::id();
-        assert!(
-            is_process_alive(own_pid),
-            "own process should be alive"
-        );
+        assert!(is_process_alive(own_pid), "own process should be alive");
     }
 
     #[cfg(unix)]
@@ -3278,7 +3285,10 @@ mod tests {
         let uc = make_uc(github, repo);
         uc.recover_on_startup().await;
         let updates = updated.lock().unwrap();
-        assert!(updates.is_empty(), "no update should occur for issue with no PID");
+        assert!(
+            updates.is_empty(),
+            "no update should occur for issue with no PID"
+        );
     }
 
     #[cfg(unix)]
@@ -3299,10 +3309,7 @@ mod tests {
 
         // プロセスが kill されたことを確認
         let _ = child.wait(); // wait を呼ぶことでゾンビを回収
-        assert!(
-            !is_process_alive(pid),
-            "process should have been killed"
-        );
+        assert!(!is_process_alive(pid), "process should have been killed");
         let updates = updated.lock().unwrap();
         assert_eq!(updates.len(), 1, "issue should be updated");
         assert!(
