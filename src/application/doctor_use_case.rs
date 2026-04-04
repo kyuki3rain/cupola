@@ -47,6 +47,8 @@ impl<C: ConfigLoader, R: CommandRunner> DoctorUseCase<C, R> {
         let commands_path = Path::new(".claude").join("commands").join("cupola");
         let settings_path = Path::new(".cupola").join("settings");
 
+        let [agent_ready_result, weight_labels_result] = check_labels(&self.command_runner);
+
         vec![
             // Start Readiness
             check_config(&self.config_loader, config_path),
@@ -57,8 +59,8 @@ impl<C: ConfigLoader, R: CommandRunner> DoctorUseCase<C, R> {
             // Operational Readiness
             check_assets(&commands_path, &settings_path),
             check_steering(&steering_path),
-            check_gh_label(&self.command_runner),
-            check_weight_labels(&self.command_runner),
+            agent_ready_result,
+            weight_labels_result,
         ]
     }
 }
@@ -273,128 +275,139 @@ struct LabelItem {
     name: String,
 }
 
-fn parse_label_json(stdout: &str) -> Result<bool, String> {
-    let items: Vec<LabelItem> =
-        serde_json::from_str(stdout).map_err(|e| format!("JSON パースエラー: {e}"))?;
-    Ok(items.iter().any(|item| item.name == "agent:ready"))
-}
-
-fn check_gh_label(runner: &dyn CommandRunner) -> DoctorCheckResult {
-    match runner.run("gh", &["label", "list", "--json", "name"]) {
-        Err(e) => DoctorCheckResult {
-            section: DoctorSection::OperationalReadiness,
-            name: "agent:ready ラベル".to_string(),
-            status: CheckStatus::Warn(format!("ラベル一覧の取得に失敗しました: {e}")),
-            remediation: Some("`gh label create agent:ready` を実行してください".to_string()),
-        },
-        Ok(output) if !output.success && output.stderr.contains("command not found") => {
+/// `gh label list` を1回呼び出し、agent:ready / weight:* の両チェック結果を返す
+fn check_labels(runner: &dyn CommandRunner) -> [DoctorCheckResult; 2] {
+    let gh_not_installed_results = || {
+        [
             DoctorCheckResult {
-                section: DoctorSection::OperationalReadiness,
-                name: "agent:ready ラベル".to_string(),
-                status: CheckStatus::Warn("gh CLI がインストールされていないため、ラベルを確認できません".to_string()),
-                remediation: Some(
-                    "gh CLI をインストールしてください: https://cli.github.com/".to_string(),
-                ),
-            }
-        }
-        Ok(output) if !output.success => DoctorCheckResult {
-            section: DoctorSection::OperationalReadiness,
-            name: "agent:ready ラベル".to_string(),
-            status: CheckStatus::Warn(
-                "ラベル一覧の取得に失敗しました。`gh auth login` で認証してください".to_string(),
-            ),
-            remediation: Some("`gh auth login` を実行してください".to_string()),
-        },
-        Ok(output) => match parse_label_json(&output.stdout) {
-            Ok(true) => DoctorCheckResult {
-                section: DoctorSection::OperationalReadiness,
-                name: "agent:ready ラベル".to_string(),
-                status: CheckStatus::Ok("agent:ready ラベルがリポジトリに存在します".to_string()),
-                remediation: None,
-            },
-            Ok(false) => DoctorCheckResult {
                 section: DoctorSection::OperationalReadiness,
                 name: "agent:ready ラベル".to_string(),
                 status: CheckStatus::Warn(
-                    "agent:ready ラベルがリポジトリに存在しません".to_string(),
+                    "gh CLI がインストールされていないため、ラベルを確認できません".to_string(),
                 ),
-                remediation: Some("`gh label create agent:ready` を実行してください".to_string()),
-            },
-            Err(e) => DoctorCheckResult {
-                section: DoctorSection::OperationalReadiness,
-                name: "agent:ready ラベル".to_string(),
-                status: CheckStatus::Warn(format!("ラベル一覧の取得に失敗しました: {e}")),
-                remediation: Some("`gh label create agent:ready` を実行してください".to_string()),
-            },
-        },
-    }
-}
-
-fn check_weight_labels(runner: &dyn CommandRunner) -> DoctorCheckResult {
-    match runner.run("gh", &["label", "list", "--json", "name"]) {
-        Err(e) => DoctorCheckResult {
-            section: DoctorSection::OperationalReadiness,
-            name: "weight:* ラベル".to_string(),
-            status: CheckStatus::Warn(format!("ラベル一覧の取得に失敗しました: {e}")),
-            remediation: Some(
-                "`gh label create weight:light && gh label create weight:heavy` を実行してください"
-                    .to_string(),
-            ),
-        },
-        Ok(output) if !output.success && output.stderr.contains("command not found") => {
-            DoctorCheckResult {
-                section: DoctorSection::OperationalReadiness,
-                name: "weight:* ラベル".to_string(),
-                status: CheckStatus::Warn("gh CLI がインストールされていないため、ラベルを確認できません".to_string()),
                 remediation: Some(
                     "gh CLI をインストールしてください: https://cli.github.com/".to_string(),
                 ),
-            }
+            },
+            DoctorCheckResult {
+                section: DoctorSection::OperationalReadiness,
+                name: "weight:* ラベル".to_string(),
+                status: CheckStatus::Warn(
+                    "gh CLI がインストールされていないため、ラベルを確認できません".to_string(),
+                ),
+                remediation: Some(
+                    "gh CLI をインストールしてください: https://cli.github.com/".to_string(),
+                ),
+            },
+        ]
+    };
+
+    let auth_failed_results = || {
+        [
+            DoctorCheckResult {
+                section: DoctorSection::OperationalReadiness,
+                name: "agent:ready ラベル".to_string(),
+                status: CheckStatus::Warn(
+                    "ラベル一覧の取得に失敗しました。`gh auth login` で認証してください"
+                        .to_string(),
+                ),
+                remediation: Some("`gh auth login` を実行してください".to_string()),
+            },
+            DoctorCheckResult {
+                section: DoctorSection::OperationalReadiness,
+                name: "weight:* ラベル".to_string(),
+                status: CheckStatus::Warn(
+                    "ラベル一覧の取得に失敗しました。`gh auth login` で認証してください"
+                        .to_string(),
+                ),
+                remediation: Some("`gh auth login` を実行してください".to_string()),
+            },
+        ]
+    };
+
+    let stdout = match runner.run("gh", &["label", "list", "--json", "name"]) {
+        Err(_) => return auth_failed_results(),
+        Ok(output) if !output.success && output.stderr.contains("command not found") => {
+            return gh_not_installed_results();
         }
-        Ok(output) if !output.success => DoctorCheckResult {
+        Ok(output) if !output.success => return auth_failed_results(),
+        Ok(output) => output.stdout,
+    };
+
+    let items: Vec<LabelItem> = match serde_json::from_str(&stdout) {
+        Ok(v) => v,
+        Err(e) => {
+            let msg = format!("ラベル一覧の取得に失敗しました: {e}");
+            return [
+                DoctorCheckResult {
+                    section: DoctorSection::OperationalReadiness,
+                    name: "agent:ready ラベル".to_string(),
+                    status: CheckStatus::Warn(msg.clone()),
+                    remediation: Some("`gh label create agent:ready` を実行してください".to_string()),
+                },
+                DoctorCheckResult {
+                    section: DoctorSection::OperationalReadiness,
+                    name: "weight:* ラベル".to_string(),
+                    status: CheckStatus::Warn(msg),
+                    remediation: Some(
+                        "`gh label create weight:light && gh label create weight:heavy` を実行してください"
+                            .to_string(),
+                    ),
+                },
+            ];
+        }
+    };
+
+    let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
+
+    let agent_ready = if names.contains(&"agent:ready") {
+        DoctorCheckResult {
+            section: DoctorSection::OperationalReadiness,
+            name: "agent:ready ラベル".to_string(),
+            status: CheckStatus::Ok("agent:ready ラベルがリポジトリに存在します".to_string()),
+            remediation: None,
+        }
+    } else {
+        DoctorCheckResult {
+            section: DoctorSection::OperationalReadiness,
+            name: "agent:ready ラベル".to_string(),
+            status: CheckStatus::Warn("agent:ready ラベルがリポジトリに存在しません".to_string()),
+            remediation: Some("`gh label create agent:ready` を実行してください".to_string()),
+        }
+    };
+
+    let has_light = names.contains(&"weight:light");
+    let has_heavy = names.contains(&"weight:heavy");
+    let weight = if has_light && has_heavy {
+        DoctorCheckResult {
             section: DoctorSection::OperationalReadiness,
             name: "weight:* ラベル".to_string(),
-            status: CheckStatus::Warn(
-                "ラベル一覧の取得に失敗しました。`gh auth login` で認証してください".to_string(),
+            status: CheckStatus::Ok(
+                "weight:light と weight:heavy ラベルがリポジトリに存在します".to_string(),
             ),
-            remediation: Some("`gh auth login` を実行してください".to_string()),
-        },
-        Ok(output) => {
-            let has_light = output.stdout.contains("\"weight:light\"");
-            let has_heavy = output.stdout.contains("\"weight:heavy\"");
-            if has_light && has_heavy {
-                DoctorCheckResult {
-                    section: DoctorSection::OperationalReadiness,
-                    name: "weight:* ラベル".to_string(),
-                    status: CheckStatus::Ok(
-                        "weight:light と weight:heavy ラベルがリポジトリに存在します".to_string(),
-                    ),
-                    remediation: None,
-                }
-            } else {
-                let missing: Vec<&str> = [
-                    (!has_light).then_some("weight:light"),
-                    (!has_heavy).then_some("weight:heavy"),
-                ]
-                .into_iter()
-                .flatten()
-                .collect();
-                let create_cmds: Vec<String> = missing
-                    .iter()
-                    .map(|l| format!("gh label create {l}"))
-                    .collect();
-                DoctorCheckResult {
-                    section: DoctorSection::OperationalReadiness,
-                    name: "weight:* ラベル".to_string(),
-                    status: CheckStatus::Warn(format!(
-                        "{} ラベルがリポジトリに存在しません",
-                        missing.join(", "),
-                    )),
-                    remediation: Some(format!("`{}` を実行してください", create_cmds.join(" && "))),
-                }
-            }
+            remediation: None,
         }
-    }
+    } else {
+        let missing: Vec<&str> = [
+            (!has_light).then_some("weight:light"),
+            (!has_heavy).then_some("weight:heavy"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let create_cmds: Vec<String> = missing.iter().map(|l| format!("gh label create {l}")).collect();
+        DoctorCheckResult {
+            section: DoctorSection::OperationalReadiness,
+            name: "weight:* ラベル".to_string(),
+            status: CheckStatus::Warn(format!(
+                "{} ラベルがリポジトリに存在しません",
+                missing.join(", ")
+            )),
+            remediation: Some(format!("`{}` を実行してください", create_cmds.join(" && "))),
+        }
+    };
+
+    [agent_ready, weight]
 }
 
 #[cfg(test)]
@@ -761,84 +774,67 @@ mod tests {
         assert!(result.remediation.is_some());
     }
 
-    // --- label JSON parse tests ---
+    // --- check_labels tests ---
 
     #[test]
-    fn parse_label_json_with_agent_ready_returns_true() {
-        let json = r#"[{"name":"agent:ready"}]"#;
-        assert!(parse_label_json(json).unwrap());
+    fn check_labels_with_all_labels_present_returns_ok() {
+        let runner = MockCommandRunner::new().with_success(
+            "gh",
+            &["label", "list", "--json", "name"],
+            r#"[{"name":"agent:ready"},{"name":"weight:light"},{"name":"weight:heavy"}]"#,
+        );
+        let [agent_ready, weight] = check_labels(&runner);
+        assert!(matches!(agent_ready.status, CheckStatus::Ok(_)));
+        assert!(matches!(weight.status, CheckStatus::Ok(_)));
+        assert!(agent_ready.remediation.is_none());
+        assert!(weight.remediation.is_none());
     }
 
     #[test]
-    fn parse_label_json_with_different_label_returns_false() {
-        let json = r#"[{"name":"not-agent:ready"}]"#;
-        assert!(!parse_label_json(json).unwrap());
+    fn check_labels_when_agent_ready_missing_returns_warn_with_create_remediation() {
+        let runner = MockCommandRunner::new().with_success(
+            "gh",
+            &["label", "list", "--json", "name"],
+            r#"[{"name":"weight:light"},{"name":"weight:heavy"}]"#,
+        );
+        let [agent_ready, weight] = check_labels(&runner);
+        assert!(matches!(agent_ready.status, CheckStatus::Warn(_)));
+        assert!(agent_ready.remediation.as_deref().unwrap().contains("gh label create agent:ready"));
+        assert!(matches!(weight.status, CheckStatus::Ok(_)));
     }
 
     #[test]
-    fn parse_label_json_with_invalid_json_returns_err() {
-        let json = "";
-        assert!(parse_label_json(json).is_err());
-    }
-
-    #[test]
-    fn parse_label_json_with_partial_match_returns_false() {
-        let json = r#"[{"name":"agent:ready-extra"}]"#;
-        assert!(!parse_label_json(json).unwrap());
-    }
-
-    // --- check_gh_label tests ---
-
-    #[test]
-    fn check_gh_label_with_agent_ready_present_returns_ok() {
+    fn check_labels_when_weight_labels_missing_returns_warn() {
         let runner = MockCommandRunner::new().with_success(
             "gh",
             &["label", "list", "--json", "name"],
             r#"[{"name":"agent:ready"}]"#,
         );
-        let result = check_gh_label(&runner);
-        assert!(matches!(result.status, CheckStatus::Ok(_)));
-        assert!(matches!(
-            result.section,
-            DoctorSection::OperationalReadiness
-        ));
-        assert!(result.remediation.is_none());
+        let [agent_ready, weight] = check_labels(&runner);
+        assert!(matches!(agent_ready.status, CheckStatus::Ok(_)));
+        assert!(matches!(weight.status, CheckStatus::Warn(_)));
+        assert!(weight.remediation.is_some());
     }
 
     #[test]
-    fn check_gh_label_when_label_missing_returns_warn_with_create_remediation() {
-        let runner = MockCommandRunner::new().with_success(
-            "gh",
-            &["label", "list", "--json", "name"],
-            r#"[{"name":"other-label"}]"#,
-        );
-        let result = check_gh_label(&runner);
-        assert!(matches!(result.status, CheckStatus::Warn(_)));
-        assert!(result.remediation.is_some());
-        let rem = result.remediation.unwrap();
-        assert!(rem.contains("gh label create agent:ready"));
-    }
-
-    #[test]
-    fn check_gh_label_when_gh_not_installed_returns_warn_with_install_remediation() {
+    fn check_labels_when_gh_not_installed_returns_warn_with_install_remediation() {
         // デフォルトは stderr = "command not found"
         let runner = MockCommandRunner::new();
-        let result = check_gh_label(&runner);
-        assert!(matches!(result.status, CheckStatus::Warn(_)));
-        assert!(matches!(result.section, DoctorSection::OperationalReadiness));
-        assert!(result.remediation.is_some());
-        let rem = result.remediation.unwrap();
+        let [agent_ready, weight] = check_labels(&runner);
+        assert!(matches!(agent_ready.status, CheckStatus::Warn(_)));
+        assert!(matches!(weight.status, CheckStatus::Warn(_)));
+        let rem = agent_ready.remediation.unwrap();
         assert!(rem.contains("cli.github.com"));
     }
 
     #[test]
-    fn check_gh_label_when_auth_fails_returns_warn_with_login_remediation() {
+    fn check_labels_when_auth_fails_returns_warn_with_login_remediation() {
         // with_failure は stderr = "error" → 認証失敗
         let runner = MockCommandRunner::new().with_failure("gh", &["label", "list", "--json", "name"]);
-        let result = check_gh_label(&runner);
-        assert!(matches!(result.status, CheckStatus::Warn(_)));
-        assert!(result.remediation.is_some());
-        let rem = result.remediation.unwrap();
+        let [agent_ready, weight] = check_labels(&runner);
+        assert!(matches!(agent_ready.status, CheckStatus::Warn(_)));
+        assert!(matches!(weight.status, CheckStatus::Warn(_)));
+        let rem = agent_ready.remediation.unwrap();
         assert!(rem.contains("gh auth login"));
     }
 
