@@ -104,12 +104,10 @@ fn detect_gh_presence(runner: &dyn CommandRunner) -> GhPresence {
                 GhPresence::InstalledButUnauthorized
             }
         }
-        Ok(_) => {
-            match runner.run("gh", &["auth", "status"]) {
-                Ok(output) if output.success => GhPresence::Ready,
-                _ => GhPresence::InstalledButUnauthorized,
-            }
-        }
+        Ok(_) => match runner.run("gh", &["auth", "status"]) {
+            Ok(output) if output.success => GhPresence::Ready,
+            _ => GhPresence::InstalledButUnauthorized,
+        },
     }
 }
 
@@ -470,7 +468,8 @@ mod tests {
 
     #[test]
     fn check_git_with_mock_success_returns_ok() {
-        let runner = MockCommandRunner::new().with_success("git", &["--version"], "git version 2.x");
+        let runner =
+            MockCommandRunner::new().with_success("git", &["--version"], "git version 2.x");
         let result = check_git(&runner);
         assert!(matches!(result.status, CheckStatus::Ok(_)));
     }

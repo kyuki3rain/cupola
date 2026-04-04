@@ -79,8 +79,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             std::fs::create_dir_all(&cupola_dir)
                 .with_context(|| format!("failed to create {}", cupola_dir.display()))?;
             let db_path = cupola_dir.join("cupola.db");
-            let db = SqliteConnection::open(&db_path)
-                .context("failed to open SQLite database")?;
+            let db = SqliteConnection::open(&db_path).context("failed to open SQLite database")?;
             let file_gen = InitFileGenerator::new(base_dir.clone());
             let uc = InitUseCase::new(base_dir, db, file_gen);
             let report = uc.run()?;
