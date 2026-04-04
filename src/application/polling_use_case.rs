@@ -11,6 +11,7 @@ use tokio::signal;
 use tokio::signal::unix::SignalKind;
 use tokio::time::interval;
 
+use crate::application::association_guard::{AssociationCheckResult, check_label_actor};
 use crate::application::io::{
     CiErrorEntry, ConflictInfo, clear_inputs_dir, parse_fixing_output, parse_pr_creation_output,
     write_ci_errors_input, write_conflict_info_input, write_issue_input,
@@ -161,13 +162,43 @@ where
                             // Already tracked, skip
                         }
                         Ok(_) => {
-                            // New or terminal — will be handled
-                            events.push((
-                                0, // ID not yet known; handle_issue_detected will create
-                                Event::IssueDetected {
-                                    issue_number: gi.number,
-                                },
-                            ));
+                            // New or terminal — association チェックを実行してから push
+                            match check_label_actor(
+                                &self.github,
+                                gi.number,
+                                "agent:ready",
+                                &self.config.trusted_associations,
+                                &self.config.owner,
+                            )
+                            .await
+                            {
+                                Ok(AssociationCheckResult::Trusted) => {
+                                    events.push((
+                                        0, // ID not yet known; handle_issue_detected will create
+                                        Event::IssueDetected {
+                                            issue_number: gi.number,
+                                        },
+                                    ));
+                                }
+                                Ok(AssociationCheckResult::Rejected {
+                                    actor_login,
+                                    association,
+                                }) => {
+                                    tracing::info!(
+                                        issue_number = gi.number,
+                                        actor_login,
+                                        association = association.as_str(),
+                                        "issue skipped: actor does not have trusted association"
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        issue_number = gi.number,
+                                        error = %e,
+                                        "association check failed: skipping issue for safety"
+                                    );
+                                }
+                            }
                         }
                         Err(e) => {
                             tracing::warn!(issue_number = gi.number, error = %e, "failed to check issue in DB");
@@ -932,7 +963,11 @@ where
 
                     if causes.contains(&FixingProblemKind::ReviewComments) {
                         let threads = self.github.list_unresolved_threads(pr_num).await?;
-                        write_review_threads_input(wt, &threads)?;
+                        write_review_threads_input(
+                            wt,
+                            &threads,
+                            &self.config.trusted_associations,
+                        )?;
                     }
 
                     if causes.contains(&FixingProblemKind::CiFailure) {
@@ -994,7 +1029,11 @@ where
                     // Fallback: if no causes set (old behavior), write review threads
                     if causes.is_empty() {
                         let threads = self.github.list_unresolved_threads(pr_num).await?;
-                        write_review_threads_input(wt, &threads)?;
+                        write_review_threads_input(
+                            wt,
+                            &threads,
+                            &self.config.trusted_associations,
+                        )?;
                     }
                 }
             }
@@ -1444,6 +1483,8 @@ mod tests {
                     comments: vec![ReviewComment {
                         author: "reviewer".to_string(),
                         body: "fix this".to_string(),
+                        author_association:
+                            crate::domain::author_association::AuthorAssociation::Collaborator,
                     }],
                 }]
             } else {
@@ -1516,6 +1557,21 @@ mod tests {
         }
         async fn get_pr_status(&self, _: u64) -> anyhow::Result<PrStatus> {
             Ok(self.pr_status.clone())
+        }
+
+        async fn fetch_label_actor_login(&self, _: u64, _: &str) -> anyhow::Result<Option<String>> {
+            Ok(Some("test-actor".to_string()))
+        }
+
+        async fn fetch_user_permission(
+            &self,
+            _: &str,
+        ) -> anyhow::Result<crate::application::port::github_client::RepositoryPermission> {
+            Ok(crate::application::port::github_client::RepositoryPermission::Admin)
+        }
+
+        async fn remove_label(&self, _: u64, _: &str) -> anyhow::Result<()> {
+            Ok(())
         }
     }
 
@@ -2312,6 +2368,22 @@ mod tests {
         }
         async fn get_pr_status(&self, _: u64) -> anyhow::Result<PrStatus> {
             Ok(PrStatus::Closed)
+        }
+
+        async fn fetch_label_actor_login(&self, _: u64, _: &str) -> anyhow::Result<Option<String>> {
+            // テスト用: デフォルトで actor を返して Trusted にする
+            Ok(Some("test-actor".to_string()))
+        }
+
+        async fn fetch_user_permission(
+            &self,
+            _: &str,
+        ) -> anyhow::Result<crate::application::port::github_client::RepositoryPermission> {
+            Ok(crate::application::port::github_client::RepositoryPermission::Admin)
+        }
+
+        async fn remove_label(&self, _: u64, _: &str) -> anyhow::Result<()> {
+            Ok(())
         }
     }
 

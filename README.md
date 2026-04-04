@@ -15,6 +15,8 @@ Issue-driven local agent control plane for spec-driven development.
 - [Usage](#usage)
 - [CLI Command Reference](#cli-command-reference)
 - [Configuration Reference](#configuration-reference)
+- [Security: trusted_associations](#security-trusted_associations)
+- [Fork Workflow for External Contributors](#fork-workflow-for-external-contributors)
 - [Architecture Overview](#architecture-overview)
 - [Limitations](#limitations)
 - [License](#license)
@@ -203,6 +205,7 @@ The configuration file is located at `.cupola/cupola.toml`.
 | `stall_timeout_secs` | u64 | `1800` | Stall detection timeout (seconds) |
 | `max_concurrent_sessions` | u32 (optional) | unlimited | Maximum number of concurrent Cupola sessions |
 | `model` | String | `"sonnet"` | Default Claude model for agent sessions |
+| `trusted_associations` | Array of String or `["all"]` | `["OWNER", "MEMBER", "COLLABORATOR"]` | Author associations trusted to trigger the agent |
 | `[log] level` | String | `"info"` | Log level |
 | `[log] dir` | String | — (optional) | Log output directory |
 
@@ -219,10 +222,57 @@ stall_timeout_secs = 1800
 max_concurrent_sessions = 4  # unlimited if omitted
 model = "sonnet"
 
+# Security: only owners, members, and collaborators can trigger the agent (default)
+trusted_associations = ["OWNER", "MEMBER", "COLLABORATOR"]
+
+# For private repositories: trust all users (disables association check)
+# trusted_associations = ["all"]
+
 [log]
 level = "info"
 dir = ".cupola/logs"
 ```
+
+## Security: trusted_associations
+
+Cupola passes GitHub Issue content and PR review comments to Claude Code. In public repositories,
+this creates a **prompt injection** risk: a malicious user could craft Issue/PR content to
+manipulate the agent's behavior.
+
+The `trusted_associations` setting mitigates this by only allowing users with a trusted
+GitHub `author_association` to:
+
+- Apply the `agent:ready` label (which triggers the agent)
+- Have their review comments passed to the agent
+
+**Valid values**: `OWNER`, `MEMBER`, `COLLABORATOR`, `CONTRIBUTOR`, `FIRST_TIMER`,
+`FIRST_TIME_CONTRIBUTOR`, `NONE`
+
+**Special value**: `"all"` — skips association checks entirely. **Only use this on private
+repositories** where all users are trusted.
+
+See [SECURITY.md](SECURITY.md) for a detailed explanation of the security model.
+
+## Fork Workflow for External Contributors
+
+If you are an external contributor (not an `OWNER`, `MEMBER`, or `COLLABORATOR`) who wants to
+use Cupola on your own changes before submitting a PR upstream, you can use the fork workflow:
+
+1. **Fork the repository** on GitHub.
+
+2. **Enable Cupola on your fork**: Clone your fork and set up `cupola.toml` in your fork.
+   Since you own the fork, your `author_association` will be `OWNER`.
+
+3. **Develop using Cupola on your fork**: Create Issues on your fork, apply the `agent:ready`
+   label, and let Cupola generate designs and implementation on your fork.
+
+4. **Submit a PR upstream**: Once the implementation is ready on your fork's branch, open a
+   PR from your fork's branch to the upstream repository.
+
+5. **Upstream reviewers** will review the PR as usual.
+
+This workflow gives external contributors full Cupola automation power on their own fork
+without needing special permissions on the upstream repository.
 
 ## Architecture Overview
 

@@ -13,7 +13,7 @@ use cupola::application::port::execution_log_repository::ExecutionLogRepository;
 use cupola::application::port::git_worktree::GitWorktree;
 use cupola::application::port::github_client::{
     GitHubCheckRun, GitHubClient, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails,
-    PrStatus, ReviewThread,
+    PrStatus, RepositoryPermission, ReviewThread,
 };
 use cupola::application::port::issue_repository::IssueRepository;
 use cupola::application::transition_use_case::{TransitionUseCase, prioritize_events};
@@ -116,6 +116,22 @@ impl GitHubClient for MockGitHubClient {
         } else {
             Ok(PrStatus::Closed)
         }
+    }
+
+    async fn fetch_label_actor_login(
+        &self,
+        _issue_number: u64,
+        _label_name: &str,
+    ) -> Result<Option<String>> {
+        Ok(Some("test-actor".to_string()))
+    }
+
+    async fn fetch_user_permission(&self, _username: &str) -> Result<RepositoryPermission> {
+        Ok(RepositoryPermission::Admin)
+    }
+
+    async fn remove_label(&self, _issue_number: u64, _label_name: &str) -> Result<()> {
+        Ok(())
     }
 }
 

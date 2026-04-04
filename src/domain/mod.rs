@@ -1,3 +1,4 @@
+pub mod author_association;
 pub mod config;
 pub mod event;
 pub mod execution_log;

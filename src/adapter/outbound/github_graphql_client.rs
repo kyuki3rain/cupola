@@ -3,6 +3,7 @@ use reqwest::Client;
 use serde_json::{Value, json};
 
 use crate::application::port::github_client::{ReviewComment, ReviewThread};
+use crate::domain::author_association::AuthorAssociation;
 
 const LIST_THREADS_QUERY: &str = r#"query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
   repository(owner: $owner, name: $repo) {
@@ -18,6 +19,7 @@ const LIST_THREADS_QUERY: &str = r#"query($owner: String!, $repo: String!, $pr: 
             nodes {
               body
               author { login }
+              authorAssociation
             }
           }
         }
@@ -199,9 +201,14 @@ fn parse_review_thread(node: &Value) -> Option<ReviewThread> {
         .map(|arr| {
             arr.iter()
                 .filter_map(|c| {
+                    let author_association = c["authorAssociation"]
+                        .as_str()
+                        .and_then(|s| s.parse::<AuthorAssociation>().ok())
+                        .unwrap_or(AuthorAssociation::None);
                     Some(ReviewComment {
                         author: c["author"]["login"].as_str()?.to_string(),
                         body: c["body"].as_str().unwrap_or("").to_string(),
+                        author_association,
                     })
                 })
                 .collect()
@@ -222,6 +229,8 @@ mod tests {
 
     #[test]
     fn parse_review_thread_from_json() {
+        use crate::domain::author_association::AuthorAssociation;
+
         let json = json!({
             "id": "PRRT_abc123",
             "isResolved": false,
@@ -231,11 +240,13 @@ mod tests {
                 "nodes": [
                     {
                         "body": "Fix this",
-                        "author": { "login": "reviewer" }
+                        "author": { "login": "reviewer" },
+                        "authorAssociation": "COLLABORATOR"
                     },
                     {
                         "body": "Done",
-                        "author": { "login": "bot" }
+                        "author": { "login": "bot" },
+                        "authorAssociation": "NONE"
                     }
                 ]
             }
@@ -248,7 +259,42 @@ mod tests {
         assert_eq!(thread.comments.len(), 2);
         assert_eq!(thread.comments[0].author, "reviewer");
         assert_eq!(thread.comments[0].body, "Fix this");
+        assert_eq!(
+            thread.comments[0].author_association,
+            AuthorAssociation::Collaborator
+        );
         assert_eq!(thread.comments[1].author, "bot");
+        assert_eq!(
+            thread.comments[1].author_association,
+            AuthorAssociation::None
+        );
+    }
+
+    #[test]
+    fn parse_review_thread_unknown_association_defaults_to_none() {
+        use crate::domain::author_association::AuthorAssociation;
+
+        let json = json!({
+            "id": "PRRT_xyz",
+            "isResolved": false,
+            "path": "src/main.rs",
+            "line": 1,
+            "comments": {
+                "nodes": [
+                    {
+                        "body": "comment",
+                        "author": { "login": "user" },
+                        "authorAssociation": "UNKNOWN_VALUE"
+                    }
+                ]
+            }
+        });
+
+        let thread = parse_review_thread(&json).expect("should parse");
+        assert_eq!(
+            thread.comments[0].author_association,
+            AuthorAssociation::None
+        );
     }
 
     #[test]
