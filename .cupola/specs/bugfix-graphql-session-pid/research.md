@@ -73,7 +73,7 @@
   2. 専用バリアント `AlreadyExists` を追加する
 - **Selected Approach**: `PidFileError::AlreadyExists` を新規追加
 - **Rationale**: 呼び出し元（`app.rs`）がTOCTOU競合とその他書き込みエラーを区別してメッセージを出力できる
-- **Trade-offs**: トレイトのエラー型変更が必要だが、後方互換性は破壊しない（非exhaustive ではないため、テストの match 文を更新する必要あり）
+- **Trade-offs**: トレイトのエラー型変更が必要であり、`PidFileError` は `#[non_exhaustive]` でない `pub enum` のため、公開APIとしては新規バリアント追加は downstream crate の網羅的 `match` を壊しうる breaking change となる。一方で今回の変更範囲は本リポジトリ内の呼び出し箇所更新で吸収可能で、実装時には既存の `match`（テスト含む）を更新する必要がある
 
 ## Risks & Mitigations
 
