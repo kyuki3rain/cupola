@@ -1,7 +1,7 @@
 ---
 description: Execute spec tasks using TDD methodology
 allowed-tools: Bash, Read, Write, Edit, MultiEdit, Grep, Glob, LS, WebFetch, WebSearch
-argument-hint: <feature-name> [task-numbers]
+argument-hint: <spec-id> [task-numbers]
 ---
 
 # Implementation Task Executor
@@ -27,8 +27,8 @@ Execute implementation tasks for feature **$1** using Test-Driven Development.
 - `.cupola/specs/$1/spec.json`, `requirements.md`, `design.md`, `tasks.md`
 - **Entire `.cupola/steering/` directory** for complete project memory
 
-**Validate approvals**:
-- Verify tasks are approved in spec.json (stop if not, see Safety & Fallback)
+**Validate**:
+- Verify `ready_for_implementation: true` in spec.json (stop if not)
 
 ### Step 2: Select Tasks
 
@@ -90,9 +90,9 @@ Provide brief summary in the language specified in spec.json:
 
 ### Error Scenarios
 
-**Tasks Not Approved or Missing Spec Files**:
-- **Stop Execution**: All spec files must exist and tasks must be approved
-- **Suggested Action**: "Complete previous phases: `/kiro:spec-requirements`, `/kiro:spec-design`, `/kiro:spec-tasks`"
+**Not Ready for Implementation**:
+- **Stop Execution**: `ready_for_implementation` must be true
+- **Suggested Action**: "Run `/cupola:spec-design $1` to generate spec artifacts first"
 
 **Test Failures**:
 - **Stop Implementation**: Fix failing tests before continuing
@@ -101,8 +101,10 @@ Provide brief summary in the language specified in spec.json:
 ### Task Execution
 
 **Execute specific task(s)**:
-- `/kiro:spec-impl $1 1.1` - Single task
-- `/kiro:spec-impl $1 1,2,3` - Multiple tasks
+- `/cupola:spec-impl $1 1.1` - Single task
+- `/cupola:spec-impl $1 1,2,3` - Multiple tasks
 
 **Execute all pending**:
-- `/kiro:spec-impl $1` - All unchecked tasks
+- `/cupola:spec-impl $1` - All unchecked tasks (not recommended due to context bloat)
+
+**Recommendation**: Clear conversation context between tasks for fresh state.

@@ -888,7 +888,7 @@ where
                 issue.github_issue_number,
                 &self.config,
                 pr_number,
-                issue.feature_name.as_deref(),
+                &issue.feature_name,
                 &local_causes,
                 has_merge_conflict,
             ) {
@@ -950,6 +950,15 @@ where
             State::DesignRunning => {
                 let detail = self.github.get_issue(issue.github_issue_number).await?;
                 write_issue_input(wt, &detail)?;
+                let file_gen =
+                    crate::adapter::outbound::init_file_generator::InitFileGenerator::new(
+                        wt.to_path_buf(),
+                    );
+                let _ = file_gen.generate_spec_directory(
+                    issue.github_issue_number,
+                    &detail.body,
+                    &self.config.language,
+                )?;
             }
             State::DesignFixing | State::ImplementationFixing => {
                 let pr_number = match issue.state {
@@ -1113,17 +1122,11 @@ where
             "PR created successfully"
         );
 
-        // Record PR number (and feature_name for design phase) in DB
+        // Record PR number in DB
         let mut updated = issue.clone();
         match issue.state {
             State::DesignRunning => {
                 updated.design_pr_number = Some(pr_number);
-                if let Some(ref output) = output
-                    && let Some(ref name) = output.feature_name
-                {
-                    updated.feature_name = Some(name.clone());
-                    tracing::info!(feature_name = %name, "recorded feature_name from design output");
-                }
             }
             State::ImplementationRunning => updated.impl_pr_number = Some(pr_number),
             _ => {}
@@ -1739,7 +1742,7 @@ mod tests {
             ci_fix_count: 0,
             current_pid: None,
             error_message: None,
-            feature_name: None,
+            feature_name: "issue-42".to_string(),
             fixing_causes: vec![],
             weight: TaskWeight::Medium,
             created_at: chrono::Utc::now(),
@@ -1866,7 +1869,7 @@ mod tests {
             ci_fix_count,
             current_pid: None,
             error_message: None,
-            feature_name: None,
+            feature_name: "issue-42".to_string(),
             fixing_causes: vec![],
             weight: TaskWeight::Medium,
             created_at: chrono::Utc::now(),
@@ -1965,7 +1968,7 @@ mod tests {
             ci_fix_count: 0,
             current_pid: None,
             error_message: None,
-            feature_name: None,
+            feature_name: "issue-42".to_string(),
             fixing_causes: vec![],
             weight: TaskWeight::Medium,
             created_at: chrono::Utc::now(),
@@ -1985,7 +1988,7 @@ mod tests {
             ci_fix_count: 0,
             current_pid: None,
             error_message: None,
-            feature_name: None,
+            feature_name: "issue-43".to_string(),
             fixing_causes: vec![],
             weight: TaskWeight::Medium,
             created_at: chrono::Utc::now(),
@@ -2220,7 +2223,7 @@ mod tests {
             ci_fix_count: 0,
             current_pid: None,
             error_message: None,
-            feature_name: None,
+            feature_name: "issue-99".to_string(),
             fixing_causes: vec![],
             weight: TaskWeight::Medium,
             created_at: chrono::Utc::now(),
@@ -2284,7 +2287,7 @@ mod tests {
             ci_fix_count: 0,
             current_pid: None,
             error_message: None,
-            feature_name: None,
+            feature_name: format!("issue-{}", (id as u64) + 100),
             fixing_causes: vec![],
             weight: crate::domain::task_weight::TaskWeight::default(),
             created_at: chrono::Utc::now(),
@@ -2466,7 +2469,7 @@ mod tests {
             ci_fix_count: 0,
             current_pid: None,
             error_message: None,
-            feature_name: None,
+            feature_name: format!("issue-{issue_number}"),
             fixing_causes: vec![],
             weight: TaskWeight::Medium,
             created_at: chrono::Utc::now(),
@@ -3011,7 +3014,7 @@ mod tests {
             ci_fix_count: 0,
             current_pid: None,
             error_message: None,
-            feature_name: None,
+            feature_name: "issue-42".to_string(),
             fixing_causes: vec![],
             weight: TaskWeight::Medium,
             created_at: chrono::Utc::now(),
@@ -3157,7 +3160,7 @@ mod tests {
             ci_fix_count: 0,
             current_pid: None,
             error_message: None,
-            feature_name: None,
+            feature_name: "issue-42".to_string(),
             fixing_causes: vec![],
             weight: TaskWeight::Medium,
             created_at: chrono::Utc::now(),
@@ -3177,7 +3180,7 @@ mod tests {
             ci_fix_count: 0,
             current_pid: None,
             error_message: None,
-            feature_name: None,
+            feature_name: "issue-43".to_string(),
             fixing_causes: vec![],
             weight: TaskWeight::Medium,
             created_at: chrono::Utc::now(),
@@ -3364,7 +3367,7 @@ mod tests {
             ci_fix_count: 0,
             current_pid: pid,
             error_message: None,
-            feature_name: None,
+            feature_name: "issue-100".to_string(),
             fixing_causes: vec![],
             weight: TaskWeight::Medium,
             created_at: chrono::Utc::now(),

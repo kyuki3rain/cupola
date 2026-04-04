@@ -180,6 +180,21 @@ pub async fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
 
+        Command::Compress => {
+            let specs_dir = std::path::PathBuf::from(".cupola/specs");
+            let uc = crate::application::compress_use_case::CompressUseCase::new(specs_dir);
+            let report = uc.find_completed_specs()?;
+            if let Some(reason) = report.skipped_reason {
+                println!("{reason}");
+                return Ok(());
+            }
+            println!(
+                "完了済み spec が {} 件見つかりました。`/cupola:spec-compress` を Claude Code で実行してください。",
+                report.completed_count
+            );
+            Ok(())
+        }
+
         Command::Logs { config, follow } => {
             let toml = load_toml(&config)
                 .with_context(|| format!("failed to load config from {}", config.display()))?;
@@ -784,7 +799,7 @@ mod tests {
             ci_fix_count: 0,
             current_pid,
             error_message: None,
-            feature_name: None,
+            feature_name: format!("issue-{issue_number}"),
             fixing_causes: vec![],
             weight: crate::domain::task_weight::TaskWeight::Medium,
             created_at: chrono::Utc::now(),
@@ -818,7 +833,7 @@ mod tests {
             ci_fix_count: 0,
             current_pid: None,
             error_message: None,
-            feature_name: None,
+            feature_name: "issue-42".to_string(),
             fixing_causes: vec![],
             weight: crate::domain::task_weight::TaskWeight::Medium,
             created_at: chrono::Utc::now(),

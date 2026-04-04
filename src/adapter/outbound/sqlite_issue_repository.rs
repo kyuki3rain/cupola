@@ -324,9 +324,11 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
             rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(e))
         })?;
 
+    let github_issue_number: u64 = row.get(1)?;
+
     Ok(Issue {
         id: row.get(0)?,
-        github_issue_number: row.get(1)?,
+        github_issue_number,
         state: str_to_state(2, &state_str)?,
         design_pr_number: row.get(3)?,
         impl_pr_number: row.get(4)?,
@@ -334,7 +336,9 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
         retry_count: row.get(6)?,
         current_pid: row.get(7)?,
         error_message: row.get(8)?,
-        feature_name: row.get(9)?,
+        feature_name: row
+            .get::<_, Option<String>>(9)?
+            .unwrap_or_else(|| format!("issue-{github_issue_number}")),
         weight: str_to_task_weight(10, &weight_str)?,
         fixing_causes,
         created_at: parse_sqlite_datetime(12, &created_str)?,
@@ -375,7 +379,7 @@ mod tests {
             ci_fix_count: 0,
             current_pid: None,
             error_message: None,
-            feature_name: None,
+            feature_name: format!("issue-{issue_number}"),
             fixing_causes: vec![],
             weight: TaskWeight::Medium,
             created_at: Utc::now(),
@@ -509,7 +513,7 @@ mod tests {
         issue.design_pr_number = Some(42);
         issue.impl_pr_number = Some(99);
         issue.worktree_path = Some("/tmp/worktrees/71".to_string());
-        issue.feature_name = Some("my-feature".to_string());
+        issue.feature_name = "my-feature".to_string();
         issue.retry_count = 3;
         issue.error_message = Some("some error".to_string());
         repo.update(&issue).await.expect("update");
@@ -525,7 +529,7 @@ mod tests {
         assert_eq!(found.design_pr_number, Some(42));
         assert_eq!(found.impl_pr_number, Some(99));
         assert_eq!(found.worktree_path.as_deref(), Some("/tmp/worktrees/71"));
-        assert_eq!(found.feature_name.as_deref(), Some("my-feature"));
+        assert_eq!(found.feature_name, "my-feature");
     }
 
     #[tokio::test]

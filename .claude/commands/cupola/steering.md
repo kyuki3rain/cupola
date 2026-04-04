@@ -3,7 +3,7 @@ description: Manage .cupola/steering/ as persistent project knowledge
 allowed-tools: Bash, Read, Write, Edit, MultiEdit, Glob, Grep, LS
 ---
 
-# Kiro Steering Management
+# Cupola Steering Management
 
 <background_information>
 **Role**: Maintain `.cupola/steering/` as persistent project memory.
@@ -24,7 +24,7 @@ allowed-tools: Bash, Read, Write, Edit, MultiEdit, Glob, Grep, LS
 
 Check `.cupola/steering/` status:
 
-**Bootstrap Mode**: Empty OR missing core files (product.md, tech.md, structure.md)  
+**Bootstrap Mode**: Empty OR missing core files (product.md, tech.md, structure.md)
 **Sync Mode**: All core files exist
 
 ---
@@ -34,7 +34,7 @@ Check `.cupola/steering/` status:
 1. Load templates from `.cupola/settings/templates/steering/`
 2. Analyze codebase (JIT):
    - `glob_file_search` for source files
-   - `read_file` for README, package.json, etc.
+   - `read_file` for README, package.json, Cargo.toml, etc.
    - `grep` for patterns
 3. Extract patterns (not lists):
    - Product: Purpose, value, core capabilities
@@ -71,12 +71,12 @@ From `.cupola/settings/rules/steering-principles.md`:
 
 Document patterns and principles, not exhaustive lists.
 
-**Bad**: List every file in directory tree  
+**Bad**: List every file in directory tree
 **Good**: Describe organization pattern with examples
 
 </instructions>
 
-## Tool guidance
+## Tool Guidance
 
 - `glob_file_search`: Find source/config files
 - `read_file`: Read steering, docs, configs
@@ -85,13 +85,13 @@ Document patterns and principles, not exhaustive lists.
 
 **JIT Strategy**: Fetch when needed, not upfront.
 
-## Output description
+## Output Description
 
 Chat summary only (files updated directly).
 
 ### Bootstrap:
 ```
-✅ Steering Created
+Steering Created
 
 ## Generated:
 - product.md: [Brief description]
@@ -103,41 +103,24 @@ Review and approve as Source of Truth.
 
 ### Sync:
 ```
-✅ Steering Updated
+Steering Updated
 
 ## Changes:
-- tech.md: React 18 → 19
-- structure.md: Added API pattern
+- tech.md: [What changed]
+- structure.md: [What changed]
 
 ## Code Drift:
-- Components not following import conventions
+- [Detected issues]
 
 ## Recommendations:
-- Consider api-standards.md
+- [Suggested improvements]
 ```
-
-## Examples
-
-### Bootstrap
-**Input**: Empty steering, React TypeScript project  
-**Output**: 3 files with patterns - "Feature-first", "TypeScript strict", "React 19"
-
-### Sync
-**Input**: Existing steering, new `/api` directory  
-**Output**: Updated structure.md, flagged non-compliant files, suggested api-standards.md
 
 ## Safety & Fallback
 
-- **Security**: Never include keys, passwords, secrets (see principles)
+- **Security**: Never include keys, passwords, secrets
 - **Uncertainty**: Report both states, ask user
 - **Preservation**: Add rather than replace when in doubt
-
-## Notes
-
-- All `.cupola/steering/*.md` loaded as project memory
-- Templates and principles are external for customization
-- Focus on patterns, not catalogs
-- "Golden Rule": New code following patterns shouldn't require steering updates
-- Avoid documenting agent-specific tooling directories (e.g. `.cursor/`, `.gemini/`, `.claude/`)
+- Avoid documenting agent-specific tooling directories (e.g., `.cursor/`, `.gemini/`, `.claude/`)
 - `.cupola/settings/` content should NOT be documented in steering files (settings are metadata, not project knowledge)
-- Light references to `.cupola/specs/` and `.cupola/steering/` are acceptable; avoid other `.kiro/` directories
+- Light references to `.cupola/specs/` and `.cupola/steering/` are acceptable

@@ -16,7 +16,7 @@ pub struct Issue {
     pub ci_fix_count: u32,
     pub current_pid: Option<u32>,
     pub error_message: Option<String>,
-    pub feature_name: Option<String>,
+    pub feature_name: String,
     pub weight: TaskWeight,
     pub fixing_causes: Vec<FixingProblemKind>,
     pub created_at: DateTime<Utc>,
