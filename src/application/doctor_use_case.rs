@@ -121,9 +121,7 @@ fn check_git(runner: &dyn CommandRunner) -> DoctorCheckResult {
                 "git の実行に失敗しました: {}",
                 output.stderr.trim()
             )),
-            remediation: Some(
-                "git をインストールしてください: https://git-scm.com/".to_string(),
-            ),
+            remediation: Some("git をインストールしてください: https://git-scm.com/".to_string()),
         },
     }
 }
@@ -395,7 +393,10 @@ fn check_labels(runner: &dyn CommandRunner) -> [DoctorCheckResult; 2] {
         .into_iter()
         .flatten()
         .collect();
-        let create_cmds: Vec<String> = missing.iter().map(|l| format!("gh label create {l}")).collect();
+        let create_cmds: Vec<String> = missing
+            .iter()
+            .map(|l| format!("gh label create {l}"))
+            .collect();
         DoctorCheckResult {
             section: DoctorSection::OperationalReadiness,
             name: "weight:* ラベル".to_string(),
@@ -799,7 +800,13 @@ mod tests {
         );
         let [agent_ready, weight] = check_labels(&runner);
         assert!(matches!(agent_ready.status, CheckStatus::Warn(_)));
-        assert!(agent_ready.remediation.as_deref().unwrap().contains("gh label create agent:ready"));
+        assert!(
+            agent_ready
+                .remediation
+                .as_deref()
+                .unwrap()
+                .contains("gh label create agent:ready")
+        );
         assert!(matches!(weight.status, CheckStatus::Ok(_)));
     }
 
@@ -830,7 +837,8 @@ mod tests {
     #[test]
     fn check_labels_when_auth_fails_returns_warn_with_login_remediation() {
         // with_failure は stderr = "error" → 認証失敗
-        let runner = MockCommandRunner::new().with_failure("gh", &["label", "list", "--json", "name"]);
+        let runner =
+            MockCommandRunner::new().with_failure("gh", &["label", "list", "--json", "name"]);
         let [agent_ready, weight] = check_labels(&runner);
         assert!(matches!(agent_ready.status, CheckStatus::Warn(_)));
         assert!(matches!(weight.status, CheckStatus::Warn(_)));
