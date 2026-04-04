@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::adapter::outbound::init_file_generator::InitFileGenerator;
-use crate::adapter::outbound::sqlite_connection::SqliteConnection;
+use crate::application::port::db_initializer::DbInitializer;
+use crate::application::port::file_generator::FileGenerator;
 
 pub struct InitReport {
     pub db_initialized: bool,
@@ -12,13 +12,24 @@ pub struct InitReport {
     pub gitignore_updated: bool,
 }
 
-pub struct InitUseCase {
+pub struct InitUseCase<D: DbInitializer, F: FileGenerator> {
     base_dir: PathBuf,
+    /// DB ファイルが open 前から存在していたかどうか。
+    /// `SqliteConnection::open()` はファイルを生成するため、open 後に存在チェックすると
+    /// 常に true になってしまう。呼び出し元が open 前に判定して渡す。
+    db_existed: bool,
+    db_init: D,
+    file_gen: F,
 }
 
-impl InitUseCase {
-    pub fn new(base_dir: PathBuf) -> Self {
-        Self { base_dir }
+impl<D: DbInitializer, F: FileGenerator> InitUseCase<D, F> {
+    pub fn new(base_dir: PathBuf, db_existed: bool, db_init: D, file_gen: F) -> Self {
+        Self {
+            base_dir,
+            db_existed,
+            db_init,
+            file_gen,
+        }
     }
 
     pub fn run(&self) -> Result<InitReport> {
@@ -32,25 +43,25 @@ impl InitUseCase {
         })?;
 
         // Step 2: SQLite スキーマ初期化
-        let db_path = cupola_dir.join("cupola.db");
-        let db_existed = db_path.exists();
-        let db = SqliteConnection::open(&db_path)?;
-        db.init_schema()?;
-        let db_initialized = !db_existed;
-        tracing::info!(path = %db_path.display(), "SQLite schema initialized");
+        self.db_init
+            .init_schema()
+            .context("failed to initialize SQLite schema")?;
+        let db_initialized = !self.db_existed;
+        tracing::info!("SQLite schema initialized");
 
         // Step 3-5: ファイル生成
-        let file_gen = InitFileGenerator::new(self.base_dir.clone());
-
-        let toml_created = file_gen
+        let toml_created = self
+            .file_gen
             .generate_toml_template()
             .context("failed to generate cupola.toml template")?;
 
-        let steering_copied = file_gen
+        let steering_copied = self
+            .file_gen
             .copy_steering_templates()
             .context("failed to copy steering templates")?;
 
-        let gitignore_updated = file_gen
+        let gitignore_updated = self
+            .file_gen
             .append_gitignore_entries()
             .context("failed to append .gitignore entries")?;
 
@@ -69,12 +80,17 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    // === Task 3.2: InitUseCase の統合テスト ===
+    use crate::adapter::outbound::init_file_generator::InitFileGenerator;
+    use crate::adapter::outbound::sqlite_connection::SqliteConnection;
+
+    // === InitUseCase の統合テスト ===
 
     #[test]
     fn init_use_case_creates_all_files_in_empty_dir() {
         let tmp = TempDir::new().expect("temp dir");
-        let uc = InitUseCase::new(tmp.path().to_path_buf());
+        let db = SqliteConnection::open_in_memory().expect("open db");
+        let file_gen = InitFileGenerator::new(tmp.path().to_path_buf());
+        let uc = InitUseCase::new(tmp.path().to_path_buf(), false, db, file_gen);
         let report = uc.run().expect("run");
 
         assert!(report.db_initialized, "db should be initialized");
@@ -86,7 +102,6 @@ mod tests {
         assert!(report.gitignore_updated, "gitignore should be updated");
 
         // ファイルの存在確認
-        assert!(tmp.path().join(".cupola").join("cupola.db").exists());
         assert!(tmp.path().join(".cupola").join("cupola.toml").exists());
         assert!(tmp.path().join(".gitignore").exists());
     }
@@ -101,7 +116,9 @@ mod tests {
         fs::write(cupola_dir.join("cupola.toml"), "existing").expect("write toml");
         fs::write(tmp.path().join(".gitignore"), "# cupola\n").expect("write gitignore");
 
-        let uc = InitUseCase::new(tmp.path().to_path_buf());
+        let db = SqliteConnection::open_in_memory().expect("open db");
+        let file_gen = InitFileGenerator::new(tmp.path().to_path_buf());
+        let uc = InitUseCase::new(tmp.path().to_path_buf(), false, db, file_gen);
         let report = uc.run().expect("run");
 
         assert!(report.db_initialized, "db init is idempotent");
@@ -119,18 +136,38 @@ mod tests {
     #[test]
     fn init_use_case_second_run_skips_everything() {
         let tmp = TempDir::new().expect("temp dir");
-        let uc = InitUseCase::new(tmp.path().to_path_buf());
+        let cupola_dir = tmp.path().join(".cupola");
+        fs::create_dir_all(&cupola_dir).expect("create .cupola");
+        let db_path = cupola_dir.join("cupola.db");
 
-        // 1回目の実行
-        uc.run().expect("first run");
+        // 1回目の実行（ファイルベース SQLite を使用）
+        let db_existed_before_first = db_path.exists();
+        let db1 = SqliteConnection::open(&db_path).expect("open db");
+        let file_gen1 = InitFileGenerator::new(tmp.path().to_path_buf());
+        let uc1 = InitUseCase::new(
+            tmp.path().to_path_buf(),
+            db_existed_before_first,
+            db1,
+            file_gen1,
+        );
+        uc1.run().expect("first run");
 
         let toml_content_after_first =
             fs::read_to_string(tmp.path().join(".cupola").join("cupola.toml")).expect("read toml");
         let gitignore_content_after_first =
             fs::read_to_string(tmp.path().join(".gitignore")).expect("read gitignore");
 
-        // 2回目の実行
-        let report = uc.run().expect("second run");
+        // 2回目の実行（db ファイルが既に存在するため db_initialized=false）
+        let db_existed_before_second = db_path.exists();
+        let db2 = SqliteConnection::open(&db_path).expect("open db");
+        let file_gen2 = InitFileGenerator::new(tmp.path().to_path_buf());
+        let uc2 = InitUseCase::new(
+            tmp.path().to_path_buf(),
+            db_existed_before_second,
+            db2,
+            file_gen2,
+        );
+        let report = uc2.run().expect("second run");
 
         assert!(
             !report.db_initialized,
@@ -171,7 +208,9 @@ mod tests {
         fs::create_dir_all(&template_dir).expect("create template dir");
         fs::write(template_dir.join("product.md"), "# Product").expect("write template");
 
-        let uc = InitUseCase::new(tmp.path().to_path_buf());
+        let db = SqliteConnection::open_in_memory().expect("open db");
+        let file_gen = InitFileGenerator::new(tmp.path().to_path_buf());
+        let uc = InitUseCase::new(tmp.path().to_path_buf(), false, db, file_gen);
         let report = uc.run().expect("run");
 
         assert!(
@@ -190,8 +229,10 @@ mod tests {
     #[test]
     fn init_use_case_without_template_skips_steering_runs_rest() {
         let tmp = TempDir::new().expect("temp dir");
+        let db = SqliteConnection::open_in_memory().expect("open db");
+        let file_gen = InitFileGenerator::new(tmp.path().to_path_buf());
         // テンプレートディレクトリなし
-        let uc = InitUseCase::new(tmp.path().to_path_buf());
+        let uc = InitUseCase::new(tmp.path().to_path_buf(), false, db, file_gen);
         let report = uc.run().expect("run");
 
         assert!(report.db_initialized);
