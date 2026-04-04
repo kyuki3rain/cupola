@@ -1,52 +1,13 @@
 use std::time::Duration;
 
-use nix::sys::signal::{Signal, kill};
-use nix::unistd::Pid;
-
 use crate::application::port::pid_file::{PidFileError, PidFilePort};
-
-/// Abstracts signal delivery so that `StopUseCase` can be unit-tested
-/// without sending real OS signals.
-pub trait SignalPort: Send + Sync {
-    fn send_sigterm(&self, pid: u32) -> Result<(), StopError>;
-    fn send_sigkill(&self, pid: u32) -> Result<(), StopError>;
-}
-
-/// Production implementation using nix.
-pub struct NixSignalSender;
-
-impl SignalPort for NixSignalSender {
-    fn send_sigterm(&self, pid: u32) -> Result<(), StopError> {
-        let nix_pid = Pid::from_raw(pid as i32);
-        match kill(nix_pid, Signal::SIGTERM) {
-            Ok(()) => Ok(()),
-            // ESRCH means the process already exited — treat as success.
-            Err(nix::errno::Errno::ESRCH) => Ok(()),
-            Err(e) => Err(StopError::Signal(e.to_string())),
-        }
-    }
-
-    fn send_sigkill(&self, pid: u32) -> Result<(), StopError> {
-        let nix_pid = Pid::from_raw(pid as i32);
-        kill(nix_pid, Signal::SIGKILL).map_err(|e| StopError::Signal(e.to_string()))
-    }
-}
+use crate::application::port::signal::SignalPort;
 
 pub struct StopUseCase<P: PidFilePort, S: SignalPort> {
     pid_file: P,
     signal: S,
     /// SIGTERM 送信後の終了待機タイムアウト（デフォルト 30 秒）
     shutdown_timeout: Duration,
-}
-
-impl<P: PidFilePort> StopUseCase<P, NixSignalSender> {
-    pub fn new(pid_file: P, shutdown_timeout: Duration) -> Self {
-        Self {
-            pid_file,
-            signal: NixSignalSender,
-            shutdown_timeout,
-        }
-    }
 }
 
 impl<P: PidFilePort, S: SignalPort> StopUseCase<P, S> {
