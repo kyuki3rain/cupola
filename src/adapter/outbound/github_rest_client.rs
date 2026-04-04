@@ -3,7 +3,22 @@ use octocrab::Octocrab;
 
 use crate::application::port::github_client::{
     GitHubCheckRun, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails, PrStatus,
+    RepositoryPermission,
 };
+
+/// 文字列を URL パスセグメントとして percent-encode する。
+/// 非予約文字（英数字・`-`・`_`・`.`・`~`）以外をすべて `%XX` 形式にエンコードする。
+fn percent_encode_path(s: &str) -> String {
+    let mut encoded = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(b as char);
+        } else {
+            encoded.push_str(&format!("%{b:02X}"));
+        }
+    }
+    encoded
+}
 
 pub struct OctocrabRestClient {
     octocrab: Octocrab,
@@ -298,5 +313,137 @@ impl OctocrabRestClient {
         } else {
             Ok(PrStatus::Closed)
         }
+    }
+
+    /// Issue の timeline から、指定ラベルを最後に付与した actor の login を返す。
+    ///
+    /// `GET /repos/{owner}/{repo}/issues/{issue_number}/timeline` を呼び出し、
+    /// `event == "labeled"` かつ `label.name == label_name` のイベントを逆順で検索する。
+    pub async fn fetch_label_actor_login(
+        &self,
+        issue_number: u64,
+        label_name: &str,
+    ) -> Result<Option<String>> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/issues/{}/timeline?per_page=100",
+            self.owner, self.repo, issue_number
+        );
+
+        let resp = self
+            .http_client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send()
+            .await
+            .with_context(|| format!("failed to fetch timeline for issue #{issue_number}"))?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "timeline API returned {}: {}",
+                resp.status(),
+                resp.text().await.unwrap_or_default()
+            ));
+        }
+
+        let events: serde_json::Value = resp
+            .json()
+            .await
+            .context("failed to parse timeline response")?;
+
+        // 逆順で最新の labeled イベントを検索
+        let login = events
+            .as_array()
+            .into_iter()
+            .flatten()
+            .rev()
+            .find(|e| {
+                e["event"].as_str() == Some("labeled")
+                    && e["label"]["name"].as_str() == Some(label_name)
+            })
+            .and_then(|e| e["actor"]["login"].as_str().map(String::from));
+
+        Ok(login)
+    }
+
+    /// ユーザーのリポジトリに対する permission level を返す。
+    ///
+    /// `GET /repos/{owner}/{repo}/collaborators/{username}/permission` を呼び出す。
+    /// 404 の場合は `RepositoryPermission::Read` を返す。
+    pub async fn fetch_user_permission(&self, username: &str) -> Result<RepositoryPermission> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/collaborators/{}/permission",
+            self.owner, self.repo, username
+        );
+
+        let resp = self
+            .http_client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send()
+            .await
+            .with_context(|| format!("failed to fetch permission for user {username}"))?;
+
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(RepositoryPermission::Read);
+        }
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "permission API returned {}: {}",
+                resp.status(),
+                resp.text().await.unwrap_or_default()
+            ));
+        }
+
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .context("failed to parse permission response")?;
+
+        let permission = match body["permission"].as_str().unwrap_or("none") {
+            "admin" => RepositoryPermission::Admin,
+            "maintain" => RepositoryPermission::Maintain,
+            "write" => RepositoryPermission::Write,
+            "triage" => RepositoryPermission::Triage,
+            _ => RepositoryPermission::Read,
+        };
+
+        Ok(permission)
+    }
+
+    /// Issue からラベルを削除する。
+    pub async fn remove_label(&self, issue_number: u64, label_name: &str) -> Result<()> {
+        // ラベル名を URL パスセグメントとして percent-encode する
+        let encoded_label = percent_encode_path(label_name);
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/issues/{}/labels/{}",
+            self.owner, self.repo, issue_number, encoded_label
+        );
+
+        let resp = self
+            .http_client
+            .delete(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send()
+            .await
+            .with_context(|| {
+                format!("failed to remove label '{label_name}' from issue #{issue_number}")
+            })?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "remove label API returned {}: {}",
+                resp.status(),
+                resp.text().await.unwrap_or_default()
+            ));
+        }
+
+        Ok(())
     }
 }

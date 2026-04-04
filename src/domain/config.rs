@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::domain::author_association::TrustedAssociations;
 use crate::domain::model_config::ModelConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +26,7 @@ pub struct Config {
     pub log_dir: PathBuf,
     pub max_concurrent_sessions: Option<u32>,
     pub models: ModelConfig,
+    pub trusted_associations: TrustedAssociations,
 }
 
 impl Config {
@@ -42,6 +44,7 @@ impl Config {
             log_dir: PathBuf::from(".cupola/logs"),
             max_concurrent_sessions: None,
             models: ModelConfig::new_default("sonnet".to_string()),
+            trusted_associations: TrustedAssociations::default(),
         }
     }
 

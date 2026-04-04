@@ -1,3 +1,4 @@
+pub mod association_guard;
 pub mod cleanup_use_case;
 pub mod doctor_use_case;
 pub mod init_use_case;
