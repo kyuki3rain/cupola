@@ -9,7 +9,10 @@ use crate::adapter::outbound::git_worktree_manager::GitWorktreeManager;
 use crate::adapter::outbound::github_client_impl::GitHubClientImpl;
 use crate::adapter::outbound::github_graphql_client::GraphQLClient;
 use crate::adapter::outbound::github_rest_client::OctocrabRestClient;
+use crate::adapter::outbound::init_file_generator::InitFileGenerator;
+use crate::adapter::outbound::nix_signal_sender::NixSignalSender;
 use crate::adapter::outbound::pid_file_manager::PidFileManager;
+use crate::adapter::outbound::process_command_runner::ProcessCommandRunner;
 use crate::adapter::outbound::sqlite_connection::SqliteConnection;
 use crate::adapter::outbound::sqlite_execution_log_repository::SqliteExecutionLogRepository;
 use crate::adapter::outbound::sqlite_issue_repository::SqliteIssueRepository;
@@ -47,7 +50,11 @@ pub async fn run(cli: Cli) -> Result<()> {
                 .unwrap_or_else(|| Path::new("."))
                 .to_path_buf();
             let pid_file_manager = PidFileManager::new(config_dir.join("cupola.pid"));
-            let stop_use_case = StopUseCase::new(pid_file_manager, Duration::from_secs(30));
+            let stop_use_case = StopUseCase::with_signal_sender(
+                pid_file_manager,
+                NixSignalSender,
+                Duration::from_secs(30),
+            );
 
             match stop_use_case.execute().await? {
                 crate::application::stop_use_case::StopResult::NotRunning => {
@@ -68,7 +75,14 @@ pub async fn run(cli: Cli) -> Result<()> {
 
         Command::Init => {
             let base_dir = std::env::current_dir().context("failed to get current directory")?;
-            let uc = InitUseCase::new(base_dir);
+            let cupola_dir = base_dir.join(".cupola");
+            std::fs::create_dir_all(&cupola_dir)
+                .with_context(|| format!("failed to create {}", cupola_dir.display()))?;
+            let db_path = cupola_dir.join("cupola.db");
+            let db_existed = db_path.exists();
+            let db = SqliteConnection::open(&db_path).context("failed to open SQLite database")?;
+            let file_gen = InitFileGenerator::new(base_dir.clone());
+            let uc = InitUseCase::new(base_dir, db_existed, db, file_gen);
             let report = uc.run()?;
 
             println!("cupola init completed:");
@@ -109,7 +123,8 @@ pub async fn run(cli: Cli) -> Result<()> {
 
         Command::Doctor { config } => {
             let loader = TomlConfigLoader;
-            let use_case = DoctorUseCase::new(loader);
+            let runner = ProcessCommandRunner;
+            let use_case = DoctorUseCase::new(loader, runner);
             let results = use_case.run(&config);
 
             let mut has_failure = false;

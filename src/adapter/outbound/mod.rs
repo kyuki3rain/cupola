@@ -4,6 +4,7 @@ pub mod github_client_impl;
 pub mod github_graphql_client;
 pub mod github_rest_client;
 pub mod init_file_generator;
+pub mod nix_signal_sender;
 pub mod pid_file_manager;
 pub mod process_command_runner;
 pub mod sqlite_connection;

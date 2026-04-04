@@ -1,4 +1,3 @@
-pub mod check_result;
 pub mod config;
 pub mod event;
 pub mod execution_log;
