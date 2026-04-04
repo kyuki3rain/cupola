@@ -27,8 +27,12 @@ impl CompressUseCase {
             });
         }
 
-        let entries = std::fs::read_dir(&self.specs_dir)
-            .with_context(|| format!("failed to read specs directory: {}", self.specs_dir.display()))?;
+        let entries = std::fs::read_dir(&self.specs_dir).with_context(|| {
+            format!(
+                "failed to read specs directory: {}",
+                self.specs_dir.display()
+            )
+        })?;
 
         let mut completed_count = 0;
         for entry in entries {
@@ -63,8 +67,8 @@ fn is_completed_spec(spec_json_path: &Path) -> Result<bool> {
     let content = std::fs::read_to_string(spec_json_path)
         .with_context(|| format!("failed to read {}", spec_json_path.display()))?;
     // Check if phase indicates completion (not archived)
-    let phase_complete = content.contains("\"implementation-complete\"")
-        || content.contains("\"completed\"");
+    let phase_complete =
+        content.contains("\"implementation-complete\"") || content.contains("\"completed\"");
     let already_archived = content.contains("\"archived\"");
     Ok(phase_complete && !already_archived)
 }

@@ -126,11 +126,7 @@ The PR will be created by the system. Please output the following information.
     )
 }
 
-fn build_implementation_prompt(
-    issue_number: u64,
-    language: &str,
-    feature_name: &str,
-) -> String {
+fn build_implementation_prompt(issue_number: u64, language: &str, feature_name: &str) -> String {
     format!(
         r#"You are an automated implementation agent. Implement based on the design documents.
 
@@ -288,8 +284,7 @@ mod tests {
     fn design_running_returns_pr_creation_schema() {
         let config = test_config();
         let session =
-            build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false)
-                .unwrap();
+            build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false).unwrap();
         assert_eq!(session.output_schema, OutputSchemaKind::PrCreation);
         assert!(session.prompt.contains("automated design agent"));
         assert!(session.prompt.contains("#42"));
@@ -379,8 +374,7 @@ mod tests {
     fn design_prompt_contains_related_instruction() {
         let config = test_config();
         let session =
-            build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false)
-                .unwrap();
+            build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false).unwrap();
         assert!(
             session.prompt.contains("Related: #42"),
             "design prompt should instruct to use 'Related: #N'"
@@ -391,8 +385,7 @@ mod tests {
     fn design_prompt_does_not_contain_closes() {
         let config = test_config();
         let session =
-            build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false)
-                .unwrap();
+            build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false).unwrap();
         assert!(
             !session.prompt.contains("Closes"),
             "design prompt should not contain 'Closes'"
@@ -403,8 +396,7 @@ mod tests {
     fn design_prompt_does_not_contain_kiro() {
         let config = test_config();
         let session =
-            build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false)
-                .unwrap();
+            build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false).unwrap();
         assert!(
             !session.prompt.contains("/kiro:"),
             "design prompt should not contain /kiro: references"
@@ -577,13 +569,14 @@ mod tests {
     #[test]
     fn design_fixing_without_pr_number_returns_err() {
         let config = test_config();
-        let result =
-            build_session_config(State::DesignFixing, 42, &config, None, FN, &[], false);
+        let result = build_session_config(State::DesignFixing, 42, &config, None, FN, &[], false);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("fixing state requires pr_number in DB"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("fixing state requires pr_number in DB")
+        );
     }
 
     #[test]
@@ -599,17 +592,18 @@ mod tests {
             false,
         );
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("fixing state requires pr_number in DB"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("fixing state requires pr_number in DB")
+        );
     }
 
     #[test]
     fn design_running_without_pr_number_returns_ok() {
         let config = test_config();
-        let result =
-            build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false);
+        let result = build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false);
         assert!(result.is_ok());
     }
 
@@ -625,9 +619,11 @@ mod tests {
         let session =
             build_session_config(State::DesignFixing, 42, &config, Some(85), FN, &[], true)
                 .unwrap();
-        assert!(session
-            .prompt
-            .contains("## Merge Conflict Resolution Required"));
+        assert!(
+            session
+                .prompt
+                .contains("## Merge Conflict Resolution Required")
+        );
         assert!(session.prompt.contains("git commit --no-edit"));
         let conflict_pos = session
             .prompt
@@ -643,15 +639,17 @@ mod tests {
         let without =
             build_session_config(State::DesignFixing, 42, &config, Some(85), FN, &[], false)
                 .unwrap();
-        let with =
-            build_session_config(State::DesignFixing, 42, &config, Some(85), FN, &[], true)
-                .unwrap();
-        assert!(!without
-            .prompt
-            .contains("## Merge Conflict Resolution Required"));
-        assert!(with
-            .prompt
-            .contains("## Merge Conflict Resolution Required"));
+        let with = build_session_config(State::DesignFixing, 42, &config, Some(85), FN, &[], true)
+            .unwrap();
+        assert!(
+            !without
+                .prompt
+                .contains("## Merge Conflict Resolution Required")
+        );
+        assert!(
+            with.prompt
+                .contains("## Merge Conflict Resolution Required")
+        );
         assert_ne!(without.prompt, with.prompt);
     }
 
@@ -659,8 +657,7 @@ mod tests {
     fn design_prompt_generic_quality_check() {
         let config = test_config();
         let session =
-            build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false)
-                .unwrap();
+            build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false).unwrap();
         assert!(session.prompt.contains(GENERIC_QUALITY_CHECK_INSTRUCTION));
     }
 

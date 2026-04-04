@@ -182,8 +182,7 @@ pub async fn run(cli: Cli) -> Result<()> {
 
         Command::Compress => {
             let specs_dir = std::path::PathBuf::from(".cupola/specs");
-            let uc =
-                crate::application::compress_use_case::CompressUseCase::new(specs_dir);
+            let uc = crate::application::compress_use_case::CompressUseCase::new(specs_dir);
             let report = uc.find_completed_specs()?;
             if let Some(reason) = report.skipped_reason {
                 println!("{reason}");
