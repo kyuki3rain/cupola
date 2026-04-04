@@ -1,8 +1,8 @@
-use std::io::ErrorKind;
 use std::path::Path;
 
 use serde::Deserialize;
 
+use crate::application::port::command_runner::CommandRunner;
 use crate::application::port::config_loader::ConfigLoader;
 
 /// 個別チェックのステータス
@@ -18,13 +18,17 @@ pub struct DoctorCheckResult {
     pub status: CheckStatus,
 }
 
-pub struct DoctorUseCase<C: ConfigLoader> {
+pub struct DoctorUseCase<C: ConfigLoader, R: CommandRunner> {
     config_loader: C,
+    command_runner: R,
 }
 
-impl<C: ConfigLoader> DoctorUseCase<C> {
-    pub fn new(config_loader: C) -> Self {
-        Self { config_loader }
+impl<C: ConfigLoader, R: CommandRunner> DoctorUseCase<C, R> {
+    pub fn new(config_loader: C, command_runner: R) -> Self {
+        Self {
+            config_loader,
+            command_runner,
+        }
     }
 
     pub fn run(&self, config_path: &Path) -> Vec<DoctorCheckResult> {
@@ -34,10 +38,10 @@ impl<C: ConfigLoader> DoctorUseCase<C> {
 
         vec![
             check_toml(&self.config_loader, config_path),
-            check_git(),
-            check_gh(),
-            check_gh_label(),
-            check_weight_labels(),
+            check_git(&self.command_runner),
+            check_gh(&self.command_runner),
+            check_gh_label(&self.command_runner),
+            check_weight_labels(&self.command_runner),
             check_steering(&steering_path),
             check_db(&db_path),
         ]
@@ -57,13 +61,22 @@ fn check_toml(config_loader: &dyn ConfigLoader, path: &Path) -> DoctorCheckResul
     }
 }
 
-fn check_git() -> DoctorCheckResult {
-    let result = std::process::Command::new("git").arg("--version").output();
-
-    match result {
-        Ok(output) if output.status.success() => DoctorCheckResult {
+fn check_git(runner: &dyn CommandRunner) -> DoctorCheckResult {
+    match runner.run("git", &["--version"]) {
+        Err(e) => DoctorCheckResult {
+            name: "git".to_string(),
+            status: CheckStatus::Fail(format!("git の確認中にエラーが発生しました: {e}")),
+        },
+        Ok(output) if output.success => DoctorCheckResult {
             name: "git".to_string(),
             status: CheckStatus::Ok("git がインストールされています".to_string()),
+        },
+        Ok(output) if output.stderr.contains("command not found") => DoctorCheckResult {
+            name: "git".to_string(),
+            status: CheckStatus::Fail(
+                "git がインストールされていません。git をインストールしてください: https://git-scm.com/"
+                    .to_string(),
+            ),
         },
         Ok(_) => DoctorCheckResult {
             name: "git".to_string(),
@@ -71,17 +84,6 @@ fn check_git() -> DoctorCheckResult {
                 "git が正常に動作しません。git をインストールしてください: https://git-scm.com/"
                     .to_string(),
             ),
-        },
-        Err(e) if e.kind() == ErrorKind::NotFound => DoctorCheckResult {
-            name: "git".to_string(),
-            status: CheckStatus::Fail(
-                "git がインストールされていません。git をインストールしてください: https://git-scm.com/"
-                    .to_string(),
-            ),
-        },
-        Err(e) => DoctorCheckResult {
-            name: "git".to_string(),
-            status: CheckStatus::Fail(format!("git の確認中にエラーが発生しました: {e}")),
         },
     }
 }
@@ -92,30 +94,27 @@ enum GhPresence {
     Ready,
 }
 
-fn detect_gh_presence() -> GhPresence {
-    let version_result = std::process::Command::new("gh").arg("--version").output();
-
-    match version_result {
-        Err(e) if e.kind() == ErrorKind::NotFound => GhPresence::NotInstalled,
-        // gh バイナリ自体は見つかっているが、PermissionDenied など別の理由で失敗した場合は
-        // 「未インストール」扱いにはせず、インストール済みだが利用できない状態として扱う
+fn detect_gh_presence(runner: &dyn CommandRunner) -> GhPresence {
+    match runner.run("gh", &["--version"]) {
         Err(_) => GhPresence::InstalledButUnauthorized,
+        Ok(output) if !output.success => {
+            if output.stderr.contains("command not found") {
+                GhPresence::NotInstalled
+            } else {
+                GhPresence::InstalledButUnauthorized
+            }
+        }
         Ok(_) => {
-            let auth_result = std::process::Command::new("gh")
-                .arg("auth")
-                .arg("status")
-                .output();
-
-            match auth_result {
-                Ok(output) if output.status.success() => GhPresence::Ready,
+            match runner.run("gh", &["auth", "status"]) {
+                Ok(output) if output.success => GhPresence::Ready,
                 _ => GhPresence::InstalledButUnauthorized,
             }
         }
     }
 }
 
-fn check_gh() -> DoctorCheckResult {
-    match detect_gh_presence() {
+fn check_gh(runner: &dyn CommandRunner) -> DoctorCheckResult {
+    match detect_gh_presence(runner) {
         GhPresence::NotInstalled => DoctorCheckResult {
             name: "gh".to_string(),
             status: CheckStatus::Fail(
@@ -147,78 +146,78 @@ fn parse_label_json(stdout: &str) -> Result<bool, String> {
     Ok(items.iter().any(|item| item.name == "agent:ready"))
 }
 
-fn check_gh_label() -> DoctorCheckResult {
-    let result = std::process::Command::new("gh")
-        .args(["label", "list", "--json", "name"])
-        .output();
-
-    match result {
-        Err(e) if e.kind() == ErrorKind::NotFound => DoctorCheckResult {
-            name: "agent:ready ラベル".to_string(),
-            status: CheckStatus::Fail(
-                "gh CLI がインストールされていないため、ラベルを確認できません".to_string(),
-            ),
-        },
+fn check_gh_label(runner: &dyn CommandRunner) -> DoctorCheckResult {
+    match runner.run("gh", &["label", "list", "--json", "name"]) {
         Err(e) => DoctorCheckResult {
             name: "agent:ready ラベル".to_string(),
             status: CheckStatus::Fail(format!("ラベル一覧の取得に失敗しました: {e}")),
         },
-        Ok(output) if !output.status.success() => DoctorCheckResult {
-            name: "agent:ready ラベル".to_string(),
-            status: CheckStatus::Fail(
-                "ラベル一覧の取得に失敗しました。gh の認証状態を確認してください".to_string(),
-            ),
-        },
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            match parse_label_json(&stdout) {
-                Ok(true) => DoctorCheckResult {
-                    name: "agent:ready ラベル".to_string(),
-                    status: CheckStatus::Ok(
-                        "agent:ready ラベルがリポジトリに存在します".to_string(),
-                    ),
-                },
-                Ok(false) => DoctorCheckResult {
+        Ok(output) if !output.success => {
+            if output.stderr.contains("command not found") {
+                DoctorCheckResult {
                     name: "agent:ready ラベル".to_string(),
                     status: CheckStatus::Fail(
-                        "agent:ready ラベルがリポジトリに存在しません。`gh label create agent:ready` で作成してください".to_string(),
+                        "gh CLI がインストールされていないため、ラベルを確認できません".to_string(),
                     ),
-                },
-                Err(e) => DoctorCheckResult {
+                }
+            } else {
+                DoctorCheckResult {
                     name: "agent:ready ラベル".to_string(),
-                    status: CheckStatus::Fail(format!("ラベル一覧の取得に失敗しました: {e}")),
-                },
+                    status: CheckStatus::Fail(
+                        "ラベル一覧の取得に失敗しました。gh の認証状態を確認してください"
+                            .to_string(),
+                    ),
+                }
             }
         }
+        Ok(output) => match parse_label_json(&output.stdout) {
+            Ok(true) => DoctorCheckResult {
+                name: "agent:ready ラベル".to_string(),
+                status: CheckStatus::Ok(
+                    "agent:ready ラベルがリポジトリに存在します".to_string(),
+                ),
+            },
+            Ok(false) => DoctorCheckResult {
+                name: "agent:ready ラベル".to_string(),
+                status: CheckStatus::Fail(
+                    "agent:ready ラベルがリポジトリに存在しません。`gh label create agent:ready` で作成してください".to_string(),
+                ),
+            },
+            Err(e) => DoctorCheckResult {
+                name: "agent:ready ラベル".to_string(),
+                status: CheckStatus::Fail(format!("ラベル一覧の取得に失敗しました: {e}")),
+            },
+        },
     }
 }
 
-fn check_weight_labels() -> DoctorCheckResult {
-    let result = std::process::Command::new("gh")
-        .args(["label", "list", "--json", "name"])
-        .output();
-
-    match result {
-        Err(e) if e.kind() == ErrorKind::NotFound => DoctorCheckResult {
-            name: "weight:* ラベル".to_string(),
-            status: CheckStatus::Fail(
-                "gh CLI がインストールされていないため、ラベルを確認できません".to_string(),
-            ),
-        },
+fn check_weight_labels(runner: &dyn CommandRunner) -> DoctorCheckResult {
+    match runner.run("gh", &["label", "list", "--json", "name"]) {
         Err(e) => DoctorCheckResult {
             name: "weight:* ラベル".to_string(),
             status: CheckStatus::Fail(format!("ラベル一覧の取得に失敗しました: {e}")),
         },
-        Ok(output) if !output.status.success() => DoctorCheckResult {
-            name: "weight:* ラベル".to_string(),
-            status: CheckStatus::Fail(
-                "ラベル一覧の取得に失敗しました。gh の認証状態を確認してください".to_string(),
-            ),
-        },
+        Ok(output) if !output.success => {
+            if output.stderr.contains("command not found") {
+                DoctorCheckResult {
+                    name: "weight:* ラベル".to_string(),
+                    status: CheckStatus::Fail(
+                        "gh CLI がインストールされていないため、ラベルを確認できません".to_string(),
+                    ),
+                }
+            } else {
+                DoctorCheckResult {
+                    name: "weight:* ラベル".to_string(),
+                    status: CheckStatus::Fail(
+                        "ラベル一覧の取得に失敗しました。gh の認証状態を確認してください"
+                            .to_string(),
+                    ),
+                }
+            }
+        }
         Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let has_light = stdout.contains("\"weight:light\"");
-            let has_heavy = stdout.contains("\"weight:heavy\"");
+            let has_light = output.stdout.contains("\"weight:light\"");
+            let has_heavy = output.stdout.contains("\"weight:heavy\"");
             if has_light && has_heavy {
                 DoctorCheckResult {
                     name: "weight:* ラベル".to_string(),
@@ -303,6 +302,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::application::port::command_runner::test_support::MockCommandRunner;
     use crate::application::port::config_loader::{ConfigLoadError, DoctorConfigSummary};
 
     // --- MockConfigLoader ---
@@ -371,7 +371,7 @@ mod tests {
         }
     }
 
-    // --- check_toml tests (Task 4.1) ---
+    // --- check_toml tests ---
 
     #[test]
     fn check_toml_with_valid_file_returns_ok() {
@@ -408,7 +408,7 @@ mod tests {
         assert!(matches!(result.status, CheckStatus::Fail(_)));
     }
 
-    // --- check_steering tests (Task 4.2) ---
+    // --- check_steering tests ---
 
     #[test]
     fn check_steering_with_md_file_returns_ok() {
@@ -445,7 +445,7 @@ mod tests {
         assert!(matches!(result.status, CheckStatus::Fail(_)));
     }
 
-    // --- check_db tests (Task 4.3) ---
+    // --- check_db tests ---
 
     #[test]
     fn check_db_with_existing_file_returns_ok() {
@@ -466,27 +466,24 @@ mod tests {
         assert!(matches!(result.status, CheckStatus::Fail(_)));
     }
 
-    // --- check_git tests (Task 4.4) ---
+    // --- check_git tests with MockCommandRunner ---
 
     #[test]
-    fn check_git_runtime_skip_if_not_installed() {
-        // git が PATH に存在しない場合はスキップ（ランタイムスキップ）
-        let git_exists = std::process::Command::new("git")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-
-        if !git_exists {
-            // git が存在しない環境ではスキップ
-            return;
-        }
-
-        let result = check_git();
+    fn check_git_with_mock_success_returns_ok() {
+        let runner = MockCommandRunner::new().with_success("git", &["--version"], "git version 2.x");
+        let result = check_git(&runner);
         assert!(matches!(result.status, CheckStatus::Ok(_)));
     }
 
-    // --- label JSON parse tests (Task 4.5) ---
+    #[test]
+    fn check_git_with_mock_not_found_returns_fail() {
+        // default response: success=false, stderr="command not found"
+        let runner = MockCommandRunner::new();
+        let result = check_git(&runner);
+        assert!(matches!(result.status, CheckStatus::Fail(_)));
+    }
+
+    // --- label JSON parse tests ---
 
     #[test]
     fn parse_label_json_with_agent_ready_returns_true() {
@@ -512,14 +509,15 @@ mod tests {
         assert!(!parse_label_json(json).unwrap());
     }
 
-    // --- DoctorUseCase integration test with mock (Task 4.6) ---
+    // --- DoctorUseCase integration test with mock ---
 
     #[test]
     fn doctor_use_case_all_ok_with_mock_loader() {
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("cupola.toml");
         let loader = MockConfigLoader::ok();
-        let use_case = DoctorUseCase::new(loader);
+        let runner = MockCommandRunner::new();
+        let use_case = DoctorUseCase::new(loader, runner);
         let results = use_case.run(&config_path);
 
         // toml check should be Ok (mock returns Ok)
@@ -534,10 +532,18 @@ mod tests {
         let config_path = dir.path().join("cupola.toml");
 
         let loader = MockConfigLoader::not_found(config_path.to_str().unwrap());
-        let use_case = DoctorUseCase::new(loader);
+        let runner = MockCommandRunner::new();
+        let use_case = DoctorUseCase::new(loader, runner);
         let results = use_case.run(&config_path);
 
         // toml check should be Fail
         assert!(matches!(results[0].status, CheckStatus::Fail(_)));
+    }
+
+    #[test]
+    fn check_git_with_mock_installed_but_failing_returns_fail() {
+        let runner = MockCommandRunner::new().with_failure("git", &["--version"]);
+        let result = check_git(&runner);
+        assert!(matches!(result.status, CheckStatus::Fail(_)));
     }
 }

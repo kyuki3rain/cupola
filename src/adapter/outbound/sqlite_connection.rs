@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
+use crate::application::port::db_initializer::DbInitializer;
+
 #[derive(Clone)]
 pub struct SqliteConnection {
     conn: Arc<Mutex<Connection>>,
@@ -114,6 +116,12 @@ impl SqliteConnection {
 
     pub fn conn(&self) -> &Arc<Mutex<Connection>> {
         &self.conn
+    }
+}
+
+impl DbInitializer for SqliteConnection {
+    fn init_schema(&self) -> Result<()> {
+        self.init_schema()
     }
 }
 

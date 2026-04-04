@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
+use crate::application::port::file_generator::FileGenerator;
+
 const CUPOLA_TOML_TEMPLATE: &str = r#"owner = ""
 repo = ""
 default_branch = ""
@@ -195,6 +197,20 @@ impl InitFileGenerator {
 
         tracing::info!(path = %gitignore_path.display(), "cupola entries appended to .gitignore");
         Ok(true)
+    }
+}
+
+impl FileGenerator for InitFileGenerator {
+    fn generate_toml_template(&self) -> Result<bool> {
+        self.generate_toml_template()
+    }
+
+    fn copy_steering_templates(&self) -> Result<bool> {
+        self.copy_steering_templates()
+    }
+
+    fn append_gitignore_entries(&self) -> Result<bool> {
+        self.append_gitignore_entries()
     }
 }
 
