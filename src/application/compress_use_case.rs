@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 pub struct CompressReport {
-    pub compressed_count: usize,
+    pub completed_count: usize,
     pub skipped_reason: Option<String>,
 }
 
@@ -22,7 +22,7 @@ impl CompressUseCase {
     pub fn find_completed_specs(&self) -> Result<CompressReport> {
         if !self.specs_dir.exists() {
             return Ok(CompressReport {
-                compressed_count: 0,
+                completed_count: 0,
                 skipped_reason: Some("specs ディレクトリが存在しません".to_string()),
             });
         }
@@ -51,12 +51,12 @@ impl CompressUseCase {
 
         if completed_count == 0 {
             Ok(CompressReport {
-                compressed_count: 0,
+                completed_count: 0,
                 skipped_reason: Some("完了済みの spec が見つかりません".to_string()),
             })
         } else {
             Ok(CompressReport {
-                compressed_count: completed_count,
+                completed_count,
                 skipped_reason: None,
             })
         }
@@ -86,7 +86,7 @@ mod tests {
         let tmp = TempDir::new().expect("temp dir");
         let uc = CompressUseCase::new(tmp.path().join("nonexistent"));
         let report = uc.find_completed_specs().expect("find");
-        assert_eq!(report.compressed_count, 0);
+        assert_eq!(report.completed_count, 0);
         assert!(report.skipped_reason.is_some());
     }
 
@@ -103,7 +103,7 @@ mod tests {
 
         let uc = CompressUseCase::new(spec_dir);
         let report = uc.find_completed_specs().expect("find");
-        assert_eq!(report.compressed_count, 0);
+        assert_eq!(report.completed_count, 0);
         assert!(report.skipped_reason.is_some());
     }
 
@@ -120,7 +120,7 @@ mod tests {
 
         let uc = CompressUseCase::new(spec_dir);
         let report = uc.find_completed_specs().expect("find");
-        assert_eq!(report.compressed_count, 1);
+        assert_eq!(report.completed_count, 1);
         assert!(report.skipped_reason.is_none());
     }
 
@@ -137,6 +137,6 @@ mod tests {
 
         let uc = CompressUseCase::new(spec_dir);
         let report = uc.find_completed_specs().expect("find");
-        assert_eq!(report.compressed_count, 0);
+        assert_eq!(report.completed_count, 0);
     }
 }

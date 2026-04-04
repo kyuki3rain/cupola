@@ -190,7 +190,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             }
             println!(
                 "完了済み spec が {} 件見つかりました。`/cupola:spec-compress` を Claude Code で実行してください。",
-                report.compressed_count
+                report.completed_count
             );
             Ok(())
         }

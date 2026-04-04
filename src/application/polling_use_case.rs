@@ -950,8 +950,11 @@ where
             State::DesignRunning => {
                 let detail = self.github.get_issue(issue.github_issue_number).await?;
                 write_issue_input(wt, &detail)?;
-                crate::application::io::write_spec_init(
-                    wt,
+                let file_gen =
+                    crate::adapter::outbound::init_file_generator::InitFileGenerator::new(
+                        wt.to_path_buf(),
+                    );
+                let _ = file_gen.generate_spec_directory(
                     issue.github_issue_number,
                     &detail.body,
                     &self.config.language,
