@@ -39,6 +39,7 @@ impl SessionManager {
     pub fn register(&mut self, issue_id: i64, state: State, mut child: Child) {
         if let Some(mut old_entry) = self.sessions.remove(&issue_id) {
             let _ = old_entry.child.kill();
+            let _ = old_entry.child.wait();
         }
 
         let stdout = child.stdout.take();
@@ -307,7 +308,7 @@ mod tests {
 
     #[test]
     fn register_kills_old_process_on_duplicate_issue_id() {
-        use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+        use nix::sys::signal;
         use nix::unistd::Pid;
 
         let mut mgr = SessionManager::new();
@@ -317,21 +318,28 @@ mod tests {
         let old_pid = old_child.id();
         mgr.register(1, State::DesignRunning, old_child);
 
-        // 同一 issue_id に別プロセスを再登録すると旧プロセスがkillされる
+        // 同一 issue_id に別プロセスを再登録すると旧プロセスがkillされ、wait()で回収される
         let new_child = spawn_sleep(60);
         mgr.register(1, State::ImplementationRunning, new_child);
 
-        // 旧プロセスが終了するのを少し待つ
-        std::thread::sleep(Duration::from_millis(200));
-
-        // 親プロセスとして waitpid で旧子プロセスの終了を確認する
+        // register() 内で kill() + wait() が呼ばれるため、プロセスは既に回収済み。
+        // kill(pid, 0) で ESRCH が返れば、プロセスが存在しないことを確認できる。
         let nix_pid = Pid::from_raw(old_pid as i32);
-        let status = waitpid(nix_pid, Some(WaitPidFlag::WNOHANG))
-            .expect("waitpid should succeed for our child");
-        assert!(
-            matches!(status, WaitStatus::Exited(..) | WaitStatus::Signaled(..)),
-            "old process should have been killed: {status:?}"
-        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match signal::kill(nix_pid, None) {
+                Err(nix::errno::Errno::ESRCH) => break, // プロセスは存在しない（正常）
+                Ok(()) => {
+                    // まだ存在する（終了処理中の可能性）
+                    assert!(
+                        Instant::now() < deadline,
+                        "old process was not killed within timeout"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => panic!("unexpected kill(0) error: {e}"),
+            }
+        }
 
         mgr.kill_all();
     }

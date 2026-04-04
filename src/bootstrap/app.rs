@@ -506,10 +506,7 @@ async fn start_daemon_child(
     use crate::application::port::pid_file::{PidFileError, PidFilePort};
     let my_pid = std::process::id();
     pid_file_manager.write_pid(my_pid).map_err(|e| match e {
-        PidFileError::AlreadyExists => {
-            println!("cupola is already running");
-            std::process::exit(1);
-        }
+        PidFileError::AlreadyExists => anyhow::anyhow!("cupola is already running"),
         other => anyhow::anyhow!("failed to write PID file: {other}"),
     })?;
 
