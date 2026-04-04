@@ -58,7 +58,9 @@ impl ConfigLoader for TomlConfigLoader {
             }
         })?;
 
-        config.validate().map_err(|reason| ConfigLoadError::ValidationFailed { reason })?;
+        config
+            .validate()
+            .map_err(|reason| ConfigLoadError::ValidationFailed { reason })?;
 
         Ok(summary)
     }

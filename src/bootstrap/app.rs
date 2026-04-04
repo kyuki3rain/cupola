@@ -145,7 +145,10 @@ pub async fn run(cli: Cli) -> Result<()> {
 
             println!("=== Start Readiness ===");
             let mut has_failure = false;
-            for result in results.iter().filter(|r| matches!(r.section, DoctorSection::StartReadiness)) {
+            for result in results
+                .iter()
+                .filter(|r| matches!(r.section, DoctorSection::StartReadiness))
+            {
                 match &result.status {
                     CheckStatus::Ok(msg) => println!("✅ {}: {}", result.name, msg),
                     CheckStatus::Warn(msg) => println!("⚠️  {}: {}", result.name, msg),
@@ -161,7 +164,10 @@ pub async fn run(cli: Cli) -> Result<()> {
 
             println!();
             println!("=== Operational Readiness ===");
-            for result in results.iter().filter(|r| matches!(r.section, DoctorSection::OperationalReadiness)) {
+            for result in results
+                .iter()
+                .filter(|r| matches!(r.section, DoctorSection::OperationalReadiness))
+            {
                 match &result.status {
                     CheckStatus::Ok(msg) => println!("✅ {}: {}", result.name, msg),
                     CheckStatus::Warn(msg) => println!("⚠️  {}: {}", result.name, msg),
