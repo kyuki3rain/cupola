@@ -107,7 +107,7 @@ sequenceDiagram
     PUC->>Repo: find_active()
     loop 各アクティブ Issue
         alt current_pid が Some(pid)
-            PUC->>OS: kill(pid, Signal::None) — 生存確認
+            PUC->>OS: kill(pid, None) — 生存確認
             alt プロセス生存
                 PUC->>OS: kill(pid, SIGKILL)
                 alt SIGKILL 成功
@@ -191,7 +191,9 @@ sequenceDiagram
 | Requirements | 2.1, 2.2, 2.3, 2.4 |
 
 **Responsibilities & Constraints**
-- `current_pid` が `Some(pid)` の場合、`is_process_alive(pid)` で確認する
+- `current_pid` が `Some(pid)` の場合、まず PID 範囲バリデーション（`1..=i32::MAX as u32`）を行う
+- PID が不正（0 または `pid > i32::MAX as u32`）の場合は kill をスキップし、warn ログを出力後に `current_pid = None` にクリアする
+- PID が正常範囲の場合、`is_process_alive(pid)` でプロセス生存を確認する
 - 生存確認 OK の場合、SIGKILL を送信してから `current_pid = None` にクリアする
 - kill 失敗は警告ログのみで処理を継続し、クリアは実行する（起動を妨げない）
 
@@ -245,7 +247,7 @@ sequenceDiagram
 fn is_process_alive(pid: u32) -> bool
 ```
 
-- Preconditions: `pid > 0`
+- Preconditions: `1 <= pid <= i32::MAX as u32`（不正 PID は呼び出し元でバリデーション済み）
 - Postconditions: ESRCH エラー以外は `true` を返す（保守的）
 - Invariants: 副作用なし（シグナル 0 はプロセスに影響を与えない）
 

@@ -15,6 +15,7 @@
   - その他のエラー（`EPERM` 等）は保守的に `true` を返す
   - nix の `use` 宣言（`nix::sys::signal::{Signal, kill}` 等）を追加する（`stop_use_case.rs` の既存パターンを踏襲）
   - `#[cfg(unix)]` で Unix 専用実装にする
+  - PID 範囲バリデーション（`1..=i32::MAX as u32`）を前提条件として実装する。`recover_on_startup` 側で不正 PID（0 または `pid > i32::MAX`）を検出した場合は kill をスキップし、ログ出力後に `current_pid` のみクリアする
   - _Requirements: 2.1, 2.5_
 
 - [ ] 2.2 `recover_on_startup` に孤児プロセス kill 処理を追加する
@@ -32,7 +33,7 @@
   - _Requirements: 1.1, 1.2, 1.3, 1.4_
 
 - [ ] 3.2 (P) `is_process_alive` のユニットテストを追加する
-  - 存在しない PID（例: `u32::MAX`）に対して `false` が返ることを確認するテストを追加する
+  - 存在しない PID（例: `i32::MAX as u32` など、`i32` にキャストしても負にならない大きな値）に対して `false` が返ることを確認するテストを追加する
   - 自プロセスの PID（`std::process::id()`）に対して `true` が返ることを確認するテストを追加する
   - _Requirements: 2.5_
 
