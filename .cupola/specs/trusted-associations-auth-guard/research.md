@@ -9,7 +9,7 @@
 - **Feature**: `trusted-associations-auth-guard`
 - **Discovery Scope**: Extension（既存システムへの拡張）
 - **Key Findings**:
-  - `Config` 構造体（`src/domain/config.rs`）および `CupolaToml`（`src/bootstrap/toml_config_loader.rs`）への新フィールド追加が最小変更で実現可能
+  - `Config` 構造体（`src/domain/config.rs`）および `CupolaToml`（`src/bootstrap/config_loader.rs`）への新フィールド追加が最小変更で実現可能
   - GitHub Timeline REST API（`GET /repos/{owner}/{repo}/issues/{issue_number}/timeline`）でラベル付与者のログインを取得し、別途 Collaborator/Org API で association を判定する必要がある
   - GraphQL の `reviewThreads` クエリへ `authorAssociation` フィールドを追加するだけで PR フィルタ対応が完了する
   - `ReviewComment` 構造体（`src/application/port/github_client.rs`）に `author_association` フィールドを追加し、アプリケーション層でフィルタリングすることでクリーンアーキテクチャに準拠できる
@@ -82,7 +82,7 @@
   1. REST API 複数呼び出し（collaborators + org members チェック）
   2. GraphQL で Issue timeline を取得し actor の permission を判定
 - **Selected Approach**: REST API で Timeline → actor.login を取得し、`GET /repos/{owner}/{repo}/collaborators/{username}/permission` API（単一エンドポイント）で permission を取得して association にマッピング
-- **Rationale**: `collaborators/permission` エンドポイントは `permission` フィールドで OWNER/ADMIN/WRITE/TRIAGE/READ を返すため、1回の API 呼び出しで OWNER/MEMBER/COLLABORATOR の判定に近い情報が取れる。CONTRIBUTOR 以下は fallback で NONE 扱いとして安全側に倒す
+- **Rationale**: `collaborators/permission` エンドポイントは `permission` フィールドで `admin/maintain/write/triage/read` を返す。このエンドポイントは `author_association` を直接返すわけではないため、permission level を `RepositoryPermission` enum にマッピングし、ドメイン層で `AuthorAssociation` に変換する。OWNER 判定はこのエンドポイント単独では不確かなため、`admin` permission かつリポジトリオーナーの login と一致する場合に OWNER とする設計とする。CONTRIBUTOR 以下は fallback で NONE 扱いとして安全側に倒す
 - **Trade-offs**: CONTRIBUTOR/FIRST_TIMER の完全判定には PR 履歴 API が必要だが、デフォルト設定（OWNER/MEMBER/COLLABORATOR）では不要
 - **Follow-up**: CONTRIBUTOR 判定を将来サポートする場合は PR 検索 API 追加が必要
 

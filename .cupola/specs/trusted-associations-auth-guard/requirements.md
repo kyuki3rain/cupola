@@ -26,11 +26,11 @@ Cupola は GitHub Issues や PR レビューコメントなど、外部ユーザ
 
 #### 受け入れ基準
 
-1. When `agent:ready` ラベルが Issue に付与されたイベントを検出した場合、the Cupola system shall GitHub Timeline API を使用してラベルを付与した actor の `author_association` を取得すること。
-2. When 取得した actor の `author_association` が `trusted_associations` リストに含まれる場合、the Cupola system shall 通常のワークフローを続行すること。
-3. When 取得した actor の `author_association` が `trusted_associations` リストに含まれない場合、the Cupola system shall `agent:ready` ラベルを Issue から削除すること。
+1. When `agent:ready` ラベルが Issue に付与されたイベントを検出した場合、the Cupola system shall GitHub Timeline API を使用してラベルを付与した actor の `login` を取得すること。
+2. When 取得した actor の `login` に基づき、別 API（例: collaborators permission や organization membership）を使用して判定した association が `trusted_associations` リストに含まれる場合、the Cupola system shall 通常のワークフローを続行すること。
+3. When 取得した actor の `login` に基づき、別 API（例: collaborators permission や organization membership）を使用して判定した association が `trusted_associations` リストに含まれない場合、the Cupola system shall `agent:ready` ラベルを Issue から削除すること。
 4. When `agent:ready` ラベルを削除した場合、the Cupola system shall 該当 Issue にコメントを投稿し、ラベルを削除した理由と信頼できる association レベルを通知すること。
-5. If GitHub Timeline API の呼び出しが失敗した場合、the Cupola system shall エラーをログ出力し、安全側の原則としてワークフローを続行しないこと。
+5. If GitHub Timeline API または association 判定に必要な別 API の呼び出しが失敗した場合、the Cupola system shall エラーをログ出力し、安全側の原則としてワークフローを続行しないこと。
 6. The Cupola system shall association チェックの結果（許可/拒否）をログに記録すること。
 
 ---

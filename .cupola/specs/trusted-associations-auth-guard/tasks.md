@@ -37,7 +37,8 @@
 - [ ] 3.1 (P) Timeline API・Permission API・ラベル操作メソッドをポートに定義する
   - `fetch_label_actor_login(issue_number, label_name) -> Result<Option<String>>` を `GitHubClient` trait に追加する
   - `fetch_user_permission(username) -> Result<RepositoryPermission>` を `GitHubClient` trait に追加する
-  - `RepositoryPermission` enum（Admin / Write / Triage / Read）と `to_author_association()` 変換を定義する
+  - `RepositoryPermission` enum（Admin / Maintain / Write / Triage / Read）と `to_author_association()` 変換を定義する
+  - `Maintain` permission level を正しくデシリアライズ/マッピングできるようにし、`to_author_association()` での扱い（Collaborator 相当など）を明確にする
   - `remove_label(issue_number, label_name)` が未実装の場合は追加する
   - `add_issue_comment(issue_number, body)` が未実装の場合は追加する
   - タスク 1 の完了が前提（`AuthorAssociation` 型の依存）

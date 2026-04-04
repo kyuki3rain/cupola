@@ -25,7 +25,7 @@
 既存システムはクリーンアーキテクチャ 4 層構成（domain / application / adapter / bootstrap）に従う。以下の統合ポイントを修正する。
 
 - **domain/config.rs**: `Config` 構造体に `trusted_associations` フィールドを追加
-- **bootstrap/toml_config_loader.rs**: `CupolaToml` に TOML フィールドを追加し変換ロジックを実装
+- **bootstrap/config_loader.rs**: `CupolaToml` に TOML フィールドを追加し変換ロジックを実装（`toml_config_loader.rs` は `ConfigLoader` trait の実装を提供）
 - **application/port/github_client.rs**: `GitHubClient` トレイトに Timeline/Permission API メソッドを追加。`ReviewComment` に `author_association` フィールドを追加
 - **adapter/outbound/github_rest_client.rs**: Timeline API + Permission API の実装を追加
 - **adapter/outbound/github_graphql_client.rs**: `reviewThreads` クエリに `authorAssociation` フィールドを追加
@@ -113,7 +113,7 @@ sequenceDiagram
                 Polling->>Polling: push Event::IssueDetected
             else 信頼できない association
                 Guard->>GitHub: remove_label(issue_number, "agent:ready")
-                Guard->>GitHub: add_comment(issue_number, 通知メッセージ)
+                Guard->>GitHub: add_issue_comment(issue_number, 通知メッセージ)
                 Guard-->>Polling: Ok(Rejected)
             end
         end
@@ -320,45 +320,50 @@ pub async fn check_label_actor<G: GitHubClient>(
 
 ##### Service Interface
 ```rust
+use core::future::Future;
+
 // src/application/port/github_client.rs への追加
 pub trait GitHubClient {
     // 既存メソッド...
 
     /// issue の timeline から指定ラベルを最後に付与した actor のログインを返す
-    async fn fetch_label_actor_login(
+    fn fetch_label_actor_login(
         &self,
         issue_number: u64,
         label_name: &str,
-    ) -> Result<Option<String>, GitHubError>;
+    ) -> impl Future<Output = anyhow::Result<Option<String>>>;
 
     /// ユーザーのリポジトリに対する permission level を返す
-    async fn fetch_user_permission(
+    fn fetch_user_permission(
         &self,
         username: &str,
-    ) -> Result<RepositoryPermission, GitHubError>;
+    ) -> impl Future<Output = anyhow::Result<RepositoryPermission>>;
 
     /// Issue からラベルを削除する（既存の可能性あり。未実装なら追加）
-    async fn remove_label(
+    fn remove_label(
         &self,
         issue_number: u64,
         label_name: &str,
-    ) -> Result<(), GitHubError>;
+    ) -> impl Future<Output = anyhow::Result<()>>;
 
     /// Issue にコメントを投稿する（既存の可能性あり。未実装なら追加）
-    async fn add_issue_comment(
+    fn add_issue_comment(
         &self,
         issue_number: u64,
         body: &str,
-    ) -> Result<(), GitHubError>;
+    ) -> impl Future<Output = anyhow::Result<()>>;
 }
 
 /// GitHub のリポジトリ permission level
+/// `GET /repos/{owner}/{repo}/collaborators/{username}/permission` の `permission` フィールドに対応。
+/// OWNER 判定はこの API 単独では行えないため、`admin` permission + リポジトリオーナーとの照合で判断する。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepositoryPermission {
-    Admin,   // → Owner / Member 相当
-    Write,   // → Collaborator 相当
-    Triage,  // → NONE 相当（デフォルト設定では拒否）
-    Read,    // → NONE 相当
+    Admin,    // → Owner / Collaborator（Admin）相当
+    Maintain, // → Maintain 相当（GitHub の permission level に存在）
+    Write,    // → Collaborator（Write）相当
+    Triage,   // → NONE 相当（デフォルト設定では拒否）
+    Read,     // → NONE 相当
 }
 
 impl RepositoryPermission {
@@ -444,7 +449,7 @@ pub fn write_review_threads_input(
 
 ##### State Management
 ```rust
-// src/bootstrap/toml_config_loader.rs への追加
+// src/bootstrap/config_loader.rs への追加（CupolaToml はこのファイルに定義されている）
 #[derive(Debug, Deserialize)]
 pub struct CupolaToml {
     // 既存フィールド...
