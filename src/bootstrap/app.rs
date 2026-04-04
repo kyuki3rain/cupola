@@ -337,11 +337,15 @@ async fn start_foreground(
     check_and_clean_pid_file(&pid_file_manager)?;
 
     // Write our PID before logging initialization (consistent with start_daemon_child)
-    use crate::application::port::pid_file::PidFilePort;
+    use crate::application::port::pid_file::{PidFileError, PidFilePort};
     let my_pid = std::process::id();
-    pid_file_manager
-        .write_pid(my_pid)
-        .map_err(|e| anyhow::anyhow!("failed to write PID file: {e}"))?;
+    pid_file_manager.write_pid(my_pid).map_err(|e| match e {
+        PidFileError::AlreadyExists => {
+            println!("cupola is already running");
+            std::process::exit(1);
+        }
+        other => anyhow::anyhow!("failed to write PID file: {other}"),
+    })?;
 
     // Initialize logging (hold guard for app lifetime)
     let _guard = init_logging(cfg.log_level, &cfg.log_dir);
@@ -484,11 +488,15 @@ async fn start_daemon_child(
     let pid_file_manager = PidFileManager::new(pid_path.clone());
 
     // Write our PID
-    use crate::application::port::pid_file::PidFilePort;
+    use crate::application::port::pid_file::{PidFileError, PidFilePort};
     let my_pid = std::process::id();
-    pid_file_manager
-        .write_pid(my_pid)
-        .map_err(|e| anyhow::anyhow!("failed to write PID file: {e}"))?;
+    pid_file_manager.write_pid(my_pid).map_err(|e| match e {
+        PidFileError::AlreadyExists => {
+            println!("cupola is already running");
+            std::process::exit(1);
+        }
+        other => anyhow::anyhow!("failed to write PID file: {other}"),
+    })?;
 
     // Initialize logging to file
     let _guard = init_logging(cfg.log_level, &cfg.log_dir);

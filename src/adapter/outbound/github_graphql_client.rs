@@ -4,6 +4,28 @@ use serde_json::{Value, json};
 
 use crate::application::port::github_client::{ReviewComment, ReviewThread};
 
+const LIST_THREADS_QUERY: &str = r#"query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      reviewThreads(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          isResolved
+          path
+          line
+          comments(first: 100) {
+            nodes {
+              body
+              author { login }
+            }
+          }
+        }
+      }
+    }
+  }
+}"#;
+
 pub struct GraphQLClient {
     client: Client,
     token: String,
@@ -26,38 +48,15 @@ impl GraphQLClient {
         let mut thread_cursor: Option<String> = None;
 
         loop {
-            let after_clause = thread_cursor
-                .as_deref()
-                .map(|c| format!(r#", after: "{c}""#))
-                .unwrap_or_default();
-
-            let query = format!(
-                r#"query {{
-  repository(owner: "{owner}", name: "{repo}") {{
-    pullRequest(number: {pr_number}) {{
-      reviewThreads(first: 100{after_clause}) {{
-        pageInfo {{ hasNextPage endCursor }}
-        nodes {{
-          id
-          isResolved
-          path
-          line
-          comments(first: 100) {{
-            nodes {{
-              body
-              author {{ login }}
-            }}
-          }}
-        }}
-      }}
-    }}
-  }}
-}}"#,
-                owner = self.owner,
-                repo = self.repo,
+            let payload = build_list_threads_payload(
+                &self.owner,
+                &self.repo,
+                pr_number,
+                thread_cursor.as_deref(),
             );
 
-            let resp = self.execute_query(&query).await?;
+            let resp = self.execute_raw(&payload).await?;
+            check_graphql_errors(&resp)?;
             let threads_data = &resp["data"]["repository"]["pullRequest"]["reviewThreads"];
 
             if let Some(nodes) = threads_data["nodes"].as_array() {
@@ -128,13 +127,6 @@ impl GraphQLClient {
         Ok(())
     }
 
-    async fn execute_query(&self, query: &str) -> Result<Value> {
-        let payload = json!({ "query": query });
-        let resp = self.execute_raw(&payload).await?;
-        check_graphql_errors(&resp)?;
-        Ok(resp)
-    }
-
     async fn execute_raw(&self, payload: &Value) -> Result<Value> {
         let response = self
             .client
@@ -160,6 +152,28 @@ impl GraphQLClient {
 
         serde_json::from_str(&body).context("failed to parse GraphQL response as JSON")
     }
+}
+
+fn build_list_threads_payload(
+    owner: &str,
+    repo: &str,
+    pr_number: u64,
+    after: Option<&str>,
+) -> Value {
+    let after_value = match after {
+        Some(cursor) => Value::String(cursor.to_owned()),
+        None => Value::Null,
+    };
+    let variables = json!({
+        "owner": owner,
+        "repo": repo,
+        "pr": pr_number,
+        "after": after_value,
+    });
+    json!({
+        "query": LIST_THREADS_QUERY,
+        "variables": variables,
+    })
 }
 
 fn check_graphql_errors(resp: &Value) -> Result<()> {
@@ -275,5 +289,47 @@ mod tests {
     fn check_graphql_errors_passes_with_empty_errors_array() {
         let resp = json!({"errors": [], "data": {}});
         assert!(check_graphql_errors(&resp).is_ok());
+    }
+
+    #[test]
+    fn list_threads_payload_contains_variables_with_owner_repo_pr() {
+        let payload = build_list_threads_payload("myowner", "myrepo", 42, None);
+        let vars = &payload["variables"];
+        assert_eq!(vars["owner"], "myowner");
+        assert_eq!(vars["repo"], "myrepo");
+        assert_eq!(vars["pr"], 42);
+        assert!(vars["after"].is_null());
+    }
+
+    #[test]
+    fn list_threads_query_does_not_contain_literal_owner_repo_pr() {
+        // クエリ文字列に owner/repo/pr_number のリテラル値が含まれていないことを確認
+        let payload = build_list_threads_payload("secretowner", "secretrepo", 99999, None);
+        let query_str = payload["query"].as_str().expect("query should be a string");
+        assert!(
+            !query_str.contains("secretowner"),
+            "query must not contain owner literal"
+        );
+        assert!(
+            !query_str.contains("secretrepo"),
+            "query must not contain repo literal"
+        );
+        assert!(
+            !query_str.contains("99999"),
+            "query must not contain pr_number literal"
+        );
+    }
+
+    #[test]
+    fn list_threads_payload_passes_cursor_as_string_in_variables() {
+        let payload = build_list_threads_payload("owner", "repo", 1, Some("cursor_abc"));
+        let vars = &payload["variables"];
+        assert_eq!(vars["after"], "cursor_abc");
+    }
+
+    #[test]
+    fn list_threads_payload_passes_null_cursor_when_none() {
+        let payload = build_list_threads_payload("owner", "repo", 1, None);
+        assert!(payload["variables"]["after"].is_null());
     }
 }

@@ -1,3 +1,5 @@
+use std::fs::OpenOptions;
+use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
 
 use nix::sys::signal::kill;
@@ -17,8 +19,18 @@ impl PidFileManager {
 
 impl PidFilePort for PidFileManager {
     fn write_pid(&self, pid: u32) -> Result<(), PidFileError> {
-        let content = format!("{pid}\n");
-        std::fs::write(&self.pid_file_path, content).map_err(|e| PidFileError::Write(e.to_string()))
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&self.pid_file_path)
+            .map_err(|e| {
+                if e.kind() == ErrorKind::AlreadyExists {
+                    PidFileError::AlreadyExists
+                } else {
+                    PidFileError::Write(e.to_string())
+                }
+            })?;
+        writeln!(file, "{pid}").map_err(|e| PidFileError::Write(e.to_string()))
     }
 
     fn read_pid(&self) -> Result<Option<u32>, PidFileError> {
@@ -70,8 +82,9 @@ mod tests {
 
     #[test]
     fn write_and_read_pid_roundtrip() {
-        let tmp = NamedTempFile::new().expect("temp file");
-        let mgr = manager_from_tempfile(&tmp);
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("roundtrip.pid");
+        let mgr = PidFileManager::new(path);
 
         mgr.write_pid(12345).expect("write");
         let pid = mgr.read_pid().expect("read");
@@ -89,8 +102,8 @@ mod tests {
 
     #[test]
     fn delete_pid_removes_file() {
-        let tmp = NamedTempFile::new().expect("temp file");
-        let path = tmp.path().to_path_buf();
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("delete_test.pid");
         let mgr = PidFileManager::new(path.clone());
 
         mgr.write_pid(999).expect("write");
@@ -166,5 +179,33 @@ mod tests {
             mgr.read_pid(),
             Err(PidFileError::InvalidContent(_))
         ));
+    }
+
+    #[test]
+    fn write_pid_returns_already_exists_on_second_call() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("double.pid");
+        let mgr = PidFileManager::new(path);
+
+        mgr.write_pid(111).expect("first write should succeed");
+        let err = mgr.write_pid(222).expect_err("second write should fail");
+        assert!(
+            matches!(err, PidFileError::AlreadyExists),
+            "expected AlreadyExists, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn write_pid_succeeds_after_delete_pid() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("retry.pid");
+        let mgr = PidFileManager::new(path);
+
+        mgr.write_pid(333).expect("first write");
+        mgr.delete_pid().expect("delete");
+        mgr.write_pid(444)
+            .expect("write after delete should succeed");
+        let pid = mgr.read_pid().expect("read");
+        assert_eq!(pid, Some(444));
     }
 }

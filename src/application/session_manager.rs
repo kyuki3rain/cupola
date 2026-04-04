@@ -37,6 +37,10 @@ impl SessionManager {
     }
 
     pub fn register(&mut self, issue_id: i64, state: State, mut child: Child) {
+        if let Some(mut old_entry) = self.sessions.remove(&issue_id) {
+            let _ = old_entry.child.kill();
+        }
+
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
@@ -297,6 +301,37 @@ mod tests {
         // With a long timeout, nothing is stalled
         let stalled = mgr.find_stalled(Duration::from_secs(3600));
         assert!(stalled.is_empty());
+
+        mgr.kill_all();
+    }
+
+    #[test]
+    fn register_kills_old_process_on_duplicate_issue_id() {
+        use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+        use nix::unistd::Pid;
+
+        let mut mgr = SessionManager::new();
+
+        // 最初のsleepプロセスを登録
+        let old_child = spawn_sleep(60);
+        let old_pid = old_child.id();
+        mgr.register(1, State::DesignRunning, old_child);
+
+        // 同一 issue_id に別プロセスを再登録すると旧プロセスがkillされる
+        let new_child = spawn_sleep(60);
+        mgr.register(1, State::ImplementationRunning, new_child);
+
+        // 旧プロセスが終了するのを少し待つ
+        std::thread::sleep(Duration::from_millis(200));
+
+        // 親プロセスとして waitpid で旧子プロセスの終了を確認する
+        let nix_pid = Pid::from_raw(old_pid as i32);
+        let status = waitpid(nix_pid, Some(WaitPidFlag::WNOHANG))
+            .expect("waitpid should succeed for our child");
+        assert!(
+            matches!(status, WaitStatus::Exited(..) | WaitStatus::Signaled(..)),
+            "old process should have been killed: {status:?}"
+        );
 
         mgr.kill_all();
     }
