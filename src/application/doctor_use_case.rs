@@ -96,7 +96,7 @@ enum GhPresence {
 
 fn detect_gh_presence(runner: &dyn CommandRunner) -> GhPresence {
     match runner.run("gh", &["--version"]) {
-        Err(_) => GhPresence::InstalledButUnauthorized,
+        Err(_) => GhPresence::NotInstalled,
         Ok(output) if !output.success => {
             if output.stderr.contains("command not found") {
                 GhPresence::NotInstalled

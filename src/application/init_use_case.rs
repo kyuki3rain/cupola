@@ -14,14 +14,19 @@ pub struct InitReport {
 
 pub struct InitUseCase<D: DbInitializer, F: FileGenerator> {
     base_dir: PathBuf,
+    /// DB ファイルが open 前から存在していたかどうか。
+    /// `SqliteConnection::open()` はファイルを生成するため、open 後に存在チェックすると
+    /// 常に true になってしまう。呼び出し元が open 前に判定して渡す。
+    db_existed: bool,
     db_init: D,
     file_gen: F,
 }
 
 impl<D: DbInitializer, F: FileGenerator> InitUseCase<D, F> {
-    pub fn new(base_dir: PathBuf, db_init: D, file_gen: F) -> Self {
+    pub fn new(base_dir: PathBuf, db_existed: bool, db_init: D, file_gen: F) -> Self {
         Self {
             base_dir,
+            db_existed,
             db_init,
             file_gen,
         }
@@ -38,13 +43,11 @@ impl<D: DbInitializer, F: FileGenerator> InitUseCase<D, F> {
         })?;
 
         // Step 2: SQLite スキーマ初期化
-        let db_path = cupola_dir.join("cupola.db");
-        let db_existed = db_path.exists();
         self.db_init
             .init_schema()
             .context("failed to initialize SQLite schema")?;
-        let db_initialized = !db_existed;
-        tracing::info!(path = %db_path.display(), "SQLite schema initialized");
+        let db_initialized = !self.db_existed;
+        tracing::info!("SQLite schema initialized");
 
         // Step 3-5: ファイル生成
         let toml_created = self
@@ -87,7 +90,7 @@ mod tests {
         let tmp = TempDir::new().expect("temp dir");
         let db = SqliteConnection::open_in_memory().expect("open db");
         let file_gen = InitFileGenerator::new(tmp.path().to_path_buf());
-        let uc = InitUseCase::new(tmp.path().to_path_buf(), db, file_gen);
+        let uc = InitUseCase::new(tmp.path().to_path_buf(), false, db, file_gen);
         let report = uc.run().expect("run");
 
         assert!(report.db_initialized, "db should be initialized");
@@ -115,7 +118,7 @@ mod tests {
 
         let db = SqliteConnection::open_in_memory().expect("open db");
         let file_gen = InitFileGenerator::new(tmp.path().to_path_buf());
-        let uc = InitUseCase::new(tmp.path().to_path_buf(), db, file_gen);
+        let uc = InitUseCase::new(tmp.path().to_path_buf(), false, db, file_gen);
         let report = uc.run().expect("run");
 
         assert!(report.db_initialized, "db init is idempotent");
@@ -138,9 +141,15 @@ mod tests {
         let db_path = cupola_dir.join("cupola.db");
 
         // 1回目の実行（ファイルベース SQLite を使用）
+        let db_existed_before_first = db_path.exists();
         let db1 = SqliteConnection::open(&db_path).expect("open db");
         let file_gen1 = InitFileGenerator::new(tmp.path().to_path_buf());
-        let uc1 = InitUseCase::new(tmp.path().to_path_buf(), db1, file_gen1);
+        let uc1 = InitUseCase::new(
+            tmp.path().to_path_buf(),
+            db_existed_before_first,
+            db1,
+            file_gen1,
+        );
         uc1.run().expect("first run");
 
         let toml_content_after_first =
@@ -149,9 +158,15 @@ mod tests {
             fs::read_to_string(tmp.path().join(".gitignore")).expect("read gitignore");
 
         // 2回目の実行（db ファイルが既に存在するため db_initialized=false）
+        let db_existed_before_second = db_path.exists();
         let db2 = SqliteConnection::open(&db_path).expect("open db");
         let file_gen2 = InitFileGenerator::new(tmp.path().to_path_buf());
-        let uc2 = InitUseCase::new(tmp.path().to_path_buf(), db2, file_gen2);
+        let uc2 = InitUseCase::new(
+            tmp.path().to_path_buf(),
+            db_existed_before_second,
+            db2,
+            file_gen2,
+        );
         let report = uc2.run().expect("second run");
 
         assert!(
@@ -195,7 +210,7 @@ mod tests {
 
         let db = SqliteConnection::open_in_memory().expect("open db");
         let file_gen = InitFileGenerator::new(tmp.path().to_path_buf());
-        let uc = InitUseCase::new(tmp.path().to_path_buf(), db, file_gen);
+        let uc = InitUseCase::new(tmp.path().to_path_buf(), false, db, file_gen);
         let report = uc.run().expect("run");
 
         assert!(
@@ -217,7 +232,7 @@ mod tests {
         let db = SqliteConnection::open_in_memory().expect("open db");
         let file_gen = InitFileGenerator::new(tmp.path().to_path_buf());
         // テンプレートディレクトリなし
-        let uc = InitUseCase::new(tmp.path().to_path_buf(), db, file_gen);
+        let uc = InitUseCase::new(tmp.path().to_path_buf(), false, db, file_gen);
         let report = uc.run().expect("run");
 
         assert!(report.db_initialized);

@@ -202,15 +202,15 @@ impl InitFileGenerator {
 
 impl FileGenerator for InitFileGenerator {
     fn generate_toml_template(&self) -> Result<bool> {
-        self.generate_toml_template()
+        InitFileGenerator::generate_toml_template(self)
     }
 
     fn copy_steering_templates(&self) -> Result<bool> {
-        self.copy_steering_templates()
+        InitFileGenerator::copy_steering_templates(self)
     }
 
     fn append_gitignore_entries(&self) -> Result<bool> {
-        self.append_gitignore_entries()
+        InitFileGenerator::append_gitignore_entries(self)
     }
 }
 

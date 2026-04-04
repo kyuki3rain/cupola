@@ -121,7 +121,7 @@ impl SqliteConnection {
 
 impl DbInitializer for SqliteConnection {
     fn init_schema(&self) -> Result<()> {
-        self.init_schema()
+        SqliteConnection::init_schema(self)
     }
 }
 
