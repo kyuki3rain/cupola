@@ -66,11 +66,13 @@ impl CompressUseCase {
 fn is_completed_spec(spec_json_path: &Path) -> Result<bool> {
     let content = std::fs::read_to_string(spec_json_path)
         .with_context(|| format!("failed to read {}", spec_json_path.display()))?;
-    // Check if phase indicates completion (not archived)
-    let phase_complete =
-        content.contains("\"implementation-complete\"") || content.contains("\"completed\"");
-    let already_archived = content.contains("\"archived\"");
-    Ok(phase_complete && !already_archived)
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse {}", spec_json_path.display()))?;
+    let phase = json
+        .get("phase")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    Ok(phase == "implementation-complete" || phase == "completed")
 }
 
 #[cfg(test)]

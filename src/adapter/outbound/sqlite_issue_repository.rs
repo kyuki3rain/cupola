@@ -324,9 +324,11 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
             rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(e))
         })?;
 
+    let github_issue_number: u64 = row.get(1)?;
+
     Ok(Issue {
         id: row.get(0)?,
-        github_issue_number: row.get(1)?,
+        github_issue_number,
         state: str_to_state(2, &state_str)?,
         design_pr_number: row.get(3)?,
         impl_pr_number: row.get(4)?,
@@ -334,10 +336,9 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
         retry_count: row.get(6)?,
         current_pid: row.get(7)?,
         error_message: row.get(8)?,
-        feature_name: row.get::<_, Option<String>>(9)?.unwrap_or_else(|| {
-            let n: u64 = row.get(1).unwrap_or(0);
-            format!("issue-{n}")
-        }),
+        feature_name: row
+            .get::<_, Option<String>>(9)?
+            .unwrap_or_else(|| format!("issue-{github_issue_number}")),
         weight: str_to_task_weight(10, &weight_str)?,
         fixing_causes,
         created_at: parse_sqlite_datetime(12, &created_str)?,
@@ -378,7 +379,7 @@ mod tests {
             ci_fix_count: 0,
             current_pid: None,
             error_message: None,
-            feature_name: "issue-0".to_string(),
+            feature_name: format!("issue-{issue_number}"),
             fixing_causes: vec![],
             weight: TaskWeight::Medium,
             created_at: Utc::now(),

@@ -246,6 +246,7 @@ impl InitFileGenerator {
                 .with_context(|| format!("failed to read {}", spec_json_template.display()))?;
             tmpl.replace("{{FEATURE_NAME}}", &feature_name)
                 .replace("{{TIMESTAMP}}", &now)
+                .replace("{{LANGUAGE}}", language)
         } else {
             format!(
                 r#"{{"feature_name":"{feature_name}","created_at":"{now}","updated_at":"{now}","language":"{language}","phase":"initialized","approvals":{{"requirements":{{"generated":false,"approved":false}},"design":{{"generated":false,"approved":false}},"tasks":{{"generated":false,"approved":false}}}},"ready_for_implementation":false}}"#
