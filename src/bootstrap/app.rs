@@ -172,7 +172,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                 polling_interval_secs: None,
                 log_level: None,
             };
-            let cfg = toml.into_config(&overrides);
+            let cfg = toml
+                .into_config(&overrides)
+                .context("invalid config")?;
 
             let log_dir = cfg.log_dir;
 
@@ -284,7 +286,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                         polling_interval_secs: None,
                         log_level: None,
                     };
-                    let cfg = t.into_config(&overrides);
+                    let cfg = t.into_config(&overrides).ok()?;
                     cfg.max_concurrent_sessions
                 })
             } else {
@@ -326,7 +328,9 @@ async fn start_foreground(
         polling_interval_secs,
         log_level,
     };
-    let cfg = toml.into_config(&overrides);
+    let cfg = toml
+        .into_config(&overrides)
+        .context("invalid config")?;
     cfg.validate()
         .map_err(|e| anyhow::anyhow!("config validation failed: {e}"))?;
 
@@ -415,7 +419,9 @@ async fn start_daemon(
         polling_interval_secs,
         log_level: log_level.clone(),
     };
-    let cfg = toml.into_config(&overrides);
+    let cfg = toml
+        .into_config(&overrides)
+        .context("invalid config")?;
     cfg.validate()
         .map_err(|e| anyhow::anyhow!("config validation failed: {e}"))?;
 
@@ -472,7 +478,9 @@ async fn start_daemon_child(
         polling_interval_secs,
         log_level,
     };
-    let cfg = toml.into_config(&overrides);
+    let cfg = toml
+        .into_config(&overrides)
+        .context("invalid config")?;
     cfg.validate()
         .map_err(|e| anyhow::anyhow!("config validation failed: {e}"))?;
 

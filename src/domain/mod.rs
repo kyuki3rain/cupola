@@ -1,3 +1,4 @@
+pub mod author_association;
 pub mod check_result;
 pub mod config;
 pub mod event;

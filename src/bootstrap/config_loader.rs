@@ -2,6 +2,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use crate::domain::author_association::{AuthorAssociation, TrustedAssociations};
 use crate::domain::config::{Config, LogLevel};
 use crate::domain::model_config::{ModelConfig, PerPhaseModels, WeightModelConfig};
 
@@ -55,6 +56,7 @@ pub struct CupolaToml {
     pub model: Option<String>,
     models: Option<ModelsToml>,
     pub log: Option<LogToml>,
+    pub trusted_associations: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,7 +72,7 @@ pub struct CliOverrides {
 }
 
 impl CupolaToml {
-    pub fn into_config(self, overrides: &CliOverrides) -> Config {
+    pub fn into_config(self, overrides: &CliOverrides) -> Result<Config, ConfigError> {
         let log_level = overrides
             .log_level
             .as_deref()
@@ -98,7 +100,24 @@ impl CupolaToml {
             ModelConfig::new_default(default_model)
         };
 
-        Config {
+        let trusted_associations = match &self.trusted_associations {
+            None => TrustedAssociations::default(),
+            Some(values) if values.len() == 1 && values[0].to_lowercase() == "all" => {
+                TrustedAssociations::All
+            }
+            Some(values) => {
+                let assocs = values
+                    .iter()
+                    .map(|s| {
+                        s.parse::<AuthorAssociation>()
+                            .map_err(|_| ConfigError::InvalidAssociation(s.clone()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                TrustedAssociations::Specific(assocs)
+            }
+        };
+
+        Ok(Config {
             owner: self.owner,
             repo: self.repo,
             default_branch: self.default_branch,
@@ -114,7 +133,8 @@ impl CupolaToml {
             log_dir,
             max_concurrent_sessions: self.max_concurrent_sessions,
             models,
-        }
+            trusted_associations,
+        })
     }
 }
 
@@ -152,6 +172,8 @@ pub enum ConfigError {
         path: String,
         source: toml::de::Error,
     },
+    #[error("invalid author association value: {0}")]
+    InvalidAssociation(String),
 }
 
 #[cfg(test)]
@@ -228,7 +250,7 @@ default_branch = "main"
             polling_interval_secs: None,
             log_level: None,
         };
-        let config = parsed.into_config(&overrides);
+        let config = parsed.into_config(&overrides).expect("should succeed");
 
         assert_eq!(config.owner, "user");
         assert_eq!(config.language, "ja");
@@ -256,7 +278,7 @@ max_concurrent_sessions = 3
             polling_interval_secs: None,
             log_level: None,
         };
-        let config = parsed.into_config(&overrides);
+        let config = parsed.into_config(&overrides).expect("should succeed");
         assert_eq!(config.max_concurrent_sessions, Some(3));
     }
 
@@ -276,7 +298,7 @@ level = "info"
             polling_interval_secs: Some(10),
             log_level: Some("debug".to_string()),
         };
-        let config = parsed.into_config(&overrides);
+        let config = parsed.into_config(&overrides).expect("should succeed");
 
         assert_eq!(config.polling_interval_secs, 10);
         assert_eq!(config.log_level, LogLevel::Debug);
@@ -318,7 +340,7 @@ model = "opus"
             polling_interval_secs: None,
             log_level: None,
         };
-        let config = parsed.into_config(&overrides);
+        let config = parsed.into_config(&overrides).expect("should succeed");
         assert_eq!(config.models.default_model, "opus");
     }
 
@@ -334,7 +356,7 @@ default_branch = "main"
             polling_interval_secs: None,
             log_level: None,
         };
-        let config = parsed.into_config(&overrides);
+        let config = parsed.into_config(&overrides).expect("should succeed");
         assert_eq!(config.models.default_model, "sonnet");
     }
 
@@ -367,7 +389,7 @@ heavy = "opus"
             polling_interval_secs: None,
             log_level: None,
         };
-        let config = parsed.into_config(&overrides);
+        let config = parsed.into_config(&overrides).expect("should succeed");
         assert_eq!(config.models.default_model, "sonnet");
         assert!(config.models.light.is_some());
         assert!(config.models.heavy.is_some());
@@ -392,7 +414,7 @@ implementation = "opus"
             polling_interval_secs: None,
             log_level: None,
         };
-        let config = parsed.into_config(&overrides);
+        let config = parsed.into_config(&overrides).expect("should succeed");
         assert_eq!(config.models.default_model, "sonnet");
         assert!(config.models.heavy.is_some());
     }
@@ -416,7 +438,7 @@ heavy = "opus"
             polling_interval_secs: None,
             log_level: None,
         };
-        let config = parsed.into_config(&overrides);
+        let config = parsed.into_config(&overrides).expect("should succeed");
 
         // Heavy with phase → opus (Uniform)
         assert_eq!(
@@ -475,7 +497,7 @@ default_branch = "main"
             polling_interval_secs: None,
             log_level: None,
         };
-        let config = parsed.into_config(&overrides);
+        let config = parsed.into_config(&overrides).expect("should succeed");
         assert_eq!(config.max_ci_fix_cycles, 3);
     }
 
@@ -492,7 +514,7 @@ max_ci_fix_cycles = 5
             polling_interval_secs: None,
             log_level: None,
         };
-        let config = parsed.into_config(&overrides);
+        let config = parsed.into_config(&overrides).expect("should succeed");
         assert_eq!(config.max_ci_fix_cycles, 5);
     }
 
@@ -509,12 +531,13 @@ max_ci_fix_cycles = 0
             polling_interval_secs: None,
             log_level: None,
         };
-        let config = parsed.into_config(&overrides);
+        let config = parsed.into_config(&overrides).expect("should succeed");
         assert!(config.validate().is_err());
         assert_eq!(
             config.validate().unwrap_err(),
             "max_ci_fix_cycles must be greater than 0"
         );
+
     }
 
     #[test]
@@ -524,5 +547,112 @@ max_ci_fix_cycles = 0
 
         let labels: Vec<String> = vec![];
         assert_eq!(label_to_weight(&labels), TaskWeight::Medium);
+    }
+
+    // --- trusted_associations TOML 変換テスト ---
+
+    #[test]
+    fn trusted_associations_omitted_uses_default() {
+        use crate::domain::author_association::{AuthorAssociation, TrustedAssociations};
+
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides).expect("should succeed");
+        // Default: Owner, Member, Collaborator
+        assert!(config.trusted_associations.is_trusted(&AuthorAssociation::Owner));
+        assert!(config.trusted_associations.is_trusted(&AuthorAssociation::Member));
+        assert!(config.trusted_associations.is_trusted(&AuthorAssociation::Collaborator));
+        assert!(!config.trusted_associations.is_trusted(&AuthorAssociation::Contributor));
+        assert!(matches!(config.trusted_associations, TrustedAssociations::Specific(_)));
+    }
+
+    #[test]
+    fn trusted_associations_all_string() {
+        use crate::domain::author_association::{AuthorAssociation, TrustedAssociations};
+
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+trusted_associations = ["all"]
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides).expect("should succeed");
+        assert!(matches!(config.trusted_associations, TrustedAssociations::All));
+        assert!(config.trusted_associations.is_trusted(&AuthorAssociation::None));
+    }
+
+    #[test]
+    fn trusted_associations_list() {
+        use crate::domain::author_association::{AuthorAssociation, TrustedAssociations};
+
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+trusted_associations = ["OWNER", "CONTRIBUTOR"]
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides).expect("should succeed");
+        assert!(matches!(config.trusted_associations, TrustedAssociations::Specific(_)));
+        assert!(config.trusted_associations.is_trusted(&AuthorAssociation::Owner));
+        assert!(config.trusted_associations.is_trusted(&AuthorAssociation::Contributor));
+        assert!(!config.trusted_associations.is_trusted(&AuthorAssociation::Member));
+    }
+
+    #[test]
+    fn trusted_associations_invalid_value_returns_error() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+trusted_associations = ["OWNER", "INVALID_VALUE"]
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let result = parsed.into_config(&overrides);
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), ConfigError::InvalidAssociation(v) if v == "INVALID_VALUE")
+        );
+    }
+
+    #[test]
+    fn trusted_associations_case_insensitive() {
+        use crate::domain::author_association::AuthorAssociation;
+
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+trusted_associations = ["owner", "member"]
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides).expect("should succeed");
+        assert!(config.trusted_associations.is_trusted(&AuthorAssociation::Owner));
+        assert!(config.trusted_associations.is_trusted(&AuthorAssociation::Member));
     }
 }

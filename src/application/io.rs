@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::application::port::github_client::{GitHubIssueDetail, ReviewThread};
+use crate::domain::author_association::TrustedAssociations;
 
 // === Input directory management ===
 
@@ -53,27 +54,57 @@ pub fn write_issue_input(worktree_path: &Path, detail: &GitHubIssueDetail) -> Re
     Ok(())
 }
 
-pub fn write_review_threads_input(worktree_path: &Path, threads: &[ReviewThread]) -> Result<()> {
+pub fn write_review_threads_input(
+    worktree_path: &Path,
+    threads: &[ReviewThread],
+    trusted_associations: &TrustedAssociations,
+) -> Result<()> {
     let inputs_dir = worktree_path.join(".cupola/inputs");
     std::fs::create_dir_all(&inputs_dir)
         .with_context(|| format!("failed to create {}", inputs_dir.display()))?;
 
+    let mut excluded_count = 0usize;
+
     let entries: Vec<ReviewThreadEntry> = threads
         .iter()
-        .map(|t| ReviewThreadEntry {
-            thread_id: t.id.clone(),
-            path: t.path.clone(),
-            line: t.line,
-            comments: t
+        .map(|t| {
+            let filtered_comments: Vec<CommentEntry> = t
                 .comments
                 .iter()
+                .filter(|c| {
+                    if trusted_associations.is_trusted(&c.author_association) {
+                        true
+                    } else {
+                        tracing::info!(
+                            author = c.author,
+                            association = c.author_association.as_str(),
+                            "excluding review comment: author does not have trusted association"
+                        );
+                        excluded_count += 1;
+                        false
+                    }
+                })
                 .map(|c| CommentEntry {
                     author: c.author.clone(),
                     body: c.body.clone(),
                 })
-                .collect(),
+                .collect();
+
+            ReviewThreadEntry {
+                thread_id: t.id.clone(),
+                path: t.path.clone(),
+                line: t.line,
+                comments: filtered_comments,
+            }
         })
         .collect();
+
+    if excluded_count > 0 {
+        tracing::info!(
+            excluded_count,
+            "excluded review comments due to untrusted author association"
+        );
+    }
 
     let json = serde_json::to_string_pretty(&entries).context("failed to serialize threads")?;
 
@@ -283,6 +314,8 @@ mod tests {
 
     #[test]
     fn write_review_threads_creates_json() {
+        use crate::domain::author_association::{AuthorAssociation, TrustedAssociations};
+
         let tmp = TempDir::new().expect("tempdir");
         let threads = vec![ReviewThread {
             id: "PRRT_abc".to_string(),
@@ -291,16 +324,54 @@ mod tests {
             comments: vec![ReviewComment {
                 author: "reviewer".to_string(),
                 body: "Fix this".to_string(),
+                author_association: AuthorAssociation::Collaborator,
             }],
         }];
 
-        write_review_threads_input(tmp.path(), &threads).expect("should write");
+        write_review_threads_input(tmp.path(), &threads, &TrustedAssociations::All)
+            .expect("should write");
 
         let content =
             std::fs::read_to_string(tmp.path().join(".cupola/inputs/review_threads.json"))
                 .expect("should read");
         assert!(content.contains("PRRT_abc"));
         assert!(content.contains("Fix this"));
+    }
+
+    #[test]
+    fn write_review_threads_filters_untrusted_comments() {
+        use crate::domain::author_association::{AuthorAssociation, TrustedAssociations};
+
+        let tmp = TempDir::new().expect("tempdir");
+        let trusted = TrustedAssociations::Specific(vec![AuthorAssociation::Collaborator]);
+        let threads = vec![ReviewThread {
+            id: "PRRT_abc".to_string(),
+            path: "src/main.rs".to_string(),
+            line: Some(10),
+            comments: vec![
+                ReviewComment {
+                    author: "trusted-user".to_string(),
+                    body: "trusted comment".to_string(),
+                    author_association: AuthorAssociation::Collaborator,
+                },
+                ReviewComment {
+                    author: "external-user".to_string(),
+                    body: "external comment".to_string(),
+                    author_association: AuthorAssociation::None,
+                },
+            ],
+        }];
+
+        write_review_threads_input(tmp.path(), &threads, &trusted).expect("should write");
+
+        let content =
+            std::fs::read_to_string(tmp.path().join(".cupola/inputs/review_threads.json"))
+                .expect("should read");
+        assert!(content.contains("trusted comment"), "trusted comment should be included");
+        assert!(
+            !content.contains("external comment"),
+            "external comment should be excluded"
+        );
     }
 
     #[test]

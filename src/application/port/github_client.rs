@@ -1,5 +1,7 @@
 use anyhow::Result;
 
+use crate::domain::author_association::AuthorAssociation;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrStatus {
     Open,
@@ -57,6 +59,33 @@ pub struct ReviewThread {
 pub struct ReviewComment {
     pub author: String,
     pub body: String,
+    pub author_association: AuthorAssociation,
+}
+
+/// GitHub のリポジトリ permission level。
+/// `GET /repos/{owner}/{repo}/collaborators/{username}/permission` の `permission` フィールドに対応。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepositoryPermission {
+    Admin,
+    Maintain,
+    Write,
+    Triage,
+    Read,
+}
+
+impl RepositoryPermission {
+    /// `RepositoryPermission` を `AuthorAssociation` に変換する。
+    ///
+    /// - Admin → Collaborator（オーナー判定は単独では不可）
+    /// - Maintain → Collaborator
+    /// - Write → Collaborator
+    /// - Triage / Read → None
+    pub fn to_author_association(&self) -> AuthorAssociation {
+        match self {
+            Self::Admin | Self::Maintain | Self::Write => AuthorAssociation::Collaborator,
+            Self::Triage | Self::Read => AuthorAssociation::None,
+        }
+    }
 }
 
 pub trait GitHubClient: Send + Sync {
@@ -147,4 +176,28 @@ pub trait GitHubClient: Send + Sync {
         &self,
         pr_number: u64,
     ) -> impl std::future::Future<Output = Result<PrStatus>> + Send;
+
+    /// Issue の timeline から、指定ラベルを最後に付与した actor の login を返す。
+    ///
+    /// ラベル付与イベントが見つからない場合は `Ok(None)` を返す。
+    fn fetch_label_actor_login(
+        &self,
+        issue_number: u64,
+        label_name: &str,
+    ) -> impl std::future::Future<Output = Result<Option<String>>> + Send;
+
+    /// ユーザーのリポジトリに対する permission level を返す。
+    ///
+    /// コラボレーターでない場合は `RepositoryPermission::Read` を返す。
+    fn fetch_user_permission(
+        &self,
+        username: &str,
+    ) -> impl std::future::Future<Output = Result<RepositoryPermission>> + Send;
+
+    /// Issue からラベルを削除する。
+    fn remove_label(
+        &self,
+        issue_number: u64,
+        label_name: &str,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
