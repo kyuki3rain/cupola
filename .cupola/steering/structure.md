@@ -8,26 +8,26 @@ Layer separation following Clean Architecture. The `src/` directory is divided i
 
 ### Domain Layer (`src/domain/`)
 **Purpose**: Pure business logic. No framework dependencies
-**Contains**: State enum, Event enum, StateMachine (pure functions), Issue entity, Config value object
+**Contains**: State enum, Event enum, StateMachine (pure functions), Issue entity, Config value object, Phase enum, TaskWeight enum, ModelConfig, FixingProblemKind, ExecutionLog
 **Rule**: No I/O. Only derive macros (serde, thiserror) are permitted
 
 ### Application Layer (`src/application/`)
 **Purpose**: Use cases and port (trait) definitions
-**Contains**: PollingUseCase, TransitionUseCase, SessionManager, RetryPolicy, prompt/io helpers
-**Subdir**: `port/` — trait definitions for external dependencies (GitHubClient, IssueRepository, ClaudeCodeRunner, etc.)
+**Contains**: PollingUseCase, TransitionUseCase, SessionManager, RetryPolicy, StopUseCase, InitUseCase, DoctorUseCase, CleanupUseCase, prompt/io helpers
+**Subdir**: `port/` — trait definitions for external dependencies (GitHubClient, IssueRepository, ClaudeCodeRunner, ExecutionLogRepository, GitWorktree, PidFilePort, CommandRunner, ConfigLoader)
 **Rule**: Depends on domain. Must not import concrete types from adapter
 
 ### Adapter Layer (`src/adapter/`)
 **Purpose**: External connection implementations
 **Subdirs**:
 - `inbound/` — CLI (clap)
-- `outbound/` — GitHub REST/GraphQL, SQLite, Claude Code, Git worktree
+- `outbound/` — GitHub REST/GraphQL, SQLite (Issue + ExecutionLog), Claude Code, Git worktree, PID file manager, init file generator, process command runner
 
 **Rule**: Implements traits from application. May also depend on domain
 
 ### Bootstrap Layer (`src/bootstrap/`)
 **Purpose**: DI wiring, configuration loading, runtime startup
-**Contains**: app.rs (entry point), config_loader.rs, logging.rs
+**Contains**: app.rs (entry point + daemon launch), config_loader.rs, toml_config_loader.rs, logging.rs
 **Rule**: The only place that knows all concrete types across all layers
 
 ## Naming Conventions
