@@ -40,7 +40,7 @@ impl Config {
             stall_timeout_secs: 1800,
             log_level: LogLevel::Info,
             log_dir: PathBuf::from(".cupola/logs"),
-            max_concurrent_sessions: None,
+            max_concurrent_sessions: Some(3),
             models: ModelConfig::new_default("sonnet".to_string()),
         }
     }
@@ -100,7 +100,7 @@ mod tests {
         assert_eq!(config.stall_timeout_secs, 1800);
         assert_eq!(config.log_level, LogLevel::Info);
         assert_eq!(config.log_dir, PathBuf::from(".cupola/logs"));
-        assert!(config.max_concurrent_sessions.is_none());
+        assert_eq!(config.max_concurrent_sessions, Some(3));
         assert_eq!(config.models.default_model, "sonnet");
     }
 

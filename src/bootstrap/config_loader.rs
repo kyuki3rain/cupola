@@ -112,7 +112,7 @@ impl CupolaToml {
             stall_timeout_secs: self.stall_timeout_secs.unwrap_or(1800),
             log_level,
             log_dir,
-            max_concurrent_sessions: self.max_concurrent_sessions,
+            max_concurrent_sessions: Some(self.max_concurrent_sessions.unwrap_or(3)),
             models,
         }
     }
@@ -237,7 +237,7 @@ default_branch = "main"
         assert_eq!(config.stall_timeout_secs, 1800);
         assert_eq!(config.log_level, LogLevel::Info);
         assert_eq!(config.log_dir, std::path::PathBuf::from(".cupola/logs"));
-        assert!(config.max_concurrent_sessions.is_none());
+        assert_eq!(config.max_concurrent_sessions, Some(3));
         assert_eq!(config.models.default_model, "sonnet");
     }
 
