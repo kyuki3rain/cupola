@@ -11,5 +11,5 @@ cargo test --lib -- --test-threads=1
 
 # Design References
 
-設計・実装判断を行う際は、[`docs/adr/`](docs/adr/) に格納された ADR（Architecture Decision Records）を必ず参照すること。
-過去の意思決定の経緯・却下した代替案・根拠が記録されており、同じ議論を繰り返すことなく一貫した判断が行える。
+When making design or implementation decisions, always consult the ADRs (Architecture Decision Records) stored in [`docs/adr/`](docs/adr/).
+They document the background of past decisions, rejected alternatives, and rationale so that consistent decisions can be made without repeating the same discussions.

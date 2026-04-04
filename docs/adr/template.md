@@ -1,5 +1,4 @@
-# ADR テンプレート
-
+<!-- ADR テンプレート -->
 <!-- ファイル命名規則: NNN-kebab-case-title.md（例: 001-stall-detection-event-handling.md） -->
 <!-- 採番ルール: 新規 ADR は既存の最大番号の次の連番を使用する（例: 既存が 001 なら 002） -->
 
