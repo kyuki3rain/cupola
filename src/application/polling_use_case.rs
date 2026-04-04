@@ -2,6 +2,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Result;
+#[cfg(unix)]
+use nix::sys::signal::{Signal, kill};
+#[cfg(unix)]
+use nix::unistd::Pid;
 use rust_i18n::t;
 use tokio::signal;
 use tokio::signal::unix::SignalKind;
@@ -1192,7 +1196,23 @@ where
         match self.issue_repo.find_active().await {
             Ok(issues) => {
                 for mut issue in issues {
-                    if issue.current_pid.is_some() {
+                    if let Some(pid) = issue.current_pid {
+                        #[cfg(unix)]
+                        {
+                            if pid == 0 || pid > i32::MAX as u32 {
+                                tracing::warn!(issue_id = issue.id, pid, "invalid PID, skipping kill");
+                            } else if is_process_alive(pid) {
+                                let nix_pid = Pid::from_raw(pid as i32);
+                                match kill(nix_pid, Signal::SIGKILL) {
+                                    Ok(()) => {
+                                        tracing::info!(issue_id = issue.id, pid, "killed orphan process on startup");
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(issue_id = issue.id, pid, error = %e, "failed to kill orphan process, continuing");
+                                    }
+                                }
+                            }
+                        }
                         issue.current_pid = None;
                         let _ = self.issue_repo.update(&issue).await;
                         tracing::info!(issue_id = issue.id, "cleared stale PID on startup");
@@ -1214,8 +1234,8 @@ where
         // Wait up to 10 seconds
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
-            let exited = self.session_mgr.collect_exited();
-            if exited.is_empty() {
+            let _ = self.session_mgr.collect_exited();
+            if self.session_mgr.count() == 0 {
                 break;
             }
             if tokio::time::Instant::now() >= deadline {
@@ -1292,6 +1312,24 @@ pub fn label_to_weight(labels: &[String]) -> TaskWeight {
         TaskWeight::Light
     } else {
         TaskWeight::Medium
+    }
+}
+
+/// 指定 PID のプロセスが現在実行中かどうかを確認する。
+/// Unix シグナル 0 (kill(pid, 0)) を使用する。
+///
+/// Returns:
+///   true  - プロセスが存在する（または確認不能）
+///   false - プロセスが存在しない (ESRCH)
+///
+/// Preconditions: `1 <= pid <= i32::MAX as u32`（不正 PID は呼び出し元でバリデーション済み）
+#[cfg(unix)]
+fn is_process_alive(pid: u32) -> bool {
+    let nix_pid = Pid::from_raw(pid as i32);
+    match kill(nix_pid, None) {
+        Ok(()) => true,
+        Err(nix::errno::Errno::ESRCH) => false,
+        Err(_) => true, // EPERM 等は保守的に true を返す
     }
 }
 
@@ -3154,6 +3192,122 @@ mod tests {
             *merge_count.lock().unwrap(),
             0,
             "merge should NOT be called for non-Fixing state"
+        );
+    }
+
+    // --- graceful_shutdown loop termination tests (Task 3.1) ---
+
+    #[tokio::test]
+    async fn graceful_shutdown_exits_immediately_when_no_sessions() {
+        // セッションが0件の場合、collect_exited() が空を返しても count()==0 で即 break する
+        let (repo, _) = MockIssueRepo::new(vec![]);
+        let github = MockGitHub::new(false, None, vec![], false);
+        let mut uc = make_uc(github, repo);
+        // タイムアウトを設定して、graceful_shutdown が 1 秒以内に完了することを確認
+        let result =
+            tokio::time::timeout(Duration::from_secs(1), uc.graceful_shutdown()).await;
+        assert!(result.is_ok(), "graceful_shutdown should complete quickly with no sessions");
+    }
+
+    // --- is_process_alive unit tests (Task 3.2) ---
+
+    #[cfg(unix)]
+    #[test]
+    fn is_process_alive_returns_true_for_own_process() {
+        let own_pid = std::process::id();
+        assert!(
+            is_process_alive(own_pid),
+            "own process should be alive"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_process_alive_returns_false_for_nonexistent_pid() {
+        // PID 999999 は通常存在しないプロセス
+        assert!(
+            !is_process_alive(999_999),
+            "nonexistent PID should not be alive"
+        );
+    }
+
+    // --- recover_on_startup tests (Task 3.3 / 3.4) ---
+
+    fn make_issue_with_pid(pid: Option<u32>) -> Issue {
+        Issue {
+            id: 42,
+            github_issue_number: 100,
+            state: State::ImplementationRunning,
+            design_pr_number: None,
+            impl_pr_number: None,
+            worktree_path: None,
+            retry_count: 0,
+            ci_fix_count: 0,
+            current_pid: pid,
+            error_message: None,
+            feature_name: None,
+            fixing_causes: vec![],
+            weight: TaskWeight::Medium,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn recover_on_startup_clears_pid_for_dead_process() {
+        // 存在しない PID を持つ Issue の場合、kill せずに current_pid をクリアする
+        let issue = make_issue_with_pid(Some(999_999));
+        let (repo, updated) = MockIssueRepo::new(vec![issue]);
+        let github = MockGitHub::new(false, None, vec![], false);
+        let uc = make_uc(github, repo);
+        uc.recover_on_startup().await;
+        let updates = updated.lock().unwrap();
+        assert_eq!(updates.len(), 1, "issue should be updated");
+        assert!(
+            updates[0].current_pid.is_none(),
+            "current_pid should be cleared"
+        );
+    }
+
+    #[tokio::test]
+    async fn recover_on_startup_does_not_update_issue_without_pid() {
+        // current_pid が None の Issue はそのまま何もしない
+        let issue = make_issue_with_pid(None);
+        let (repo, updated) = MockIssueRepo::new(vec![issue]);
+        let github = MockGitHub::new(false, None, vec![], false);
+        let uc = make_uc(github, repo);
+        uc.recover_on_startup().await;
+        let updates = updated.lock().unwrap();
+        assert!(updates.is_empty(), "no update should occur for issue with no PID");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn recover_on_startup_kills_live_process_and_clears_pid() {
+        // 生存しているプロセスを spawn し、recover_on_startup が SIGKILL を送ってクリアすることを確認
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("failed to spawn sleep");
+        let pid = child.id();
+
+        let issue = make_issue_with_pid(Some(pid));
+        let (repo, updated) = MockIssueRepo::new(vec![issue]);
+        let github = MockGitHub::new(false, None, vec![], false);
+        let uc = make_uc(github, repo);
+        uc.recover_on_startup().await;
+
+        // プロセスが kill されたことを確認
+        let _ = child.wait(); // wait を呼ぶことでゾンビを回収
+        assert!(
+            !is_process_alive(pid),
+            "process should have been killed"
+        );
+        let updates = updated.lock().unwrap();
+        assert_eq!(updates.len(), 1, "issue should be updated");
+        assert!(
+            updates[0].current_pid.is_none(),
+            "current_pid should be cleared after kill"
         );
     }
 }
