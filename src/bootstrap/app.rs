@@ -141,8 +141,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             let use_case = DoctorUseCase::new(loader, runner);
             let results = use_case.run(&config);
 
+            use crate::application::doctor_use_case::DoctorSection;
+
+            println!("=== Start Readiness ===");
             let mut has_failure = false;
-            for result in &results {
+            for result in results.iter().filter(|r| matches!(r.section, DoctorSection::StartReadiness)) {
                 match &result.status {
                     CheckStatus::Ok(msg) => println!("✅ {}: {}", result.name, msg),
                     CheckStatus::Warn(msg) => println!("⚠️  {}: {}", result.name, msg),
@@ -150,6 +153,22 @@ pub async fn run(cli: Cli) -> Result<()> {
                         println!("❌ {}: {}", result.name, msg);
                         has_failure = true;
                     }
+                }
+                if let Some(fix) = &result.remediation {
+                    println!("   fix: {fix}");
+                }
+            }
+
+            println!();
+            println!("=== Operational Readiness ===");
+            for result in results.iter().filter(|r| matches!(r.section, DoctorSection::OperationalReadiness)) {
+                match &result.status {
+                    CheckStatus::Ok(msg) => println!("✅ {}: {}", result.name, msg),
+                    CheckStatus::Warn(msg) => println!("⚠️  {}: {}", result.name, msg),
+                    CheckStatus::Fail(msg) => println!("❌ {}: {}", result.name, msg),
+                }
+                if let Some(fix) = &result.remediation {
+                    println!("   fix: {fix}");
                 }
             }
 

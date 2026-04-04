@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::application::port::config_loader::{ConfigLoadError, ConfigLoader, DoctorConfigSummary};
-use crate::bootstrap::config_loader::load_toml;
+use crate::bootstrap::config_loader::{CliOverrides, load_toml};
 
 pub struct TomlConfigLoader;
 
@@ -28,22 +28,38 @@ impl ConfigLoader for TomlConfigLoader {
                 // InvalidAssociation は into_config() で発生するため load_toml() では到達しないが、
                 // exhaustive matching のために処理する。
                 ConfigError::InvalidAssociation(value) => ConfigLoadError::ParseFailed {
-                    path: path_str,
+                    path: path_str.clone(),
                     reason: format!("invalid author association value: {value}"),
                 },
             }
         })?;
 
-        if toml.default_branch.is_empty() {
-            return Err(ConfigLoadError::MissingField {
-                field: "default_branch".to_string(),
-            });
-        }
+        let summary = DoctorConfigSummary {
+            owner: toml.owner.clone(),
+            repo: toml.repo.clone(),
+            default_branch: toml.default_branch.clone(),
+        };
 
-        Ok(DoctorConfigSummary {
-            owner: toml.owner,
-            repo: toml.repo,
-            default_branch: toml.default_branch,
-        })
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = toml.into_config(&overrides).map_err(|e| {
+            use crate::bootstrap::config_loader::ConfigError;
+            match e {
+                ConfigError::InvalidAssociation(value) => ConfigLoadError::ParseFailed {
+                    path: path_str.clone(),
+                    reason: format!("invalid author association value: {value}"),
+                },
+                _ => ConfigLoadError::ParseFailed {
+                    path: path_str.clone(),
+                    reason: e.to_string(),
+                },
+            }
+        })?;
+
+        config.validate().map_err(|reason| ConfigLoadError::ValidationFailed { reason })?;
+
+        Ok(summary)
     }
 }

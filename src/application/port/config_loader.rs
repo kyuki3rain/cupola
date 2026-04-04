@@ -17,6 +17,8 @@ pub enum ConfigLoadError {
     ParseFailed { path: String, reason: String },
     #[error("必須フィールドが不足しています: {field}")]
     MissingField { field: String },
+    #[error("設定のバリデーションに失敗しました: {reason}")]
+    ValidationFailed { reason: String },
 }
 
 pub trait ConfigLoader: Send + Sync {
