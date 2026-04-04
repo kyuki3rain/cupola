@@ -23,4 +23,6 @@ pub enum PidFileError {
     Delete(String),
     #[error("PID file contains invalid content: {0}")]
     InvalidContent(String),
+    #[error("PID file already exists (cupola is already running)")]
+    AlreadyExists,
 }
