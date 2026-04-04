@@ -12,11 +12,13 @@
       "rustup component add rust-analyzer"
     ],
     "scripts": {
-      "build":  "cargo build",
-      "test":   "cargo test",
-      "run":    "cargo run --",
-      "check":  "cargo check",
-      "clippy": "cargo clippy"
+      "build":     "cargo build",
+      "test":      "cargo test",
+      "check":     "cargo check",
+      "clippy":    "cargo clippy",
+      "fmt":       "cargo fmt",
+      "fmt-check": "cargo fmt --check",
+      "cupola":    "cargo run -- $@"
     }
   }
 }

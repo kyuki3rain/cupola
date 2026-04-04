@@ -53,19 +53,26 @@ Clean Architecture (4 layers). Dependencies point inward only.
 - devbox (Nix-based development environment management)
 
 ### Common Commands
+
+All commands use `devbox run` — cargo is managed by devbox and may not be in PATH outside of `devbox shell`.
+
 ```bash
-cargo build          # Build
-cargo test           # Run all tests
-cargo clippy         # Static analysis
-cargo fmt --check    # Format check
-cargo run -- start        # Start polling loop (foreground)
-cargo run -- start -d     # Start as daemon (background)
-cargo run -- stop         # Stop daemon (SIGTERM → SIGKILL)
-cargo run -- init         # Initialize SQLite schema + steering files
-cargo run -- status       # List Issue states
-cargo run -- doctor       # Validate config, GitHub, git
-cargo run -- cleanup      # Remove worktrees for Cancelled issues
-cargo run -- logs         # View log files
+devbox run build        # Build
+devbox run test         # Run all tests
+devbox run check        # Type check (no codegen)
+devbox run clippy       # Static analysis
+devbox run fmt          # Format code
+devbox run fmt-check    # Format check (CI)
+
+# CLI subcommands — devbox run cupola <subcommand>
+devbox run cupola start        # Start polling loop (foreground)
+devbox run cupola start -d     # Start as daemon (background)
+devbox run cupola stop         # Stop daemon (SIGTERM → SIGKILL)
+devbox run cupola init         # Initialize SQLite schema + steering files
+devbox run cupola status       # List Issue states
+devbox run cupola doctor       # Validate config, GitHub, git
+devbox run cupola cleanup      # Remove worktrees for Cancelled issues
+devbox run cupola logs         # View log files
 ```
 
 ## Key Technical Decisions
