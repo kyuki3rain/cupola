@@ -6,6 +6,7 @@ use crate::application::port::command_runner::CommandRunner;
 use crate::application::port::config_loader::ConfigLoader;
 
 /// 診断セクション: Start Readiness か Operational Readiness か
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DoctorSection {
     StartReadiness,
     OperationalReadiness,
@@ -105,11 +106,22 @@ fn check_git(runner: &dyn CommandRunner) -> DoctorCheckResult {
             status: CheckStatus::Ok("git がインストールされています".to_string()),
             remediation: None,
         },
-        Ok(_) => DoctorCheckResult {
+        Ok(output) if output.stderr.contains("command not found") => DoctorCheckResult {
             section: DoctorSection::StartReadiness,
             name: "git".to_string(),
             status: CheckStatus::Fail("git がインストールされていません".to_string()),
             remediation: Some("git をインストールしてください: https://git-scm.com/".to_string()),
+        },
+        Ok(output) => DoctorCheckResult {
+            section: DoctorSection::StartReadiness,
+            name: "git".to_string(),
+            status: CheckStatus::Fail(format!(
+                "git の実行に失敗しました: {}",
+                output.stderr.trim()
+            )),
+            remediation: Some(
+                "git をインストールしてください: https://git-scm.com/".to_string(),
+            ),
         },
     }
 }
@@ -129,6 +141,14 @@ fn check_github_token(runner: &dyn CommandRunner) -> DoctorCheckResult {
             name: "github token".to_string(),
             status: CheckStatus::Ok("GitHub トークンが取得できました".to_string()),
             remediation: None,
+        },
+        Ok(output) if output.stderr.contains("command not found") => DoctorCheckResult {
+            section: DoctorSection::StartReadiness,
+            name: "github token".to_string(),
+            status: CheckStatus::Fail("gh CLI がインストールされていません".to_string()),
+            remediation: Some(
+                "gh CLI をインストールしてください: https://cli.github.com/".to_string(),
+            ),
         },
         Ok(_) => DoctorCheckResult {
             section: DoctorSection::StartReadiness,
@@ -267,13 +287,23 @@ fn check_gh_label(runner: &dyn CommandRunner) -> DoctorCheckResult {
             status: CheckStatus::Warn(format!("ラベル一覧の取得に失敗しました: {e}")),
             remediation: Some("`gh label create agent:ready` を実行してください".to_string()),
         },
+        Ok(output) if !output.success && output.stderr.contains("command not found") => {
+            DoctorCheckResult {
+                section: DoctorSection::OperationalReadiness,
+                name: "agent:ready ラベル".to_string(),
+                status: CheckStatus::Warn("gh CLI がインストールされていないため、ラベルを確認できません".to_string()),
+                remediation: Some(
+                    "gh CLI をインストールしてください: https://cli.github.com/".to_string(),
+                ),
+            }
+        }
         Ok(output) if !output.success => DoctorCheckResult {
             section: DoctorSection::OperationalReadiness,
             name: "agent:ready ラベル".to_string(),
             status: CheckStatus::Warn(
-                "ラベル一覧の取得に失敗しました。gh の認証状態を確認してください".to_string(),
+                "ラベル一覧の取得に失敗しました。`gh auth login` で認証してください".to_string(),
             ),
-            remediation: Some("`gh label create agent:ready` を実行してください".to_string()),
+            remediation: Some("`gh auth login` を実行してください".to_string()),
         },
         Ok(output) => match parse_label_json(&output.stdout) {
             Ok(true) => DoctorCheckResult {
@@ -311,16 +341,23 @@ fn check_weight_labels(runner: &dyn CommandRunner) -> DoctorCheckResult {
                     .to_string(),
             ),
         },
+        Ok(output) if !output.success && output.stderr.contains("command not found") => {
+            DoctorCheckResult {
+                section: DoctorSection::OperationalReadiness,
+                name: "weight:* ラベル".to_string(),
+                status: CheckStatus::Warn("gh CLI がインストールされていないため、ラベルを確認できません".to_string()),
+                remediation: Some(
+                    "gh CLI をインストールしてください: https://cli.github.com/".to_string(),
+                ),
+            }
+        }
         Ok(output) if !output.success => DoctorCheckResult {
             section: DoctorSection::OperationalReadiness,
             name: "weight:* ラベル".to_string(),
             status: CheckStatus::Warn(
-                "ラベル一覧の取得に失敗しました。gh の認証状態を確認してください".to_string(),
+                "ラベル一覧の取得に失敗しました。`gh auth login` で認証してください".to_string(),
             ),
-            remediation: Some(
-                "`gh label create weight:light && gh label create weight:heavy` を実行してください"
-                    .to_string(),
-            ),
+            remediation: Some("`gh auth login` を実行してください".to_string()),
         },
         Ok(output) => {
             let has_light = output.stdout.contains("\"weight:light\"");
@@ -584,19 +621,27 @@ mod tests {
     }
 
     #[test]
-    fn check_git_with_mock_not_found_returns_fail_with_remediation() {
+    fn check_git_when_not_installed_returns_fail_with_install_remediation() {
+        // デフォルトは stderr = "command not found" → git 未インストール
         let runner = MockCommandRunner::new();
         let result = check_git(&runner);
         assert!(matches!(result.status, CheckStatus::Fail(_)));
         assert!(matches!(result.section, DoctorSection::StartReadiness));
         assert!(result.remediation.is_some());
+        if let CheckStatus::Fail(msg) = &result.status {
+            assert!(msg.contains("インストールされていません"));
+        }
     }
 
     #[test]
-    fn check_git_with_mock_installed_but_failing_returns_fail() {
+    fn check_git_when_execution_fails_returns_fail_with_stderr() {
+        // with_failure は stderr = "error" → その他のエラー
         let runner = MockCommandRunner::new().with_failure("git", &["--version"]);
         let result = check_git(&runner);
         assert!(matches!(result.status, CheckStatus::Fail(_)));
+        if let CheckStatus::Fail(msg) = &result.status {
+            assert!(msg.contains("実行に失敗"));
+        }
     }
 
     // --- check_github_token tests ---
@@ -612,22 +657,26 @@ mod tests {
     }
 
     #[test]
-    fn check_github_token_with_failure_returns_fail_with_remediation() {
+    fn check_github_token_when_gh_not_installed_returns_fail_with_install_remediation() {
+        // デフォルトは stderr = "command not found" → gh 未インストール
         let runner = MockCommandRunner::new();
         let result = check_github_token(&runner);
         assert!(matches!(result.status, CheckStatus::Fail(_)));
         assert!(matches!(result.section, DoctorSection::StartReadiness));
         assert!(result.remediation.is_some());
         let rem = result.remediation.unwrap();
-        assert!(rem.contains("gh auth login"));
+        assert!(rem.contains("cli.github.com"));
     }
 
     #[test]
-    fn check_github_token_with_explicit_failure_returns_fail() {
+    fn check_github_token_when_auth_fails_returns_fail_with_login_remediation() {
+        // with_failure は stderr = "error" → 認証失敗
         let runner = MockCommandRunner::new().with_failure("gh", &["auth", "token"]);
         let result = check_github_token(&runner);
         assert!(matches!(result.status, CheckStatus::Fail(_)));
         assert!(result.remediation.is_some());
+        let rem = result.remediation.unwrap();
+        assert!(rem.contains("gh auth login"));
     }
 
     // --- check_claude tests ---
@@ -757,7 +806,7 @@ mod tests {
     }
 
     #[test]
-    fn check_gh_label_when_label_missing_returns_warn_not_fail() {
+    fn check_gh_label_when_label_missing_returns_warn_with_create_remediation() {
         let runner = MockCommandRunner::new().with_success(
             "gh",
             &["label", "list", "--json", "name"],
@@ -766,6 +815,31 @@ mod tests {
         let result = check_gh_label(&runner);
         assert!(matches!(result.status, CheckStatus::Warn(_)));
         assert!(result.remediation.is_some());
+        let rem = result.remediation.unwrap();
+        assert!(rem.contains("gh label create agent:ready"));
+    }
+
+    #[test]
+    fn check_gh_label_when_gh_not_installed_returns_warn_with_install_remediation() {
+        // デフォルトは stderr = "command not found"
+        let runner = MockCommandRunner::new();
+        let result = check_gh_label(&runner);
+        assert!(matches!(result.status, CheckStatus::Warn(_)));
+        assert!(matches!(result.section, DoctorSection::OperationalReadiness));
+        assert!(result.remediation.is_some());
+        let rem = result.remediation.unwrap();
+        assert!(rem.contains("cli.github.com"));
+    }
+
+    #[test]
+    fn check_gh_label_when_auth_fails_returns_warn_with_login_remediation() {
+        // with_failure は stderr = "error" → 認証失敗
+        let runner = MockCommandRunner::new().with_failure("gh", &["label", "list", "--json", "name"]);
+        let result = check_gh_label(&runner);
+        assert!(matches!(result.status, CheckStatus::Warn(_)));
+        assert!(result.remediation.is_some());
+        let rem = result.remediation.unwrap();
+        assert!(rem.contains("gh auth login"));
     }
 
     // --- DoctorUseCase integration test ---
