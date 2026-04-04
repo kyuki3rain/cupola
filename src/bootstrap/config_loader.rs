@@ -537,7 +537,6 @@ max_ci_fix_cycles = 0
             config.validate().unwrap_err(),
             "max_ci_fix_cycles must be greater than 0"
         );
-
     }
 
     #[test]
@@ -567,11 +566,30 @@ default_branch = "main"
         };
         let config = parsed.into_config(&overrides).expect("should succeed");
         // Default: Owner, Member, Collaborator
-        assert!(config.trusted_associations.is_trusted(&AuthorAssociation::Owner));
-        assert!(config.trusted_associations.is_trusted(&AuthorAssociation::Member));
-        assert!(config.trusted_associations.is_trusted(&AuthorAssociation::Collaborator));
-        assert!(!config.trusted_associations.is_trusted(&AuthorAssociation::Contributor));
-        assert!(matches!(config.trusted_associations, TrustedAssociations::Specific(_)));
+        assert!(
+            config
+                .trusted_associations
+                .is_trusted(&AuthorAssociation::Owner)
+        );
+        assert!(
+            config
+                .trusted_associations
+                .is_trusted(&AuthorAssociation::Member)
+        );
+        assert!(
+            config
+                .trusted_associations
+                .is_trusted(&AuthorAssociation::Collaborator)
+        );
+        assert!(
+            !config
+                .trusted_associations
+                .is_trusted(&AuthorAssociation::Contributor)
+        );
+        assert!(matches!(
+            config.trusted_associations,
+            TrustedAssociations::Specific(_)
+        ));
     }
 
     #[test]
@@ -590,8 +608,15 @@ trusted_associations = ["all"]
             log_level: None,
         };
         let config = parsed.into_config(&overrides).expect("should succeed");
-        assert!(matches!(config.trusted_associations, TrustedAssociations::All));
-        assert!(config.trusted_associations.is_trusted(&AuthorAssociation::None));
+        assert!(matches!(
+            config.trusted_associations,
+            TrustedAssociations::All
+        ));
+        assert!(
+            config
+                .trusted_associations
+                .is_trusted(&AuthorAssociation::None)
+        );
     }
 
     #[test]
@@ -610,10 +635,25 @@ trusted_associations = ["OWNER", "CONTRIBUTOR"]
             log_level: None,
         };
         let config = parsed.into_config(&overrides).expect("should succeed");
-        assert!(matches!(config.trusted_associations, TrustedAssociations::Specific(_)));
-        assert!(config.trusted_associations.is_trusted(&AuthorAssociation::Owner));
-        assert!(config.trusted_associations.is_trusted(&AuthorAssociation::Contributor));
-        assert!(!config.trusted_associations.is_trusted(&AuthorAssociation::Member));
+        assert!(matches!(
+            config.trusted_associations,
+            TrustedAssociations::Specific(_)
+        ));
+        assert!(
+            config
+                .trusted_associations
+                .is_trusted(&AuthorAssociation::Owner)
+        );
+        assert!(
+            config
+                .trusted_associations
+                .is_trusted(&AuthorAssociation::Contributor)
+        );
+        assert!(
+            !config
+                .trusted_associations
+                .is_trusted(&AuthorAssociation::Member)
+        );
     }
 
     #[test]
@@ -652,7 +692,15 @@ trusted_associations = ["owner", "member"]
             log_level: None,
         };
         let config = parsed.into_config(&overrides).expect("should succeed");
-        assert!(config.trusted_associations.is_trusted(&AuthorAssociation::Owner));
-        assert!(config.trusted_associations.is_trusted(&AuthorAssociation::Member));
+        assert!(
+            config
+                .trusted_associations
+                .is_trusted(&AuthorAssociation::Owner)
+        );
+        assert!(
+            config
+                .trusted_associations
+                .is_trusted(&AuthorAssociation::Member)
+        );
     }
 }

@@ -11,10 +11,7 @@ impl ConfigLoader for TomlConfigLoader {
         let toml = load_toml(path).map_err(|e| {
             use crate::bootstrap::config_loader::ConfigError;
             match e {
-                ConfigError::ReadFailed {
-                    path: p,
-                    source,
-                } => {
+                ConfigError::ReadFailed { path: p, source } => {
                     if source.kind() == std::io::ErrorKind::NotFound {
                         ConfigLoadError::NotFound { path: p }
                     } else {

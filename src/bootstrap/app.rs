@@ -172,9 +172,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 polling_interval_secs: None,
                 log_level: None,
             };
-            let cfg = toml
-                .into_config(&overrides)
-                .context("invalid config")?;
+            let cfg = toml.into_config(&overrides).context("invalid config")?;
 
             let log_dir = cfg.log_dir;
 
@@ -281,14 +279,20 @@ pub async fn run(cli: Cli) -> Result<()> {
             // Load config for max_concurrent_sessions display
             let config_path = Path::new(".cupola/cupola.toml");
             let max_sessions = if config_path.exists() {
-                load_toml(config_path).ok().and_then(|t| {
-                    let overrides = CliOverrides {
-                        polling_interval_secs: None,
-                        log_level: None,
-                    };
-                    let cfg = t.into_config(&overrides).ok()?;
-                    cfg.max_concurrent_sessions
-                })
+                let overrides = CliOverrides {
+                    polling_interval_secs: None,
+                    log_level: None,
+                };
+                match load_toml(config_path).and_then(|t| t.into_config(&overrides)) {
+                    Ok(cfg) => cfg.max_concurrent_sessions,
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "設定ファイルの読み込みに失敗しました。一部のステータス情報が表示されない場合があります。"
+                        );
+                        None
+                    }
+                }
             } else {
                 None
             };
@@ -328,9 +332,7 @@ async fn start_foreground(
         polling_interval_secs,
         log_level,
     };
-    let cfg = toml
-        .into_config(&overrides)
-        .context("invalid config")?;
+    let cfg = toml.into_config(&overrides).context("invalid config")?;
     cfg.validate()
         .map_err(|e| anyhow::anyhow!("config validation failed: {e}"))?;
 
@@ -419,9 +421,7 @@ async fn start_daemon(
         polling_interval_secs,
         log_level: log_level.clone(),
     };
-    let cfg = toml
-        .into_config(&overrides)
-        .context("invalid config")?;
+    let cfg = toml.into_config(&overrides).context("invalid config")?;
     cfg.validate()
         .map_err(|e| anyhow::anyhow!("config validation failed: {e}"))?;
 
@@ -478,9 +478,7 @@ async fn start_daemon_child(
         polling_interval_secs,
         log_level,
     };
-    let cfg = toml
-        .into_config(&overrides)
-        .context("invalid config")?;
+    let cfg = toml.into_config(&overrides).context("invalid config")?;
     cfg.validate()
         .map_err(|e| anyhow::anyhow!("config validation failed: {e}"))?;
 

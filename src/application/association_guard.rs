@@ -29,6 +29,7 @@ pub async fn check_label_actor<G: GitHubClient>(
     issue_number: u64,
     label_name: &str,
     trusted: &TrustedAssociations,
+    repository_owner: &str,
 ) -> Result<AssociationCheckResult> {
     // All の場合は即座に Trusted
     if matches!(trusted, TrustedAssociations::All) {
@@ -54,7 +55,8 @@ pub async fn check_label_actor<G: GitHubClient>(
 
     // Permission API で association を取得
     let permission = github.fetch_user_permission(&actor_login).await?;
-    let association = permission.to_author_association();
+    let association =
+        permission.to_author_association_for_actor(Some(&actor_login), Some(repository_owner));
 
     if trusted.is_trusted(&association) {
         tracing::info!(
@@ -170,11 +172,7 @@ mod tests {
             Ok(true)
         }
 
-        async fn find_pr_by_branches(
-            &self,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<Option<GitHubPr>> {
+        async fn find_pr_by_branches(&self, _: &str, _: &str) -> anyhow::Result<Option<GitHubPr>> {
             Ok(None)
         }
 
@@ -230,11 +228,7 @@ mod tests {
             Ok(PrStatus::Open)
         }
 
-        async fn fetch_label_actor_login(
-            &self,
-            _: u64,
-            _: &str,
-        ) -> anyhow::Result<Option<String>> {
+        async fn fetch_label_actor_login(&self, _: u64, _: &str) -> anyhow::Result<Option<String>> {
             if self.fail_label_actor {
                 return Err(anyhow::anyhow!("timeline API error"));
             }
@@ -262,7 +256,7 @@ mod tests {
     #[tokio::test]
     async fn trusted_associations_all_returns_trusted_without_api_calls() {
         let mock = MockGitHubClient::new(None, RepositoryPermission::Read);
-        let result = check_label_actor(&mock, 1, "agent:ready", &TrustedAssociations::All)
+        let result = check_label_actor(&mock, 1, "agent:ready", &TrustedAssociations::All, "owner")
             .await
             .expect("should succeed");
         assert!(matches!(result, AssociationCheckResult::Trusted));
@@ -275,7 +269,7 @@ mod tests {
             AuthorAssociation::Owner,
             AuthorAssociation::Collaborator,
         ]);
-        let result = check_label_actor(&mock, 42, "agent:ready", &trusted)
+        let result = check_label_actor(&mock, 42, "agent:ready", &trusted, "owner-user")
             .await
             .expect("should succeed");
         assert!(matches!(result, AssociationCheckResult::Trusted));
@@ -292,14 +286,11 @@ mod tests {
             AuthorAssociation::Member,
             AuthorAssociation::Collaborator,
         ]);
-        let result = check_label_actor(&mock, 10, "agent:ready", &trusted)
+        let result = check_label_actor(&mock, 10, "agent:ready", &trusted, "test-owner")
             .await
             .expect("should succeed");
 
-        assert!(matches!(
-            result,
-            AssociationCheckResult::Rejected { .. }
-        ));
+        assert!(matches!(result, AssociationCheckResult::Rejected { .. }));
 
         // ラベルが削除される
         let removed = mock.removed_labels.lock().expect("lock");
@@ -318,7 +309,7 @@ mod tests {
         // label_actor が None の場合（ラベル付与イベントが存在しない）
         let mock = MockGitHubClient::new(None, RepositoryPermission::Admin);
         let trusted = TrustedAssociations::default();
-        let result = check_label_actor(&mock, 1, "agent:ready", &trusted).await;
+        let result = check_label_actor(&mock, 1, "agent:ready", &trusted, "test-owner").await;
         assert!(result.is_err());
     }
 
@@ -327,7 +318,7 @@ mod tests {
         let mock = MockGitHubClient::new(Some("user"), RepositoryPermission::Admin)
             .with_fail_label_actor();
         let trusted = TrustedAssociations::default();
-        let result = check_label_actor(&mock, 1, "agent:ready", &trusted).await;
+        let result = check_label_actor(&mock, 1, "agent:ready", &trusted, "test-owner").await;
         assert!(result.is_err());
     }
 
@@ -336,7 +327,7 @@ mod tests {
         let mock =
             MockGitHubClient::new(Some("user"), RepositoryPermission::Admin).with_fail_permission();
         let trusted = TrustedAssociations::default();
-        let result = check_label_actor(&mock, 1, "agent:ready", &trusted).await;
+        let result = check_label_actor(&mock, 1, "agent:ready", &trusted, "test-owner").await;
         assert!(result.is_err());
     }
 }

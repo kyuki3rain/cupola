@@ -168,6 +168,7 @@ where
                                 gi.number,
                                 "agent:ready",
                                 &self.config.trusted_associations,
+                                &self.config.owner,
                             )
                             .await
                             {
@@ -1482,7 +1483,8 @@ mod tests {
                     comments: vec![ReviewComment {
                         author: "reviewer".to_string(),
                         body: "fix this".to_string(),
-                        author_association: crate::domain::author_association::AuthorAssociation::Collaborator,
+                        author_association:
+                            crate::domain::author_association::AuthorAssociation::Collaborator,
                     }],
                 }]
             } else {
@@ -1557,11 +1559,7 @@ mod tests {
             Ok(self.pr_status.clone())
         }
 
-        async fn fetch_label_actor_login(
-            &self,
-            _: u64,
-            _: &str,
-        ) -> anyhow::Result<Option<String>> {
+        async fn fetch_label_actor_login(&self, _: u64, _: &str) -> anyhow::Result<Option<String>> {
             Ok(Some("test-actor".to_string()))
         }
 
@@ -2372,11 +2370,7 @@ mod tests {
             Ok(PrStatus::Closed)
         }
 
-        async fn fetch_label_actor_login(
-            &self,
-            _: u64,
-            _: &str,
-        ) -> anyhow::Result<Option<String>> {
+        async fn fetch_label_actor_login(&self, _: u64, _: &str) -> anyhow::Result<Option<String>> {
             // テスト用: デフォルトで actor を返して Trusted にする
             Ok(Some("test-actor".to_string()))
         }

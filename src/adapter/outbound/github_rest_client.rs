@@ -6,6 +6,20 @@ use crate::application::port::github_client::{
     RepositoryPermission,
 };
 
+/// 文字列を URL パスセグメントとして percent-encode する。
+/// 非予約文字（英数字・`-`・`_`・`.`・`~`）以外をすべて `%XX` 形式にエンコードする。
+fn percent_encode_path(s: &str) -> String {
+    let mut encoded = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(b as char);
+        } else {
+            encoded.push_str(&format!("%{b:02X}"));
+        }
+    }
+    encoded
+}
+
 pub struct OctocrabRestClient {
     octocrab: Octocrab,
     owner: String,
@@ -323,9 +337,7 @@ impl OctocrabRestClient {
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send()
             .await
-            .with_context(|| {
-                format!("failed to fetch timeline for issue #{issue_number}")
-            })?;
+            .with_context(|| format!("failed to fetch timeline for issue #{issue_number}"))?;
 
         if !resp.status().is_success() {
             return Err(anyhow!(
@@ -405,8 +417,8 @@ impl OctocrabRestClient {
 
     /// Issue からラベルを削除する。
     pub async fn remove_label(&self, issue_number: u64, label_name: &str) -> Result<()> {
-        // ラベル名の URL エンコード（コロンなどが含まれる "agent:ready" 等に対応）
-        let encoded_label = label_name.replace(' ', "%20").replace('#', "%23");
+        // ラベル名を URL パスセグメントとして percent-encode する
+        let encoded_label = percent_encode_path(label_name);
         let url = format!(
             "https://api.github.com/repos/{}/{}/issues/{}/labels/{}",
             self.owner, self.repo, issue_number, encoded_label

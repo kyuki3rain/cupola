@@ -367,7 +367,10 @@ mod tests {
         let content =
             std::fs::read_to_string(tmp.path().join(".cupola/inputs/review_threads.json"))
                 .expect("should read");
-        assert!(content.contains("trusted comment"), "trusted comment should be included");
+        assert!(
+            content.contains("trusted comment"),
+            "trusted comment should be included"
+        );
         assert!(
             !content.contains("external comment"),
             "external comment should be excluded"

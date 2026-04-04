@@ -101,26 +101,64 @@ mod tests {
 
     #[test]
     fn from_str_valid_uppercase() {
-        assert_eq!("OWNER".parse::<AuthorAssociation>().unwrap(), AuthorAssociation::Owner);
-        assert_eq!("MEMBER".parse::<AuthorAssociation>().unwrap(), AuthorAssociation::Member);
-        assert_eq!("COLLABORATOR".parse::<AuthorAssociation>().unwrap(), AuthorAssociation::Collaborator);
-        assert_eq!("CONTRIBUTOR".parse::<AuthorAssociation>().unwrap(), AuthorAssociation::Contributor);
-        assert_eq!("FIRST_TIMER".parse::<AuthorAssociation>().unwrap(), AuthorAssociation::FirstTimer);
-        assert_eq!("FIRST_TIME_CONTRIBUTOR".parse::<AuthorAssociation>().unwrap(), AuthorAssociation::FirstTimeContributor);
-        assert_eq!("NONE".parse::<AuthorAssociation>().unwrap(), AuthorAssociation::None);
+        assert_eq!(
+            "OWNER".parse::<AuthorAssociation>().unwrap(),
+            AuthorAssociation::Owner
+        );
+        assert_eq!(
+            "MEMBER".parse::<AuthorAssociation>().unwrap(),
+            AuthorAssociation::Member
+        );
+        assert_eq!(
+            "COLLABORATOR".parse::<AuthorAssociation>().unwrap(),
+            AuthorAssociation::Collaborator
+        );
+        assert_eq!(
+            "CONTRIBUTOR".parse::<AuthorAssociation>().unwrap(),
+            AuthorAssociation::Contributor
+        );
+        assert_eq!(
+            "FIRST_TIMER".parse::<AuthorAssociation>().unwrap(),
+            AuthorAssociation::FirstTimer
+        );
+        assert_eq!(
+            "FIRST_TIME_CONTRIBUTOR"
+                .parse::<AuthorAssociation>()
+                .unwrap(),
+            AuthorAssociation::FirstTimeContributor
+        );
+        assert_eq!(
+            "NONE".parse::<AuthorAssociation>().unwrap(),
+            AuthorAssociation::None
+        );
     }
 
     #[test]
     fn from_str_valid_lowercase() {
-        assert_eq!("owner".parse::<AuthorAssociation>().unwrap(), AuthorAssociation::Owner);
-        assert_eq!("member".parse::<AuthorAssociation>().unwrap(), AuthorAssociation::Member);
-        assert_eq!("collaborator".parse::<AuthorAssociation>().unwrap(), AuthorAssociation::Collaborator);
+        assert_eq!(
+            "owner".parse::<AuthorAssociation>().unwrap(),
+            AuthorAssociation::Owner
+        );
+        assert_eq!(
+            "member".parse::<AuthorAssociation>().unwrap(),
+            AuthorAssociation::Member
+        );
+        assert_eq!(
+            "collaborator".parse::<AuthorAssociation>().unwrap(),
+            AuthorAssociation::Collaborator
+        );
     }
 
     #[test]
     fn from_str_valid_mixed_case() {
-        assert_eq!("Owner".parse::<AuthorAssociation>().unwrap(), AuthorAssociation::Owner);
-        assert_eq!("Collaborator".parse::<AuthorAssociation>().unwrap(), AuthorAssociation::Collaborator);
+        assert_eq!(
+            "Owner".parse::<AuthorAssociation>().unwrap(),
+            AuthorAssociation::Owner
+        );
+        assert_eq!(
+            "Collaborator".parse::<AuthorAssociation>().unwrap(),
+            AuthorAssociation::Collaborator
+        );
     }
 
     #[test]
@@ -154,10 +192,7 @@ mod tests {
             AuthorAssociation::FirstTimeContributor,
             AuthorAssociation::None,
         ] {
-            assert!(
-                trusted.is_trusted(&assoc),
-                "All should trust {assoc:?}"
-            );
+            assert!(trusted.is_trusted(&assoc), "All should trust {assoc:?}");
         }
     }
 
