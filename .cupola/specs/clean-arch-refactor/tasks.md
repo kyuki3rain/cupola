@@ -77,9 +77,9 @@
   - application 層の port トレイトメソッドが `anyhow::Result<T>` を返しているか確認する（ポート固有エラー型 `StopError`・`PidFileError`・`ConfigLoadError` はそのまま維持）
   - _Requirements: 5.1, 5.2, 5.3, 5.4_
 
-- [ ] 5.2 `cargo build`、`cargo test`、`cargo clippy -- -D warnings` を全パスさせる
+- [ ] 5.2 `cargo build`、`cargo test`、`cargo clippy --all-targets -- -D warnings` を全パスさせる
   - `cargo build` を実行し、コンパイルエラー・警告を全て修正する
-  - `cargo clippy -- -D warnings` を実行し、全ての lint 警告を修正する
+  - `cargo clippy --all-targets -- -D warnings` を実行し、全ての lint 警告を修正する
   - `cargo test` を実行し、全テストがパスすることを確認する
   - タスク 1〜5.1 で修正したファイルに clippy 指摘がある場合は修正する
   - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5_

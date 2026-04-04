@@ -17,7 +17,7 @@
 - `NixSignalSender` を `adapter/outbound/` に移動する
 - `DoctorUseCase` で既存 `CommandRunner` ポートを使用する
 - 未使用の `CupolaError` と `check_result.rs` を削除する
-- `cargo build` / `cargo test` / `cargo clippy -- -D warnings` が全て警告なしで成功する状態を維持する
+- `cargo build` / `cargo test` / `cargo clippy --all-targets -- -D warnings` が全て警告なしで成功する状態を維持する
 
 ### 非ゴール
 
@@ -434,7 +434,7 @@ impl<C: ConfigLoader, R: CommandRunner> DoctorUseCase<C, R> {
 
 - 各タスク完了後: `cargo build` が成功すること
 - 全タスク完了後: `cargo test` が全パスすること
-- 全タスク完了後: `cargo clippy -- -D warnings` が警告なしで成功すること
+- 全タスク完了後: `cargo clippy --all-targets -- -D warnings` が警告なしで成功すること
 
 ---
 
