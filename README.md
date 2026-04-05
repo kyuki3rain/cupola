@@ -336,6 +336,17 @@ src/
     └── toml_config_loader.rs
 ```
 
+The architecture document taxonomy is defined in
+[`docs/architecture/README.md`](docs/architecture/README.md).
+The broader system model is documented in
+[`docs/architecture/system-overview.md`](docs/architecture/system-overview.md).
+The workflow core is documented in
+[`docs/architecture/polling.md`](docs/architecture/polling.md),
+[`docs/architecture/signals.md`](docs/architecture/signals.md),
+[`docs/architecture/states.md`](docs/architecture/states.md),
+[`docs/architecture/effects.md`](docs/architecture/effects.md), and
+[`docs/architecture/reduce.md`](docs/architecture/reduce.md).
+
 ## Limitations
 
 - **Review comment scope**: Only PR review threads (`review_thread`) are supported. Top-level PR review comments (PR-level comments without a thread) are not handled.

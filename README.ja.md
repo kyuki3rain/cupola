@@ -286,6 +286,20 @@ src/
     └── toml_config_loader.rs
 ```
 
+設計ドキュメントの役割分担は
+[`docs/architecture/README.md`](docs/architecture/README.md)
+に定義しています。
+システム全体の設計前提は
+[`docs/architecture/system-overview.md`](docs/architecture/system-overview.md)
+にまとめています。
+ワークフローの中核は
+[`docs/architecture/polling.md`](docs/architecture/polling.md),
+[`docs/architecture/signals.md`](docs/architecture/signals.md),
+[`docs/architecture/states.md`](docs/architecture/states.md),
+[`docs/architecture/effects.md`](docs/architecture/effects.md),
+[`docs/architecture/reduce.md`](docs/architecture/reduce.md)
+に分割して定義しています。
+
 ## 制限事項
 
 - **レビューコメントのサポート範囲**: PR のレビュースレッド（`review_thread`）のみ対応。PR レベルのレビューコメント（スレッドを持たないトップレベルの PR レビューコメント）は未対応。
