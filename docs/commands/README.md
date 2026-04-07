@@ -11,7 +11,7 @@
 | [init.md](./init.md) | リポジトリの bootstrap と初期資産導入 |
 | [doctor.md](./doctor.md) | 起動前診断と運用準備確認 |
 | [status.md](./status.md) | 現在のプロセス / Issue 処理状態の表示 |
-| [cleanup.md](./cleanup.md) | `Cancelled` Issue の worktree / branch 整理 |
+| [cleanup.md](./cleanup.md) | `Cancelled` Issue の worktree / branch / PR の完全リセット |
 | [compress.md](./compress.md) | 完了済み spec の検出と圧縮 |
 | [logs.md](./logs.md) | 最新ログファイルの表示と follow |
 
@@ -24,7 +24,7 @@
 | `cupola init` | `.cupola/` ディレクトリと Claude Code 向け資産を初期化する |
 | `cupola doctor` | 起動前提と運用前提を診断する |
 | `cupola status` | プロセス状態と active issue 一覧を表示する |
-| `cupola cleanup` | `Cancelled` 状態の Issue に紐づく worktree / branch を掃除する |
+| `cupola cleanup` | `Cancelled` 状態の Issue を完全リセットする（worktree / branch / PR） |
 | `cupola compress` | 完了済み spec を数え、Claude Code で圧縮する |
 | `cupola logs` | 最新の `cupola.*` ログを表示する |
 
@@ -182,7 +182,7 @@ $ cupola cleanup
 2 件処理しました。
 ```
 
-`Cancelled` になった原因（CI 環境の問題、認証切れ等）を修正してから再び Issue を reopen すれば、Cupola が次サイクルで再始動する。retry 枯渇で Cancelled になった場合も、`Cancelled → Idle` 遷移時に失敗カウントがリセットされるため同様に再始動できる。cleanup した場合は worktree・branch が削除されているため、再始動後は InitializeRunning から再実行される。
+`Cancelled` になった原因（CI 環境の問題、認証切れ等）を修正してから再び Issue を reopen すれば、Cupola が次サイクルで再始動する。retry 枯渇で Cancelled になった場合も、`Cancelled → Idle` 遷移時に失敗カウントがリセットされるため同様に再始動できる。cleanup した場合は worktree・branch の削除と open PR の close が行われるため、再始動後は必ず InitializeRunning から再実行される。
 
 ---
 
