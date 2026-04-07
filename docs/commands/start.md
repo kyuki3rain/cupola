@@ -88,7 +88,7 @@ PID ファイルは 2 行フォーマット。
 
 - foreground 起動時は PID ファイルを atomic create して排他を確保してから polling loop を開始する
 - daemon 起動時は親が atomic create で排他を確保してから子を再 exec する（二重起動レース防止）
-- 既存 PID ファイルがあり対象プロセスが生きていれば起動を拒否する
+- 既存 PID ファイルがあり対象プロセスが生きていれば起動を拒否する（foreground および daemon 親プロセスの動作。daemon 子プロセスは衝突チェックを行わず内容上書きのみ）
 - 対象プロセスが死んでいれば stale PID とみなして削除してから起動する
 
 ## 設定読み込み
