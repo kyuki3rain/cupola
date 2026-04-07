@@ -51,8 +51,12 @@ ProcessRun に記録された `design` / `impl` の `pr_number` を参照し、G
 
 各操作の完了状況に応じて次のフィールドをクリアする。
 
-- `worktree_path`: worktree 削除が成功または「既に存在しない」と確認できた場合
-- worktree が残ったまま参照だけ失うと復旧不能になるため、上記条件を満たさない限り更新しない
+| フィールド | クリア条件 | 理由 |
+|-----------|-----------|------|
+| `worktree_path` | worktree 削除が成功または「既に存在しない」と確認できた場合 | worktree が残ったまま参照だけ失うと復旧不能になるため |
+| `ci_fix_count` | 常にリセット（`0`） | 新しい PR 世代として CI 修正予算を初期化するため |
+
+その他のフィールド（`close_finished`・`consecutive_failures_epoch`・`feature_name`）は cleanup では変更しない。これらは `Cancelled → Idle` 遷移時に状態機械が適切にリセットする。
 
 ## 出力
 
@@ -63,5 +67,6 @@ ProcessRun に記録された `design` / `impl` の `pr_number` を参照し、G
 
 - `Completed` 遷移時に自動で行われる cleanup は polling loop 側の effect であり、このコマンドとは別物
 - このコマンドは「残置された `Cancelled` Issue の後片付け」を手動で行うためのもの
+- `.cupola/specs/{feature_name}/` は削除しない。spec 資産は committed ファイルとして履歴に残す。reopen 後の SpawnInit は `spec.json` と `requirements.md` を上書き再生成する
 - cleanup 後に Issue を reopen すると `Cancelled → Idle` 遷移が発生し、スマートルーティングは open PR を見つけないため必ず InitializeRunning から再実行される
-- `Cancelled → Idle` 遷移時に `consecutive_failures_epoch` がリセットされるため、retry 枯渇で Cancelled になった Issue でも cleanup なしで reopen しても再始動できる
+- `Cancelled → Idle` 遷移時に `consecutive_failures_epoch` がリセットされるため、retry 枯渇で Cancelled になった Issue でも cleanup なしで reopen すれば再始動できる

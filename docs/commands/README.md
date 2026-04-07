@@ -80,7 +80,7 @@ Operational Readiness
   ✅ assets        commands and settings found
   ✅ steering      3 file(s) found
   ✅ agent:ready label    found
-  ✅ weight labels        light / medium / heavy found
+  ✅ weight labels        light / heavy found
 ```
 
 ```bash
