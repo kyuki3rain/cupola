@@ -30,7 +30,7 @@
 
 ## ディレクトリ構造
 
-ほぼすべてのファイルは `.cupola/` 配下（またはリポジトリ直下の `.claude/`）に収まる。ログディレクトリのみ `cupola.toml` の `[log].dir` で任意のパスに変更できる。
+すべてのファイルは `.cupola/` 配下（またはリポジトリ直下の `.claude/`）に収まる。
 
 ```
 .cupola/
@@ -42,8 +42,7 @@
   cupola.db          ← ignored
   cupola.pid         ← ignored
   logs/              ← ignored
-  worktrees/         ← ignored
-  inputs/            ← ignored
+  worktrees/         ← ignored（各 worktree 内の .cupola/inputs/ も ignored）
 
 .claude/commands/cupola/   ← committed（init が生成する静的ファイル）
 ```

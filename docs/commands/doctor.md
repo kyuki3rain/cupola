@@ -17,7 +17,7 @@ Cupola を起動・運用する前提条件を診断するコマンド。
 
 | 項目 | 内容 |
 |------|------|
-| `config` | `.cupola/cupola.toml` をロードできるか |
+| `config` | `.cupola/cupola.toml` をロードして `Config::validate()` まで通るか |
 | `git` | `git --version` が成功するか |
 | `github token` | `gh auth token` が成功するか |
 | `claude CLI` | `claude --version` が成功するか |

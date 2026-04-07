@@ -35,7 +35,7 @@ No active issues.
 
 active issue がある場合は、次を表示する。
 
-- `Claude sessions: <alive-process-count>/<max_concurrent_sessions>`（SpawnInit による worktree 作成タスクは含まない）
+- `Claude sessions: <alive-process-count>`（`max_concurrent_sessions` が設定されている場合は `<alive>/<max>` 形式。SpawnInit による worktree 作成タスクは含まない）
 - 続いて Issue ごとの 1 行表示
 
 ## Issue 行の内容
