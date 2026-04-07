@@ -70,7 +70,7 @@ inputs/
 | 種別 | 対象 | `--upgrade` 時の扱い |
 |------|------|---------------------|
 | Cupola 管理 | `.cupola/settings/rules/*`、`.cupola/settings/templates/*`、`.claude/commands/cupola/*`、`.cupola/.gitignore` | 上書き |
-| ユーザー所有 | `cupola.toml`、`.cupola/steering/*`、`.cupola/specs/*` | 常にスキップ |
+| ユーザー所有 | `.cupola/cupola.toml`、`.cupola/steering/*`、`.cupola/specs/*` | 常にスキップ |
 
 `--upgrade` を実行すると、Cupola 管理ファイルがバイナリに同梱された最新版で上書きされる。カスタマイズしている場合は事前にバックアップを取るか、アップグレード後に差分を確認して手動で補正すること。
 

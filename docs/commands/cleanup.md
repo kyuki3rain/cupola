@@ -42,10 +42,10 @@ branch 削除に失敗しても次の Issue の処理は継続する。
 
 ### open PR の close
 
-ProcessRun に記録された `design` / `impl` の `pr_number` を参照し、GitHub 上で open になっている PR を close する。
+ProcessRun に記録された `design` / `impl` の `pr_number` を参照し、GitHub 上で open になっている PR を close する。close の後、`pr_number` を DB からクリアする（後述の DB メタデータ更新）。
 
 - close に失敗しても次の Issue の処理は継続する
-- すでに closed / merged の PR はスキップする
+- すでに closed / merged の PR はスキップする（`pr_number` のクリアは行う）
 
 ## DB メタデータ更新
 
@@ -55,6 +55,10 @@ ProcessRun に記録された `design` / `impl` の `pr_number` を参照し、G
 |-----------|-----------|------|
 | `worktree_path` | worktree 削除が成功または「既に存在しない」と確認できた場合 | worktree が残ったまま参照だけ失うと復旧不能になるため |
 | `ci_fix_count` | 常にリセット（`0`） | 新しい PR 世代として CI 修正予算を初期化するため |
+| `ProcessRun(design).pr_number` | 常にクリア（`None`） | smart routing が merged PR を検出しないようにするため |
+| `ProcessRun(impl).pr_number` | 常にクリア（`None`） | 同上 |
+
+smart routing（Collect フェーズ）は DB の `ProcessRun.pr_number` だけを参照して PR を観測する。GitHub 上にマージ済み PR が残っていても、DB 側の `pr_number` が `None` であれば Collect はその PR を検出できず、ルーティングは DesignRunning 側に倒れる。これにより **cleanup 後に reopen した Issue は必ず InitializeRunning → DesignRunning から再実行される**。
 
 その他のフィールド（`close_finished`・`consecutive_failures_epoch`・`feature_name`）は cleanup では変更しない。これらは `Cancelled → Idle` 遷移時に状態機械が適切にリセットする。
 
@@ -68,5 +72,5 @@ ProcessRun に記録された `design` / `impl` の `pr_number` を参照し、G
 - `Completed` 遷移時に自動で行われる cleanup は polling loop 側の effect であり、このコマンドとは別物
 - このコマンドは「残置された `Cancelled` Issue の後片付け」を手動で行うためのもの
 - `.cupola/specs/{feature_name}/` は削除しない。spec 資産は committed ファイルとして履歴に残す。reopen 後の SpawnInit は `spec.json` と `requirements.md` を上書き再生成する
-- cleanup 後に Issue を reopen すると `Cancelled → Idle` 遷移が発生し、スマートルーティングは open PR を見つけないため必ず InitializeRunning から再実行される
+- cleanup 後に Issue を reopen すると `Cancelled → Idle` 遷移が発生し、`ProcessRun.pr_number` がクリアされているためスマートルーティングは PR を検出できず、必ず InitializeRunning → DesignRunning から再実行される
 - `Cancelled → Idle` 遷移時に `consecutive_failures_epoch` がリセットされるため、retry 枯渇で Cancelled になった Issue でも cleanup なしで reopen すれば再始動できる
