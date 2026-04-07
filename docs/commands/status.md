@@ -1,36 +1,31 @@
 # `cupola status`
 
-Cupola daemon の稼働状況と、active Issue の処理状態を表示するコマンド。
+Cupola プロセスの稼働状況と、active Issue の処理状態を表示するコマンド。
 
 ## 役割
 
-- PID ファイルから daemon 稼働状況を表示する
+- PID ファイルからプロセス稼働状況（foreground / daemon）を表示する
 - DB から active Issue を読み出して一覧表示する
 - 必要なら stale PID ファイルを自動で掃除する
-- 設定が読める場合は `max_concurrent_sessions` を添えて現在の並行実行数を表示する
-
-## オプション
-
-このコマンドには専用オプションがない。
+- `max_concurrent_sessions` を添えて現在の Claude Code セッション数を表示する
 
 ## 参照パス
 
-現行実装では以下を固定パスで参照する。
-
-- DB: `.cupola/cupola.db`
-- config: `.cupola/cupola.toml`
-- PID file: `.cupola/cupola.pid`
-
-`--config` のような切替手段はない。
+| ファイル | パス |
+|---------|------|
+| DB | `.cupola/cupola.db` |
+| 設定ファイル | `.cupola/cupola.toml` |
+| PID ファイル | `.cupola/cupola.pid` |
 
 ## 出力内容
 
-先頭に daemon 状態を表示する。
+先頭にプロセス状態を表示する。PID ファイルの 2 行目（`foreground` / `daemon`）を読んで起動モードを判定する。
 
-- `Daemon: running (pid=...)`
-- `Daemon: not running`
-- `Daemon: not running (stale PID file cleaned)`
-- `Daemon: not running (stale PID file exists, but cleanup failed)`
+- `Process: running (foreground, pid=...)`
+- `Process: running (daemon, pid=...)`
+- `Process: not running`
+- `Process: not running (stale PID file cleaned)`
+- `Process: not running (stale PID file exists, but cleanup failed)`
 
 active issue がなければ次を出す。
 
@@ -40,8 +35,7 @@ No active issues.
 
 active issue がある場合は、次を表示する。
 
-- `Running: <alive-process-count>/<max_concurrent_sessions>`
-- または config が読めない場合 `Running: <alive-process-count>`
+- `Claude sessions: <alive-process-count>/<max_concurrent_sessions>`（SpawnInit による worktree 作成タスクは含まない）
 - 続いて Issue ごとの 1 行表示
 
 ## Issue 行の内容
@@ -59,7 +53,7 @@ active issue がある場合は、次を表示する。
 例:
 
 ```text
-  #42    DesignRunning                  design_pr:#85         retry:1 .cupola/worktrees/42 pid:12345 (alive)
+  #42    DesignRunning                  design_pr:#85         retry:1 .cupola/worktrees/issue-42 pid:12345 (alive)
 ```
 
 ## active Issue の定義

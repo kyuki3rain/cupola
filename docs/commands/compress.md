@@ -1,18 +1,17 @@
 # `cupola compress`
 
-完了済み spec を検出し、Claude Code 側の `/cupola:spec-compress` 実行を促すコマンド。
+完了済み spec を検出し、Claude Code を起動して `/cupola:spec-compress` を実行するコマンド。
 
 ## 役割
 
-このコマンド自身は spec の要約・圧縮を実行しない。実際に行うのは Claude Code の `/cupola:spec-compress` であり、`cupola compress` は対象 spec の有無を確認するだけである。
+1. `.cupola/specs/*/spec.json` を走査して完了済み spec の件数を確認する
+2. 対象があれば Claude Code を起動し、`/cupola:spec-compress` の実行を指示するプロンプトを渡す
 
-## オプション
-
-このコマンドにはオプションがない。
+実際の要約・アーカイブ処理は Claude Code の `/cupola:spec-compress` skill が行う。
 
 ## 参照パス
 
-- specs ルートは固定で `.cupola/specs`
+specs ルートは `.cupola/specs`。
 
 ## 検出条件
 
@@ -23,18 +22,27 @@
 
 `archived` など他の phase は対象外。
 
-## 出力
+## 実行フロー
 
-### スキップ時
+### 対象なし
 
-次のいずれかを出す。
+次のいずれかを出して終了する。
 
 - `specs ディレクトリが存在しません`
 - `完了済みの spec が見つかりません`
 
 ### 対象あり
 
-完了済み spec 件数を表示し、`/cupola:spec-compress` の実行を案内する。
+完了済み spec 件数を表示したうえで、次のコマンドを実行する。
+
+```bash
+claude --dangerously-skip-permissions -p \
+  "Please run the /cupola:spec-compress slash command to summarize and archive the completed specs."
+```
+
+- 成功時は追加メッセージなし
+- `claude` 未導入なら `skipped (claude not installed)` 扱い
+- その他失敗も `skipped (...)` としてレポートし、`compress` 自体は継続する
 
 ## 補足
 

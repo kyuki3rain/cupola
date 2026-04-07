@@ -9,12 +9,6 @@ Cupola を起動・運用する前提条件を診断するコマンド。
 - `Start Readiness`
 - `Operational Readiness`
 
-## オプション
-
-| オプション | 説明 | デフォルト |
-|-----------|------|-----------|
-| `--config <path>` | 読み込む設定ファイルのパス | `.cupola/cupola.toml` |
-
 ## チェック項目
 
 ### Start Readiness
@@ -23,7 +17,7 @@ Cupola を起動・運用する前提条件を診断するコマンド。
 
 | 項目 | 内容 |
 |------|------|
-| `config` | `cupola.toml` をロードできるか |
+| `config` | `.cupola/cupola.toml` をロードできるか |
 | `git` | `git --version` が成功するか |
 | `github token` | `gh auth token` が成功するか |
 | `claude CLI` | `claude --version` が成功するか |
@@ -35,10 +29,22 @@ Cupola を起動・運用する前提条件を診断するコマンド。
 
 | 項目 | 内容 |
 |------|------|
+| `assets version` | バイナリが期待する資産バージョンと `.cupola/settings/.version` が一致するか |
 | `assets` | `.claude/commands/cupola` と `.cupola/settings` が揃っているか |
 | `steering` | `.cupola/steering` に可視ファイルがあるか |
 | `agent:ready label` | GitHub 上に `agent:ready` ラベルがあるか |
 | `weight labels` | `weight:light` / `weight:medium` / `weight:heavy` があるか |
+
+`assets version` が古い場合は次のように表示する。
+
+```
+⚠️ assets version  v1.0.0 → v1.2.0 available
+   fix: cupola init --upgrade
+```
+
+## 既知の制約
+
+`github token` チェックはトークンの存在のみを確認し、スコープは検証しない。Fine-grained PAT で `issues:write` を付与していない場合、doctor は通るが `CloseIssue` が失敗し続けて `Cancelled` 状態が永久停止になる。`gh auth login` の標準 OAuth フローでは通常 `issues:write` が付与されるため、一般的な運用では問題にならない。
 
 ## 表示形式
 
@@ -46,8 +52,3 @@ Cupola を起動・運用する前提条件を診断するコマンド。
 - `Warn`: `⚠️`
 - `Fail`: `❌`
 - remediation がある場合は追加で `fix: ...` を表示する
-
-## 補足
-
-- DB パスや steering パスなど、いくつかのチェック対象は `--config` の親ディレクトリではなく固定の `.cupola/...` を参照する
-- そのためカスタム config パスを使う運用では、現行実装の `doctor` 出力と実際の構成がずれる可能性がある

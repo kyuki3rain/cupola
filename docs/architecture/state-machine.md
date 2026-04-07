@@ -167,11 +167,9 @@ DesignFixing
 
 ### Cancelled からの再起動
 
-CloseIssue が成功して `close_finished = true` になった後、Issue が再オープンされると `Cancelled → Idle` へ遷移する。Idle からは `agent:ready` ラベル付与で InitializeRunning へ。残っている worktree や PR があればスマートルーティングで拾われる。
+CloseIssue が成功して `close_finished = true` になった後、Issue が再オープンされると `Cancelled → Idle` へ遷移する。遷移時に `close_finished = false` と `consecutive_failures_epoch = now()` がセットされ、再起動後の連続失敗カウントは 0 から始まる。Idle からは `agent:ready` ラベル付与で InitializeRunning へ。残っている worktree や PR があればスマートルーティングで拾われる。
 
 **`agent:ready` ラベルの自動削除なし**: cupola は Cancelled・Completed への遷移時に `agent:ready` ラベルを自動削除しない。Cancelled 状態で Issue を再オープンした時点でラベルが残っていた場合、`Cancelled → Idle` 遷移が発生したサイクルの次サイクルで `has_ready_label && ready_label_trusted` が成立し `Idle → InitializeRunning` へ遷移する（ユーザーがラベルを再付与する必要はない）。Decide は1サイクルにつき1回のみ評価されるため、`Cancelled → Idle → InitializeRunning` が同一サイクルで完結することはない。議論目的で再オープンするだけであれば、再オープン前に手動でラベルを外すこと。
-
-**retry 枯渇後の再開に関する既知の制約**: `consecutive_failures >= max_retries` で Cancelled になった場合、Cancelled → Idle 遷移で `close_finished` はリセットされるが `consecutive_failures` は ProcessRun 履歴から動的に計算されるためリセットされない。そのため再起動後に同じ Running/Fixing 状態へ戻った瞬間、Decide が `consecutive_failures >= max_retries` を検出して即座に再 Cancelled になる。これを回避するには underlying の問題を解決し、ProcessRun 履歴が積み直されるまで（succeeded/stale レコードが挿入されるまで）継続的な再試行が必要になる。根本的な解決には consecutive_failures 計算を Cancelled→Idle を境に epoch スコーピングする設計変更が必要。
 
 ### Completed 後の再オープン
 
