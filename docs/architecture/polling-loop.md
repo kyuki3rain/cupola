@@ -2,47 +2,52 @@
 
 ## 概要
 
-ポーリングループは `polling_interval_secs`（デフォルト60秒）ごとに1サイクル実行される。1サイクルは4ステップで構成される。
+ポーリングループは `polling_interval_secs`（デフォルト60秒）ごとに1サイクル実行される。1サイクルは5ステップで構成される。
 
 ```
 ┌─────────────────────────────────────────────┐
 │  Resolve（非同期処理の完了回収・後処理）       │
-│    プロセス終了検知 → 副作用実行              │
-│    → メタデータを DB にコミット               │
+│    プロセス終了検知 → ProcessRun を更新       │
 ├─────────────────────────────────────────────┤
 │  Collect（純粋な観測）                        │
 │    GitHub API・DB から観測                    │
-│    → Issue ごとの全シグナルを生成             │
+│    → Issue ごとの WorldSnapshot を構築        │
 ├─────────────────────────────────────────────┤
-│  Apply（状態遷移）                            │
-│    全シグナルセットを解決                     │
-│    → state・metadata 更新を決定               │
-│    → effect キューを構築                      │
-│    → state・metadata を DB にコミット         │
+│  Decide（純粋関数、DB 書き込みなし）          │
+│    (prev_state, WorldSnapshot)               │
+│    → (next_state, metadata_updates, effects) │
+├─────────────────────────────────────────────┤
+│  Persist（DB コミット）                      │
+│    Decide の決定を DB に書く                 │
 ├─────────────────────────────────────────────┤
 │  Execute（副作用実行）                        │
-│    プロセススポーン                           │
-│    tokio::spawn でバックグラウンド処理        │
+│    effects を順次実行                        │
+│    ProcessRun を INSERT / worktree 操作      │
 └─────────────────────────────────────────────┘
 ```
 
 ## Resolve
 
-非同期処理の完了を回収し、後処理とメタデータ更新を行う。stale guard を通過した結果のみ DB に保存し、シグナル化は Collect フェーズが行う。
+非同期処理の完了を回収し、ProcessRun レコードと Issue メタデータを更新する。
 
 ### Claude Code プロセスの終了処理
 
 SessionManager から終了済みセッションを回収し、状態に応じて後処理を実行する。
 
-| 終了状態 | 後処理 | メタデータ更新 | 生成シグナル |
-|---------|--------|-------------|------------|
-| Running 系 + 成功、後処理も成功 | stdout パース → PR 作成（GitHub API） | `design_pr_number` / `impl_pr_number` セット、`current_pid` クリア、`last_process_exit = Succeeded` | なし |
-| Running 系 + 成功、後処理失敗 | stdout パース → PR 作成失敗 | `retry_count` インクリメント、`error_message` セット、`current_pid` クリア、`last_process_exit = Failed` | なし |
-| Fixing 系 + 成功、後処理も成功 | stdout パース → スレッド返信・resolve（GitHub API） | `current_pid` クリア、`last_process_exit = Succeeded` | なし |
-| Fixing 系 + 成功、後処理失敗 | stdout パース → スレッド返信・resolve 失敗 | `retry_count` インクリメント、`error_message` セット、`current_pid` クリア、`last_process_exit = Failed` | なし |
-| 失敗（非 0 終了） | なし | `retry_count` インクリメント、`error_message` セット、`current_pid` クリア、`last_process_exit = Failed` | なし |
+| 終了状態 | 後処理 | ProcessRun 更新 |
+|---------|--------|----------------|
+| Running 系 + 成功、後処理も成功 | stdout パース → PR 作成（GitHub API） | `state=succeeded`, `pr_number` セット, `pid` クリア, `finished_at` セット |
+| Running 系 + 成功、後処理失敗 | stdout パース → PR 作成失敗 | `state=failed`, `error_message` セット, `pid` クリア, `finished_at` セット |
+
+| Fixing 系 + 成功、後処理も成功 | stdout パース → スレッド返信・resolve（GitHub API） | `state=succeeded`, `pid` クリア, `finished_at` セット |
+| Fixing 系 + 成功、後処理失敗 | スレッド返信・resolve 失敗 | `state=failed`, `error_message` セット, `pid` クリア, `finished_at` セット |
+| 失敗（非 0 終了） | なし | `state=failed`, `error_message` セット, `pid` クリア, `finished_at` セット |
+
+**不変条件（Running 系のみ）**: design/impl の Running 系プロセスで `state=succeeded` の場合、`pr_number` が DB に保存済みであることを保証する。pr_number 書き込み失敗は後処理失敗として `state=failed` に分類される。Fixing 系・Init 系の `state=succeeded` は pr_number を持たない。
 
 PR タイトル・本文は Claude Code の `structured_output` から取得し、パース失敗時はフォールバック文字列を使用する。
+
+**PR 作成の冪等性要件**: GitHub 上に PR が作成された後、DB への `pr_number` 書き込みが失敗すると、次サイクルで PR を観測できず重複作成が走る可能性がある。実装では PR 作成前にブランチに対する **open 状態の** 既存 PR を検索し、存在する場合は作成をスキップして `pr_number` のみ取得すること。closed PR は検索対象に含めない（含めると、PR close → *Running 遷移後に closed PR を再発見して pr_number を取得し、次サイクルで closed PR を観測して再度 *Running に戻る永久ループが発生する）。
 
 ### Init タスクの完了処理
 
@@ -54,100 +59,111 @@ if let Some(handle) = self.init_handles.get(&issue.id) {
         let handle = self.init_handles.remove(&issue.id).unwrap();
         match handle.await {
             Ok(Ok(_)) => {
-                // worktree_path と initialized = true を DB に書く
+                // ProcessRun(type=init).state = succeeded
+                // Issue.worktree_path をセット
             }
             _ => {
-                // retry_count インクリメント、error_message セット
-                // last_process_exit = Failed を DB に書く
+                // ProcessRun(type=init).state = failed
+                // ProcessRun.error_message をセット
             }
         }
     }
 }
 ```
 
+### Stale Guard
+
+プロセス終了検知時、`registered_state != current_state` の場合は後処理（PR 作成・コメント投稿）をスキップし、**ProcessRun.state は `stale` に UPDATE する**。`running` のまま残すと次サイクルの Collect が SpawnProcess を抑止してしまうため終了状態にする必要があるが、`failed` にすると consecutive_failures を汚染するため `stale` で区別する。
+
+**同一状態内での PR 進行**: Stale Guard は `registered_state != current_state` のみを判定するため、Fixing プロセスの完了と PR の merge/close が同一サイクル内で発生した場合（Resolve がプロセス完了を検知し、同サイクルの Collect が PR merge を観測）、Resolve 時点では Persist 前のため `current_state` がまだ Fixing のまま。Stale Guard は発動せず後処理（スレッド返信・resolve）が実行される。次サイクルでは `registered_state（Fixing）≠ current_state（ImplementationRunning 等）` で正しく stale になる。実害なし（merge 済み PR へのコメント・スレッド resolve は API 上許容される）。
+
 ### Stall 検知
 
-`stall_timeout_secs`（デフォルト30分）を超過したプロセスをこのステップで SIGKILL する。kill されたプロセスは同サイクルの Resolve で `ProcessFailed` として回収される。
-
-### 更新メタデータ一覧
-
-| メタデータ | 更新条件 |
-|-----------|---------|
-| `last_process_exit = Succeeded` | Claude Code / Fixing プロセスが成功終了し、Resolve 内後処理も成功 |
-| `last_process_exit = Failed` | 非 0 終了、タイムアウト強制終了、Init タスク失敗、または Resolve 内後処理失敗 |
-| `initialized = true` | Init タスクの JoinHandle が `Ok(Ok(_))` |
+`stall_timeout_secs`（デフォルト30分）を超過したプロセスをこのステップで SIGKILL する。kill されたプロセスは同サイクルの Resolve で失敗として処理される。
 
 ## Collect
 
-副作用なし。GitHub API・DB から観測を行い、観測系シグナルを生成する。
+副作用なし。GitHub API・DB から観測を行い、Issue ごとに WorldSnapshot を構築する。
 
-### 観測とシグナルの対応
+WorldSnapshot の構造と構築ロジックの詳細は [observations.md](./observations.md) を参照。
 
-| 観測元 | 生成されうるシグナル |
-|-------|-------------------|
-| GitHub Issues API | `ReadyIssueObserved`、`UntrustedReadyIssueObserved`、`IssueOpenObserved`、`IssueClosedObserved`、`WeightHeavyObserved`、`WeightLightObserved`、`WeightMediumObserved` |
-| GitHub Pull Requests API | `DesignPrOpen`、`DesignPrMerged`、`ImplPrOpen`、`ImplPrMerged` |
-| GitHub Review Threads API | `DesignReviewCommentFound`、`ImplReviewCommentFound` |
-| GitHub Check Runs API | `DesignCiFailureFound`、`ImplCiFailureFound`、`CiFixExhausted` |
-| GitHub PR `mergeable` | `DesignConflictFound`、`ImplConflictFound` |
+Resolve で ProcessRun の `pr_number` が確定している場合、同サイクル内で `design_pr` / `impl_pr` の観測が可能。
 
-Resolve で `design_pr_number` / `impl_pr_number` が確定している場合、同サイクル内で `DesignPrOpen` / `ImplPrOpen` の観測が可能。
+## Decide
 
-また、Collect は DB の `last_process_exit` と `initialized` を観測し、`ProcessSucceeded` / `ProcessFailed` / `RetryExhausted` / `InitializationSucceeded` を生成する。signal 化後、`last_process_exit` は `None` に戻す。
-
-## Apply
-
-各 Issue のシグナルセット（Resolve 由来の bridge metadata を Collect が signal 化したもの + Collect 観測シグナル）を解決し、workflow state・metadata 更新・effect を決定する。
+各 Issue の `(prev_state, WorldSnapshot)` を受け取り、`(next_state, metadata_updates, effects)` を決定する純粋関数層。DB 書き込みは行わない。
 
 ```
 for each issue:
-  1. シグナルセットと遷移テーブルを照合（優先度順）
-  2. workflow state の遷移有無を決定
-  3. weight / retry_count / ci_fix_count / fixing_causes などの metadata 更新を決定
-  4. 遷移トリガー effect と補助 effect（RejectUntrustedReadyIssue など）をキューへ積む
-  5. state + metadata を DB にコミット
+  1. WorldSnapshot と遷移テーブルを照合（優先度順）
+  2. next_state を決定
+  3. metadata_updates（weight / ci_fix_count / feature_name 等）を決定
+  4. 一回性エフェクト: prev_state → next_state の遷移を検出して発行
+  5. イベント時・持続性エフェクト: next_state と WorldSnapshot を見て毎サイクル発行判断
+     （遷移サイクルでも next_state 基準で評価するため、遷移と同一サイクルで発火しうる。
+      prev_state ではなく next_state を使うことで、遷移によって条件が成立しなくなるケースを正しく除外できる）
+  6. (next_state, metadata_updates, effects) を返す
 ```
 
-Apply は pure decision layer であり、signal から「この cycle でどんな state 更新を行うか」「どんな effect を実行するか」をフラットに決める。GitHub API 呼び出しや process spawn などの副作用実行は全て Execute が担当する。
+### Decide の入出力
 
-メタデータの更新ルールは [metadata.md](./metadata.md) を参照。
+```
+Input:
+  prev_state: { state, ci_fix_count, close_finished, weight, worktree_path, feature_name }
+  snapshot:   WorldSnapshot
 
-Apply は workflow state、補助メタデータ、effect planning を分けずに扱う。特に `Weight*Observed` シグナルは workflow 遷移を伴わなくても毎サイクル評価され、現在値と異なる場合に `weight` を更新する。`UntrustedReadyIssueObserved` のように workflow 遷移を起こさず effect だけを発火するシグナルも、同じ Apply レイヤーで解決する。
+Output:
+  next_state:       State
+  metadata_updates: { weight, ci_fix_count, close_finished, feature_name, ... }
+  effects:          Vec<Effect>
+```
+
+エフェクトの詳細は [effects.md](./effects.md) を参照。メタデータ更新ルールの詳細は [metadata.md](./metadata.md) を参照。
+
+## Persist
+
+Decide の決定（next_state、metadata_updates）を DB にコミットする。副作用（GitHub API・プロセス起動）は行わない。
+
+```
+for each issue:
+  UPDATE issues SET
+    state           = next_state,
+    weight          = metadata_updates.weight,
+    ci_fix_count    = metadata_updates.ci_fix_count,
+    close_finished  = metadata_updates.close_finished,  // Cancelled→Idle 遷移時に false にリセット
+    feature_name    = metadata_updates.feature_name,    // 変更がある場合のみ
+    updated_at      = now()
+```
 
 ## Execute
 
-Apply がキューに積んだ遷移トリガーエフェクトを実行し、加えて状態トリガーエフェクトを毎サイクル判定・実行する。
+Decide が生成した effects リストを Issue ごとに順次実行する。前のエフェクトが失敗した場合、後続のエフェクトはスキップされる（best-effort エフェクトはエラーをログのみ残して継続）。
 
-エフェクトは Issue ごとに順次実行される。前のエフェクトが失敗した場合、後続はスキップされる。
+エフェクトの詳細は [effects.md](./effects.md) を参照。
 
-### 状態トリガーエフェクト（毎サイクル判定）
+### プロセス起動時の ProcessRun 作成
 
-| 条件 | エフェクト |
-|------|-----------|
-| `InitializeRunning` かつ `initialized = false` かつ init handle なし | Initialize（tokio::spawn） |
-| `ImplementationRunning` かつ `current_pid = null` | SwitchToImplBranch → SpawnProcess（順次） |
-| その他プロセス実行中状態 かつ `current_pid = null` かつ `CiFixExhausted` シグナルなし | SpawnProcess |
+SpawnInit / SpawnProcess 実行時、Execute はプロセスをスポーンする直前に ProcessRun レコードを INSERT する。
 
-### 遷移トリガーエフェクト（Apply がキュー積み）
+```rust
+let run = ProcessRun {
+    issue_id:   issue.id,
+    type:       process_type,
+    index:      next_index,   // 同 type の最大 index + 1
+    state:      running,
+    pid:        None,         // スポーン後にセット
+    causes:     fixing_causes, // *_fix の場合のみ
+    ..
+};
+db.insert(run);
+// プロセス起動
+match spawn_process(...) {
+    Ok(pid) => db.update_pid(run.id, pid),
+    Err(e)  => db.update_failed(run.id, e.to_string()),  // state=failed, error_message セット
+}
+```
 
-| エフェクト | 実行方法 |
-|-----------|---------|
-| PostCompletedComment | 同期実行（best-effort） |
-| CleanupWorktree | 同期実行（best-effort） |
-| RejectUntrustedReadyIssue | 同期実行（best-effort） |
-| CancelWithoutCleanup | 同期実行（best-effort） |
-| CancelRetryExhausted | 同期実行（best-effort） |
-| PostCiFixLimitComment | 同期実行（best-effort） |
-
-### Claude Code スポーンの前提
-
-プロセスをスポーンする前に以下のメタデータが必要：
-
-| メタデータ | 用途 |
-|-----------|------|
-| `worktree_path` | 作業ディレクトリの指定 |
-| `weight` | モデル選択 |
-| `fixing_causes` | Fixing 状態時の input files 生成 |
+**起動失敗時の規約**: `spawn_process` が同期的に失敗した場合（CLI 不在・権限不足等）、同一サイクル内で `ProcessRun.state = failed` に UPDATE する。これにより次サイクルの Collect が `state == failed` を観測し、通常のリトライフローに入る。ProcessRun が `state=running` のまま残ると次サイクルで SpawnProcess が発火せず詰まるため、起動失敗は必ず同期的に failed 化すること。
 
 ## プロセス管理
 
@@ -162,11 +178,8 @@ SessionEntry:
   registered_state:  スポーン時の State（stale guard 用）
   stdout/stderr:     スレッドで並行読み取り（バッファ満杯防止）
   log_id:            実行ログ ID
+  process_run_id:    ProcessRun.id
 ```
-
-### Stale Guard
-
-プロセス終了検知時、`registered_state != current_state` の場合はスキップする。状態が既に進んでいるプロセスの終了を誤って拾うことを防ぐ。
 
 ## モデル選択
 
@@ -179,8 +192,8 @@ SessionEntry:
 
 ## 並行セッション制限
 
-`max_concurrent_sessions`（デフォルト3）を超えるプロセスはスポーンしない。次サイクル以降に持ち越される。
+`max_concurrent_sessions`（デフォルト3）を超えるプロセスはスポーンしない。次サイクル以降に持ち越される。上限チェックは SessionManager のエントリ数（実行中プロセス数）を基準とし、ProcessRun.state=running のカウントではない。ProcessRun INSERT は上限チェック通過後・スポーン直前に行われるため、INSERT がセッション数に影響することはない。
 
 ## 起動時リカバリ
 
-起動時に `current_pid` が残っているプロセス（前回クラッシュ時の孤児）を SIGKILL で終了し、`current_pid` を NULL にリセットする。次のサイクルで通常の再試行フローに入る。
+起動時に ProcessRun.state=running のレコードが残っているプロセス（前回クラッシュ時の孤児）を SIGKILL で終了し、ProcessRun.state=failed に更新する。次のサイクルで通常の再試行フローに入る。

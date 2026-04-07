@@ -338,14 +338,13 @@ src/
 
 The architecture document taxonomy is defined in
 [`docs/architecture/README.md`](docs/architecture/README.md).
-The broader system model is documented in
-[`docs/architecture/system-overview.md`](docs/architecture/system-overview.md).
 The workflow core is documented in
-[`docs/architecture/polling.md`](docs/architecture/polling.md),
-[`docs/architecture/signals.md`](docs/architecture/signals.md),
-[`docs/architecture/states.md`](docs/architecture/states.md),
-[`docs/architecture/effects.md`](docs/architecture/effects.md), and
-[`docs/architecture/reduce.md`](docs/architecture/reduce.md).
+[`docs/architecture/polling-loop.md`](docs/architecture/polling-loop.md),
+[`docs/architecture/observations.md`](docs/architecture/observations.md),
+[`docs/architecture/state-machine.md`](docs/architecture/state-machine.md),
+[`docs/architecture/effects.md`](docs/architecture/effects.md),
+[`docs/architecture/data-model.md`](docs/architecture/data-model.md), and
+[`docs/architecture/metadata.md`](docs/architecture/metadata.md).
 
 ## Limitations
 

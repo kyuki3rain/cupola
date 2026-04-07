@@ -289,15 +289,13 @@ src/
 設計ドキュメントの役割分担は
 [`docs/architecture/README.md`](docs/architecture/README.md)
 に定義しています。
-システム全体の設計前提は
-[`docs/architecture/system-overview.md`](docs/architecture/system-overview.md)
-にまとめています。
 ワークフローの中核は
-[`docs/architecture/polling.md`](docs/architecture/polling.md),
-[`docs/architecture/signals.md`](docs/architecture/signals.md),
-[`docs/architecture/states.md`](docs/architecture/states.md),
+[`docs/architecture/polling-loop.md`](docs/architecture/polling-loop.md),
+[`docs/architecture/observations.md`](docs/architecture/observations.md),
+[`docs/architecture/state-machine.md`](docs/architecture/state-machine.md),
 [`docs/architecture/effects.md`](docs/architecture/effects.md),
-[`docs/architecture/reduce.md`](docs/architecture/reduce.md)
+[`docs/architecture/data-model.md`](docs/architecture/data-model.md),
+[`docs/architecture/metadata.md`](docs/architecture/metadata.md)
 に分割して定義しています。
 
 ## 制限事項
