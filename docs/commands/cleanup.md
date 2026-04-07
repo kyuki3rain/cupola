@@ -13,7 +13,7 @@
 
 - DB は `.cupola/cupola.db` を使う
 - DB が存在しない場合は `No database found. Run \`cupola init\` first.` を出して終了する
-- PID ファイルが有効な場合（daemon / foreground プロセスが動作中）は **エラーで終了する**。先に `cupola stop` を実行してから cleanup を実行すること
+- `.cupola/cupola.pid` が有効な場合（daemon / foreground プロセスが動作中）は **エラーで終了する**。先に `cupola stop` を実行してから cleanup を実行すること
 
 ```
 Error: cupola is running (pid=12345). Run `cupola stop` first.
