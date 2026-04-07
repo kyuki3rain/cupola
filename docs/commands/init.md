@@ -55,6 +55,8 @@ worktrees/
 inputs/
 ```
 
+このファイルは worktree にもそのままコピーされるため、`inputs/` のエントリは `{worktree_path}/.cupola/inputs/`（SpawnProcess が Claude Code 起動前に生成する input ファイル群）を無視するためにも機能する。
+
 これにより `.cupola/` 全体をルートの `.gitignore` に追加せずとも、committed 資産（steering / specs / settings / cupola.toml）だけが自動的に追跡される。
 
 ## 生成物の性質

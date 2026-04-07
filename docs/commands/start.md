@@ -118,7 +118,7 @@ PID ファイルは 2 行フォーマット。
 2. DB に idempotent な schema migration を適用する
 3. `gh auth token` ベースで GitHub token を解決する
 4. REST / GraphQL client、Issue repository、Execution log repository を組み立てる
-5. Claude Code runner と Git worktree manager を組み立てる
+5. Claude Code runner と Git worktree manager を組み立てる（`claude` CLI が見つからなければエラー終了）
 6. `PollingUseCase` を起動する
 
 ## ログ
