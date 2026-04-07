@@ -33,7 +33,7 @@ Cupola を起動・運用する前提条件を診断するコマンド。
 | `assets` | `.claude/commands/cupola` と `.cupola/settings` が揃っているか |
 | `steering` | `.cupola/steering` に可視ファイルがあるか |
 | `agent:ready label` | GitHub 上に `agent:ready` ラベルがあるか |
-| `weight labels` | `weight:light` / `weight:medium` / `weight:heavy` があるか |
+| `weight labels` | `weight:light` / `weight:heavy` があるか（`weight:medium` はラベルなしと同義のためオプション） |
 
 `assets version` が古い場合は次のように表示する。
 

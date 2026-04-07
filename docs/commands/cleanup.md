@@ -1,13 +1,16 @@
 # `cupola cleanup`
 
-`Cancelled` 状態の Issue に紐づく worktree / branch / 一部メタデータを整理するコマンド。
+`Cancelled` 状態の Issue に紐づく worktree / branch / PR / メタデータを完全にリセットするコマンド。
 
 ## 役割
+
+cleanup は「再起動したら必ず InitializeRunning から始まる」状態を保証する強制リセット操作である。
 
 - DB から `State::Cancelled` の Issue を取得する
 - 各 Issue ごとに worktree を削除する
 - `cupola/{feature_name}/main` と `cupola/{feature_name}/design` を削除する
-- 安全に削除できた場合だけ DB 上の関連メタデータをクリアする
+- open な design PR / impl PR を GitHub 上で close する
+- 完了した操作に応じて DB 上の関連メタデータをクリアする
 
 ## 実行前提
 
@@ -37,11 +40,19 @@ Error: cupola is running (pid=12345). Run `cupola stop` first.
 
 branch 削除に失敗しても次の Issue の処理は継続する。
 
+### open PR の close
+
+ProcessRun に記録された `design` / `impl` の `pr_number` を参照し、GitHub 上で open になっている PR を close する。
+
+- close に失敗しても次の Issue の処理は継続する
+- すでに closed / merged の PR はスキップする
+
 ## DB メタデータ更新
 
-worktree と branch の削除が完了した Issue について、DB の `worktree_path` を `None` にクリアする。
+各操作の完了状況に応じて次のフィールドをクリアする。
 
-ただし、worktree が残ったまま参照だけ失うと復旧不能になるため、worktree 削除が成功または「既に存在しない」と確認できた場合だけ更新する。
+- `worktree_path`: worktree 削除が成功または「既に存在しない」と確認できた場合
+- worktree が残ったまま参照だけ失うと復旧不能になるため、上記条件を満たさない限り更新しない
 
 ## 出力
 
@@ -52,8 +63,5 @@ worktree と branch の削除が完了した Issue について、DB の `worktr
 
 - `Completed` 遷移時に自動で行われる cleanup は polling loop 側の effect であり、このコマンドとは別物
 - このコマンドは「残置された `Cancelled` Issue の後片付け」を手動で行うためのもの
-
-## 制約
-
-- **open PR が残る場合がある**: Issue close 由来の Cancelled でも retry 枯渇由来でも区別せず削除する。レビュー待ち PR が open のままでも branch は削除される。PR はリモートに残るが base branch が消えるためマージ不能になる。cleanup は意図的な後片付け操作なので、この挙動は許容される
-- **reopen 後の再始動**: `Cancelled → Idle` 遷移時に `consecutive_failures_epoch` がリセットされるため、retry 枯渇で Cancelled になった Issue でも cleanup なしで reopen すれば再始動できる。cleanup した場合は worktree・branch を削除しているため、再始動後はスマートルーティングで拾えるものがなく、InitializeRunning から再実行される
+- cleanup 後に Issue を reopen すると `Cancelled → Idle` 遷移が発生し、スマートルーティングは open PR を見つけないため必ず InitializeRunning から再実行される
+- `Cancelled → Idle` 遷移時に `consecutive_failures_epoch` がリセットされるため、retry 枯渇で Cancelled になった Issue でも cleanup なしで reopen しても再始動できる

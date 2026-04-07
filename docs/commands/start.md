@@ -72,7 +72,8 @@ cupola start --daemon
 内部用モード。通常の利用者は直接呼ばない。
 
 - daemon 本体として polling loop を実行する
-- foreground と同様に PID ファイルと logging を初期化する
+- 親がすでに atomic create 済みの PID ファイルに pid と mode を上書きする（衝突チェックは行わない）
+- logging を初期化する
 
 ## PID ファイル
 

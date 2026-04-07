@@ -176,8 +176,8 @@ stopped cupola (pid=12345)
 $ cupola cleanup
 対象: 2 件の Cancelled Issue
 
-  #38  worktree: removed  branches: removed  metadata: cleared
-  #41  worktree: not found (already deleted)  branches: removed  metadata: cleared
+  #38  worktree: removed  branches: removed  prs: closed  metadata: cleared
+  #41  worktree: not found (already deleted)  branches: removed  prs: none  metadata: cleared
 
 2 件処理しました。
 ```
