@@ -1,11 +1,11 @@
 # `cupola status`
 
-Cupola プロセスの稼働状況と、active Issue の処理状態を表示するコマンド。
+Cupola プロセスの稼働状況と、Issue の処理状態を表示するコマンド。
 
 ## 役割
 
 - PID ファイルからプロセス稼働状況（foreground / daemon）を表示する
-- DB から active Issue を読み出して一覧表示する
+- DB から Issue を読み出して一覧表示する
 - 必要なら stale PID ファイルを自動で掃除する
 - `max_concurrent_sessions` を添えて現在の Claude Code セッション数を表示する
 
@@ -38,6 +38,8 @@ active issue がある場合は、次を表示する。
 - `Claude sessions: <alive-process-count>`（`max_concurrent_sessions` が設定されている場合は `<alive>/<max>` 形式。SpawnInit による worktree 作成タスクは含まない）
 - 続いて Issue ごとの 1 行表示
 
+`--all` を指定すると `Cancelled` も含む全 Issue を表示する。`Cancelled` 行には `close_finished` の値も出す（cleanup 対象の確認や再始動不能 Issue の特定に使う）。
+
 ## Issue 行の内容
 
 1 行には概ね次の情報が出る。
@@ -56,8 +58,14 @@ active issue がある場合は、次を表示する。
   #42    DesignRunning                  design_pr:#85         retry:1 .cupola/worktrees/issue-42 pid:12345 (alive)
 ```
 
+## オプション
+
+| オプション | 説明 | デフォルト |
+|-----------|------|-----------|
+| `--all` | `Cancelled` を含む全 Issue を表示する | `false` |
+
 ## active Issue の定義
 
-`status` が表示対象にするのは repository 実装の `find_active()` が返す Issue で、終端状態である `Completed` / `Cancelled` は基本的に含まれない。
+デフォルトでは repository 実装の `find_active()` が返す Issue のみ表示し、終端状態である `Completed` / `Cancelled` は含まれない。`--all` 指定時は全 Issue を対象にする。
 
 状態そのものの意味は [../architecture/state-machine.md](../architecture/state-machine.md) を参照。

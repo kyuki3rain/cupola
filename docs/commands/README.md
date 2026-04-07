@@ -181,7 +181,7 @@ $ cupola cleanup
 2 件処理しました。
 ```
 
-`Cancelled` になった原因（CI 環境の問題、認証切れ等）を修正してから再び Issue を reopen すれば、Cupola が次サイクルで再始動する。retry 枯渇で Cancelled になった場合も、`Cancelled → Idle` 遷移時に失敗カウントがリセットされるため同様に再始動できる。cleanup した場合は worktree・branch の削除と open PR の close が行われるため、再始動後は必ず InitializeRunning から再実行される。
+`Cancelled` になった原因（CI 環境の問題、認証切れ等）を修正してから再び Issue を reopen すれば、Cupola が次サイクルで再始動する。retry 枯渇で Cancelled になった場合も、`Cancelled → Idle` 遷移時に失敗カウントがリセットされるため同様に再始動できる。cleanup した場合は worktree・branch の削除と open PR の close が行われるため、再始動後は必ず InitializeRunning から再実行される。ただし GitHub API 権限不備等で `close_finished = false` のまま Cancelled になった Issue は、cleanup 後も `Cancelled → Idle` 遷移が成立しないため再始動できない（`cupola status --all` で close_finished を確認し、`docs/architecture/metadata.md` の回復手順を参照）。
 
 ---
 

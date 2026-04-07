@@ -33,12 +33,14 @@ specs ルートは `.cupola/specs`。
 
 ### 対象あり
 
-完了済み spec 件数を表示したうえで、次のコマンドを実行する。
+完了済み spec の件数と名前一覧を表示したうえで、対象 spec 名リストをプロンプトに含めて次のコマンドを実行する。
 
 ```bash
 claude --dangerously-skip-permissions -p \
-  "Please run the /cupola:spec-compress slash command to summarize and archive the completed specs."
+  "Please run the /cupola:spec-compress slash command to summarize and archive the following completed specs: {spec_names}."
 ```
+
+対象 spec 名は検出時点で固定される。Claude Code の実行中に `.cupola/specs/` が変化しても、圧縮対象は変わらない。
 
 - 成功時は追加メッセージなし
 - `claude` 未導入なら `skipped (claude not installed)` 扱い
