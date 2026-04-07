@@ -131,6 +131,7 @@ PID ファイルは 2 行フォーマット。
 
 - 設定ファイルの読込・検証失敗で即終了する
 - PID ファイルが有効なら `cupola is already running` 系のエラーになる
+- `claude` CLI が見つからなければ初期化時にエラー終了する
 - polling loop 内部で終了しても、外側で PID ファイル削除を best-effort 実行する
 
 ## Claude Code へのプロンプト
