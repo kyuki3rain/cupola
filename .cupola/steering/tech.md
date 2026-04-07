@@ -27,6 +27,7 @@ Clean Architecture (4 layers). Dependencies point inward only.
 | Logging | tracing + tracing-appender | Structured logging, date-based file output |
 | Error | thiserror (domain/app) + anyhow (adapter/bootstrap) | Layer-specific usage |
 | i18n | rust-i18n | GitHub comments and prompt localization |
+| Signal | nix | POSIX signal sending (SIGTERM/SIGKILL) via `NixSignalSender` implementing `SignalPort` |
 
 ## Development Standards
 
@@ -52,19 +53,26 @@ Clean Architecture (4 layers). Dependencies point inward only.
 - devbox (Nix-based development environment management)
 
 ### Common Commands
+
+All commands use `devbox run` — cargo is managed by devbox and may not be in PATH outside of `devbox shell`.
+
 ```bash
-cargo build          # Build
-cargo test           # Run all tests
-cargo clippy         # Static analysis
-cargo fmt --check    # Format check
-cargo run -- start        # Start polling loop (foreground)
-cargo run -- start -d     # Start as daemon (background)
-cargo run -- stop         # Stop daemon (SIGTERM → SIGKILL)
-cargo run -- init         # Initialize SQLite schema + steering files
-cargo run -- status       # List Issue states
-cargo run -- doctor       # Validate config, GitHub, git
-cargo run -- cleanup      # Remove worktrees for Cancelled issues
-cargo run -- logs         # View log files
+devbox run build        # Build
+devbox run test         # Run all tests
+devbox run check        # Type check (no codegen)
+devbox run clippy       # Static analysis
+devbox run fmt          # Format code
+devbox run fmt-check    # Format check (CI)
+
+# CLI subcommands — devbox run cupola <subcommand>
+devbox run cupola start        # Start polling loop (foreground)
+devbox run cupola start -d     # Start as daemon (background)
+devbox run cupola stop         # Stop daemon (SIGTERM → SIGKILL)
+devbox run cupola init         # Initialize SQLite schema + steering files
+devbox run cupola status       # List Issue states
+devbox run cupola doctor       # Validate config, GitHub, git
+devbox run cupola cleanup      # Remove worktrees for Cancelled issues
+devbox run cupola logs         # View log files
 ```
 
 ## Key Technical Decisions
@@ -74,3 +82,5 @@ cargo run -- logs         # View log files
 - **Event batch application**: Collects all events within a polling cycle and applies them in batch, prioritizing IssueClosed
 - **Daemon mode**: Re-exec strategy (`--daemon-child`) to avoid fork() inside tokio runtime. PID file based lifecycle management
 - **Session management**: HashMap of issue_id → running process, with concurrent session limiting and stall detection
+- **Doctor sections**: `DoctorUseCase` outputs results split into `StartReadiness` (prerequisites for starting the daemon) and `OperationalReadiness` (runtime health checks), each check carrying an optional `remediation` hint
+- **Association guard**: `check_label_actor` in `application/association_guard.rs` verifies the `agent:ready` label actor's GitHub association against `TrustedAssociations` config. `All` skips the API call; `Specific(...)` fetches Timeline + Permission APIs and removes the label + posts a comment on rejection

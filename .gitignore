@@ -1,5 +1,5 @@
 /target
-/.local/
+.local/
 .env
 
 # Cupola - local runtime files
@@ -9,3 +9,4 @@
 .cupola/cupola.db-shm
 .cupola/logs/
 .cupola/inputs/
+.cupola/cupola.pid

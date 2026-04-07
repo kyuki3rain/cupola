@@ -8,20 +8,20 @@ Layer separation following Clean Architecture. The `src/` directory is divided i
 
 ### Domain Layer (`src/domain/`)
 **Purpose**: Pure business logic. No framework dependencies
-**Contains**: State enum, Event enum, StateMachine (pure functions), Issue entity, Config value object, Phase enum, TaskWeight enum, ModelConfig, FixingProblemKind, ExecutionLog
+**Contains**: State enum, Event enum, StateMachine (pure functions), Issue entity, Config value object, Phase enum, TaskWeight enum, ModelConfig, FixingProblemKind, ExecutionLog, AuthorAssociation / TrustedAssociations (security value objects for label actor trust)
 **Rule**: No I/O. Only derive macros (serde, thiserror) are permitted
 
 ### Application Layer (`src/application/`)
 **Purpose**: Use cases and port (trait) definitions
-**Contains**: PollingUseCase, TransitionUseCase, SessionManager, RetryPolicy, StopUseCase, InitUseCase, DoctorUseCase, CleanupUseCase, prompt/io helpers
-**Subdir**: `port/` — trait definitions for external dependencies (GitHubClient, IssueRepository, ClaudeCodeRunner, ExecutionLogRepository, GitWorktree, PidFilePort, CommandRunner, ConfigLoader)
+**Contains**: PollingUseCase, TransitionUseCase, SessionManager, RetryPolicy, StopUseCase, InitUseCase, DoctorUseCase, CleanupUseCase, CompressUseCase, AssociationGuard (label actor trust check), InitAgent (enum for init target), prompt/io helpers
+**Subdir**: `port/` — trait definitions for external dependencies (GitHubClient, IssueRepository, ClaudeCodeRunner, ExecutionLogRepository, GitWorktree, PidFilePort, CommandRunner, ConfigLoader, DbInitializer, SignalPort)
 **Rule**: Depends on domain. Must not import concrete types from adapter
 
 ### Adapter Layer (`src/adapter/`)
 **Purpose**: External connection implementations
 **Subdirs**:
 - `inbound/` — CLI (clap)
-- `outbound/` — GitHub REST/GraphQL, SQLite (Issue + ExecutionLog), Claude Code, Git worktree, PID file manager, init file generator, process command runner
+- `outbound/` — GitHub REST/GraphQL, SQLite (Issue + ExecutionLog, plus `SqliteConnection` wrapper), Claude Code (`ClaudeCodeProcess`), Git worktree, PID file manager, init file generator, process command runner, `NixSignalSender` (SIGTERM/SIGKILL via `nix` crate)
 
 **Rule**: Implements traits from application. May also depend on domain
 
