@@ -20,7 +20,7 @@ impl SqliteExecutionLogRepository {
 impl ExecutionLogRepository for SqliteExecutionLogRepository {
     async fn record_start(&self, issue_id: i64, state: State) -> Result<i64> {
         let db = self.db.clone();
-        let state_str = state_to_str(&state);
+        let state_str = state.to_string();
         tokio::task::spawn_blocking(move || {
             let conn = db
                 .conn()
@@ -107,21 +107,6 @@ impl ExecutionLogRepository for SqliteExecutionLogRepository {
     }
 }
 
-fn state_to_str(state: &State) -> &'static str {
-    match state {
-        State::Idle => "idle",
-        State::Initialized => "initialized",
-        State::DesignRunning => "design_running",
-        State::DesignReviewWaiting => "design_review_waiting",
-        State::DesignFixing => "design_fixing",
-        State::ImplementationRunning => "implementation_running",
-        State::ImplementationReviewWaiting => "implementation_review_waiting",
-        State::ImplementationFixing => "implementation_fixing",
-        State::Completed => "completed",
-        State::Cancelled => "cancelled",
-    }
-}
-
 fn parse_sqlite_datetime(
     col_idx: usize,
     s: &str,
@@ -155,15 +140,11 @@ mod tests {
             id: 0,
             github_issue_number: n,
             state: State::Idle,
-            design_pr_number: None,
-            impl_pr_number: None,
             worktree_path: None,
-            retry_count: 0,
             ci_fix_count: 0,
-            current_pid: None,
-            error_message: None,
+            close_finished: false,
+            consecutive_failures_epoch: None,
             feature_name: format!("issue-{n}"),
-            fixing_causes: vec![],
             weight: crate::domain::task_weight::TaskWeight::Medium,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),

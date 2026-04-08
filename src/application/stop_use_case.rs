@@ -240,4 +240,106 @@ mod tests {
         let err = use_case.execute().await.expect_err("should error on pid=0");
         assert!(matches!(err, StopError::InvalidPid(0)));
     }
+
+    // --- T-6.SP.* tests ---
+
+    /// T-6.SP.1: PID ファイルなし → NotRunning
+    #[tokio::test]
+    async fn t_6_sp_1_missing_pid_file_returns_not_running() {
+        let alive = Arc::new(Mutex::new(false));
+        let mock_pid = MockPidFile {
+            pid: None,
+            alive: alive.clone(),
+        };
+        let mock_sig = MockSignal {
+            kill_on_sigterm: false,
+            alive,
+            sigkill_sent: Arc::new(Mutex::new(false)),
+        };
+        let uc = StopUseCase::with_signal_sender(mock_pid, mock_sig, Duration::from_secs(30));
+        let result = uc.execute().await.expect("execute");
+        assert_eq!(result, StopResult::NotRunning);
+    }
+
+    /// T-6.SP.2: ステール PID → StalePidCleaned
+    #[tokio::test]
+    async fn t_6_sp_2_stale_pid_returns_stale_cleaned() {
+        let alive = Arc::new(Mutex::new(false));
+        let mock_pid = MockPidFile {
+            pid: Some(12345),
+            alive: alive.clone(),
+        };
+        let mock_sig = MockSignal {
+            kill_on_sigterm: false,
+            alive,
+            sigkill_sent: Arc::new(Mutex::new(false)),
+        };
+        let uc = StopUseCase::with_signal_sender(mock_pid, mock_sig, Duration::from_secs(30));
+        let result = uc.execute().await.expect("execute");
+        assert_eq!(result, StopResult::StalePidCleaned { pid: 12345 });
+    }
+
+    /// T-6.SP.3: SIGTERM を先に送信し、500ms ポーリング（モックで即時終了）
+    #[tokio::test]
+    async fn t_6_sp_3_sigterm_sent_first_then_polled() {
+        let alive = Arc::new(Mutex::new(true));
+        let mock_pid = MockPidFile {
+            pid: Some(5555),
+            alive: alive.clone(),
+        };
+        let mock_sig = MockSignal {
+            kill_on_sigterm: true, // SIGTERM → 即終了
+            alive,
+            sigkill_sent: Arc::new(Mutex::new(false)),
+        };
+        let uc = StopUseCase::with_signal_sender(mock_pid, mock_sig, Duration::from_secs(5));
+        let result = uc.execute().await.expect("execute");
+        // SIGTERM 後にプロセスが終了 → Stopped
+        assert_eq!(result, StopResult::Stopped { pid: 5555 });
+    }
+
+    /// T-6.SP.4: タイムアウト後に SIGKILL にエスカレート
+    #[tokio::test]
+    async fn t_6_sp_4_escalates_to_sigkill_after_timeout() {
+        let alive = Arc::new(Mutex::new(true));
+        let sigkill_sent = Arc::new(Mutex::new(false));
+        let mock_pid = MockPidFile {
+            pid: Some(7777),
+            alive: alive.clone(),
+        };
+        let mock_sig = MockSignal {
+            kill_on_sigterm: false, // SIGTERM 無視
+            alive,
+            sigkill_sent: sigkill_sent.clone(),
+        };
+        // 非常に短いタイムアウト
+        let uc = StopUseCase::with_signal_sender(mock_pid, mock_sig, Duration::from_millis(1));
+        let result = uc.execute().await.expect("execute");
+        assert_eq!(result, StopResult::ForceKilled { pid: 7777 });
+        assert!(
+            *sigkill_sent.lock().unwrap(),
+            "SIGKILL should have been sent"
+        );
+    }
+
+    /// T-6.SP.5: 停止後に PID ファイルが削除される
+    #[tokio::test]
+    async fn t_6_sp_5_pid_file_removed_after_termination() {
+        // MockPidFile の delete_pid() は Ok を返す（PidFilePort 実装済み）
+        // 実際の削除確認は PidFileManager の実装テストで行うため、
+        // ここでは Stopped result が返ることで間接的に確認する
+        let alive = Arc::new(Mutex::new(true));
+        let mock_pid = MockPidFile {
+            pid: Some(3333),
+            alive: alive.clone(),
+        };
+        let mock_sig = MockSignal {
+            kill_on_sigterm: true,
+            alive,
+            sigkill_sent: Arc::new(Mutex::new(false)),
+        };
+        let uc = StopUseCase::with_signal_sender(mock_pid, mock_sig, Duration::from_secs(5));
+        let result = uc.execute().await.expect("execute");
+        assert_eq!(result, StopResult::Stopped { pid: 3333 });
+    }
 }

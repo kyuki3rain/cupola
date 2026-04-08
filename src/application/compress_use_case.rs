@@ -139,4 +139,68 @@ mod tests {
         let report = uc.find_completed_specs().expect("find");
         assert_eq!(report.completed_count, 0);
     }
+
+    // --- T-6.CO.* tests ---
+
+    /// T-6.CO.1: specs ディレクトリが存在しない場合は skipped_reason が Some
+    #[test]
+    fn t_6_co_1_no_specs_dir_returns_skipped_reason() {
+        let tmp = TempDir::new().expect("temp dir");
+        let uc = CompressUseCase::new(tmp.path().join("nonexistent"));
+        let report = uc.find_completed_specs().expect("find");
+        assert_eq!(report.completed_count, 0);
+        let reason = report.skipped_reason.expect("should have reason");
+        assert!(
+            reason.contains("specs") || reason.contains("存在しません"),
+            "reason should mention specs dir: {reason}"
+        );
+    }
+
+    /// T-6.CO.2: 完了 spec なし → skipped_reason が Some
+    #[test]
+    fn t_6_co_2_no_completed_specs_returns_skipped_reason() {
+        let tmp = TempDir::new().expect("temp dir");
+        let spec_dir = tmp.path().join("specs");
+        fs::create_dir_all(&spec_dir).expect("create dir");
+
+        let uc = CompressUseCase::new(spec_dir);
+        let report = uc.find_completed_specs().expect("find");
+        assert_eq!(report.completed_count, 0);
+        assert!(
+            report.skipped_reason.is_some(),
+            "should have skipped reason when no completed specs"
+        );
+    }
+
+    /// T-6.CO.3: phase ∈ {implementation-complete, completed} のみカウント、他は無視
+    #[test]
+    fn t_6_co_3_detects_only_completed_phases() {
+        let tmp = TempDir::new().expect("temp dir");
+        let spec_dir = tmp.path().join("specs");
+        fs::create_dir_all(spec_dir.join("issue-a")).expect("create");
+        fs::write(
+            spec_dir.join("issue-a").join("spec.json"),
+            r#"{"phase":"implementation-complete"}"#,
+        )
+        .expect("write");
+        fs::create_dir_all(spec_dir.join("issue-b")).expect("create");
+        fs::write(
+            spec_dir.join("issue-b").join("spec.json"),
+            r#"{"phase":"completed"}"#,
+        )
+        .expect("write");
+        fs::create_dir_all(spec_dir.join("issue-c")).expect("create");
+        fs::write(
+            spec_dir.join("issue-c").join("spec.json"),
+            r#"{"phase":"tasks-generated"}"#,
+        )
+        .expect("write");
+
+        let uc = CompressUseCase::new(spec_dir);
+        let report = uc.find_completed_specs().expect("find");
+        assert_eq!(
+            report.completed_count, 2,
+            "only implementation-complete and completed should count"
+        );
+    }
 }

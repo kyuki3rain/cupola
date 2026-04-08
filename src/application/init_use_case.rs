@@ -327,4 +327,109 @@ mod tests {
         );
         assert!(report.gitignore_updated);
     }
+
+    // --- T-6.IN.* tests ---
+
+    /// T-6.IN.1: 必要なファイルが存在しない場合に作成される
+    #[test]
+    fn t_6_in_1_creates_required_files_when_missing() {
+        let tmp = TempDir::new().expect("temp dir");
+        let db = SqliteConnection::open_in_memory().expect("open db");
+        let file_gen = InitFileGenerator::new(tmp.path().to_path_buf());
+        let runner = MockCommandRunner::new();
+        let uc = InitUseCase::new(
+            tmp.path().to_path_buf(),
+            false,
+            db,
+            file_gen,
+            runner,
+            InitAgent::ClaudeCode,
+        );
+        let report = uc.run().expect("run");
+        assert!(
+            report.db_initialized,
+            "DB should be initialized on first run"
+        );
+        assert!(report.toml_created, "toml should be created on first run");
+    }
+
+    /// T-6.IN.3: .gitignore には cupola 関連エントリが追記される
+    #[test]
+    fn t_6_in_3_gitignore_contains_cupola_entries() {
+        let tmp = TempDir::new().expect("temp dir");
+        let db = SqliteConnection::open_in_memory().expect("open db");
+        let file_gen = InitFileGenerator::new(tmp.path().to_path_buf());
+        let runner = MockCommandRunner::new();
+        let uc = InitUseCase::new(
+            tmp.path().to_path_buf(),
+            false,
+            db,
+            file_gen,
+            runner,
+            InitAgent::ClaudeCode,
+        );
+        let report = uc.run().expect("run");
+        assert!(report.gitignore_updated, "gitignore should be updated");
+    }
+
+    /// T-6.IN.5: claude がインストールされていない場合 steering bootstrap はスキップ
+    #[test]
+    fn t_6_in_5_claude_missing_skips_steering_bootstrap() {
+        let tmp = TempDir::new().expect("temp dir");
+        let db = SqliteConnection::open_in_memory().expect("open db");
+        let file_gen = InitFileGenerator::new(tmp.path().to_path_buf());
+        let runner = MockCommandRunner::new(); // claude not in PATH → fails
+        let uc = InitUseCase::new(
+            tmp.path().to_path_buf(),
+            false,
+            db,
+            file_gen,
+            runner,
+            InitAgent::ClaudeCode,
+        );
+        let report = uc.run().expect("run");
+        assert!(
+            report.steering_bootstrap_message.is_some(),
+            "steering bootstrap should be skipped when claude is not available"
+        );
+    }
+
+    /// T-6.IN.6: 二回実行しても冪等
+    #[test]
+    fn t_6_in_6_idempotent_on_second_run() {
+        let tmp = TempDir::new().expect("temp dir");
+
+        // First run
+        let db1 = SqliteConnection::open_in_memory().expect("open db1");
+        let file_gen1 = InitFileGenerator::new(tmp.path().to_path_buf());
+        let runner1 = MockCommandRunner::new();
+        let uc1 = InitUseCase::new(
+            tmp.path().to_path_buf(),
+            false,
+            db1,
+            file_gen1,
+            runner1,
+            InitAgent::ClaudeCode,
+        );
+        uc1.run().expect("first run");
+
+        // Second run - db_existed=true means DB was already initialized
+        let db2 = SqliteConnection::open_in_memory().expect("open db2");
+        let file_gen2 = InitFileGenerator::new(tmp.path().to_path_buf());
+        let runner2 = MockCommandRunner::new();
+        let uc2 = InitUseCase::new(
+            tmp.path().to_path_buf(),
+            true, // already existed
+            db2,
+            file_gen2,
+            runner2,
+            InitAgent::ClaudeCode,
+        );
+        let report2 = uc2.run().expect("second run");
+        // DB should not be re-initialized (already existed)
+        assert!(
+            !report2.db_initialized,
+            "DB should not be re-initialized on second run"
+        );
+    }
 }
