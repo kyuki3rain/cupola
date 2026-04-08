@@ -12,8 +12,11 @@ use crate::application::port::process_run_repository::ProcessRunRepository;
 use crate::application::session_manager::{ExitedSession, SessionManager};
 use crate::domain::config::Config;
 use crate::domain::metadata_update::MetadataUpdates;
-use crate::domain::process_run::ProcessRunState;
 use crate::domain::state::State;
+
+/// Max characters of stderr included in `error_message` for a failed process.
+/// Longer stderr payloads are truncated; the full output remains in the log file.
+const STDERR_SNIPPET_MAX: usize = 512;
 
 /// Process all exited sessions and update ProcessRun + Issue metadata.
 pub async fn resolve_exited_sessions<G, I, P>(
@@ -78,9 +81,9 @@ where
             "stale guard: registered state differs from current, marking run as stale"
         );
         if run_id > 0 {
-            process_repo
-                .update_state(run_id, ProcessRunState::Stale)
-                .await?;
+            // mark_stale sets state=stale, pid=NULL, finished_at=now() so the row
+            // is properly terminated and stops counting toward consecutive_failures.
+            process_repo.mark_stale(run_id).await?;
         }
         return Ok(());
     }
@@ -95,10 +98,25 @@ where
     );
 
     if !session.exit_status.success() {
-        // Process failed
+        // Process failed: capture exit code + stderr snippet for diagnostics.
+        let exit_repr = match session.exit_status.code() {
+            Some(code) => format!("exit code {code}"),
+            None => "terminated by signal".to_string(),
+        };
+        let stderr_trimmed = session.stderr.trim();
+        let stderr_snippet = if stderr_trimmed.is_empty() {
+            String::new()
+        } else if stderr_trimmed.len() <= STDERR_SNIPPET_MAX {
+            format!(": {stderr_trimmed}")
+        } else {
+            let head: String = stderr_trimmed.chars().take(STDERR_SNIPPET_MAX).collect();
+            format!(": {head}… (truncated)")
+        };
+        let error_message = format!("{exit_repr}{stderr_snippet}");
+
         if run_id > 0 {
             process_repo
-                .mark_failed(run_id, Some("non-zero exit code".to_string()))
+                .mark_failed(run_id, Some(error_message))
                 .await?;
         }
         return Ok(());

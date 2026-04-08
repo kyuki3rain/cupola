@@ -5,6 +5,7 @@ use anyhow::{Context, Result, anyhow};
 
 use crate::application::port::git_worktree::{GitWorktree, MergeConflictError};
 
+#[derive(Clone)]
 pub struct GitWorktreeManager {
     repo_root: std::path::PathBuf,
 }

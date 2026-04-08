@@ -27,6 +27,11 @@ pub trait ProcessRunRepository: Send + Sync {
         error_message: Option<String>,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 
+    /// Transition a single run to Stale: sets `state=stale`, `pid=NULL`,
+    /// `finished_at=now()`. Used by Resolve's Stale Guard when a finished session
+    /// targeted a state that no longer matches the current Issue state.
+    fn mark_stale(&self, run_id: i64) -> impl std::future::Future<Output = Result<()>> + Send;
+
     /// Mark all Running records for an issue as Stale (used on startup recovery).
     fn mark_stale_for_issue(
         &self,

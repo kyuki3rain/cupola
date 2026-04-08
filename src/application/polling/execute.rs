@@ -23,6 +23,12 @@ use crate::domain::issue::Issue;
 use crate::domain::metadata_update::MetadataUpdates;
 use crate::domain::process_run::{ProcessRun, ProcessRunType};
 
+/// Bound used anywhere SpawnInit needs to hand the worktree to a `tokio::spawn`
+/// task. `GitWorktreeManager` is a trivial wrapper around a `PathBuf` so `Clone`
+/// is cheap; `'static` is required to move the clone across the task boundary.
+pub trait SpawnableGitWorktree: GitWorktree + Clone + 'static {}
+impl<T: GitWorktree + Clone + 'static> SpawnableGitWorktree for T {}
+
 /// Execute all effects for one issue.
 ///
 /// Effects are processed in priority order (already sorted by `Decision::new`).
@@ -45,7 +51,7 @@ where
     I: IssueRepository,
     P: ProcessRunRepository,
     C: ClaudeCodeRunner,
-    W: GitWorktree,
+    W: SpawnableGitWorktree,
 {
     for effect in effects {
         let best_effort = effect.is_best_effort();
@@ -106,7 +112,7 @@ where
     I: IssueRepository,
     P: ProcessRunRepository,
     C: ClaudeCodeRunner,
-    W: GitWorktree,
+    W: SpawnableGitWorktree,
 {
     let n = issue.github_issue_number;
     let lang = &config.language;
@@ -241,7 +247,7 @@ where
 
 async fn spawn_init_task<G, I, P, W>(
     github: &G,
-    issue_repo: &I,
+    _issue_repo: &I,
     process_repo: &P,
     worktree: &W,
     init_mgr: &mut InitTaskManager,
@@ -252,7 +258,7 @@ where
     G: GitHubClient,
     I: IssueRepository,
     P: ProcessRunRepository,
-    W: GitWorktree,
+    W: SpawnableGitWorktree,
 {
     if init_mgr.is_active(issue.id) {
         tracing::debug!(issue_id = issue.id, "init task already active, skipping");
@@ -265,11 +271,12 @@ where
         .await?;
     let index = latest.map(|r| r.index + 1).unwrap_or(0);
 
-    // Insert ProcessRun
+    // Insert ProcessRun(init, state=running). Resolve will transition it to
+    // succeeded/failed when the JoinHandle completes.
     let run = ProcessRun::new_running(issue.id, ProcessRunType::Init, index, vec![]);
-    let run_id = process_repo.save(&run).await?;
+    process_repo.save(&run).await?;
 
-    // Fetch issue detail for spec generation
+    // Fetch issue detail so a Resolve/Collect failure here surfaces eagerly.
     let _detail = github.get_issue(issue.github_issue_number).await?;
 
     let feature_name = issue.feature_name.clone();
@@ -280,41 +287,27 @@ where
         .join("worktrees");
     let wt_path = worktree_base.join(&feature_name);
     let default_branch = config.default_branch.clone();
+    let worktree_clone = worktree.clone();
 
-    // We can't move the worktree trait into the async task (it may not be Send + 'static).
-    // Instead, capture the paths and use std::process/std::fs directly in the task.
-    // For now, we do the init synchronously and wrap it as a completed task.
-    // TODO(phase 4): Make GitWorktree Send + 'static for true async init.
-    let wt_path_clone = wt_path.clone();
+    // tokio::spawn an async task that performs the git work on a blocking thread.
+    // Resolve picks up the JoinHandle next cycle and updates the DB — per
+    // docs/architecture/effects.md SpawnInit ("実行方法: tokio::spawn").
+    let handle = tokio::spawn(async move {
+        let wt_path_for_task = wt_path.clone();
+        tokio::task::spawn_blocking(move || {
+            perform_init_sync(
+                &worktree_clone,
+                &wt_path_for_task,
+                &feature_name,
+                &default_branch,
+            )?;
+            Ok::<String, anyhow::Error>(wt_path_for_task.to_string_lossy().into_owned())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("init blocking task panicked: {e}"))?
+    });
 
-    // Perform init synchronously (blocking the polling loop briefly)
-    // This will be moved to a real async task in Phase 4.
-    let result = perform_init_sync(worktree, &wt_path, &feature_name, &default_branch);
-
-    match result {
-        Ok(()) => {
-            process_repo.mark_succeeded(run_id, None).await?;
-            let worktree_path_str = wt_path_clone.to_string_lossy().to_string();
-            let updates = MetadataUpdates {
-                worktree_path: Some(Some(worktree_path_str)),
-                ..Default::default()
-            };
-            issue_repo
-                .update_state_and_metadata(issue.id, &updates)
-                .await?;
-
-            // Register a trivially-completed task to satisfy init_mgr tracking
-            let handle =
-                tokio::spawn(async move { Ok(wt_path_clone.to_string_lossy().to_string()) });
-            init_mgr.register(issue.id, handle);
-        }
-        Err(e) => {
-            process_repo
-                .mark_failed(run_id, Some(e.to_string()))
-                .await?;
-        }
-    }
-
+    init_mgr.register(issue.id, handle);
     Ok(())
 }
 
@@ -354,7 +347,7 @@ where
     I: IssueRepository,
     P: ProcessRunRepository,
     C: ClaudeCodeRunner,
-    W: GitWorktree,
+    W: SpawnableGitWorktree,
 {
     // Check session limit
     if let Some(max) = config.max_concurrent_sessions
@@ -431,11 +424,18 @@ where
     // Spawn the process
     match claude_runner.spawn(&session_config.prompt, wt_path, schema, model) {
         Ok(child) => {
+            // Persist the OS pid before moving child into SessionManager, so
+            // process_runs.pid is populated for status / stall / recovery tooling
+            // (per docs/architecture/metadata.md ProcessRun.pid rules).
+            let pid = child.id();
+            process_repo.update_pid(run_id, pid).await?;
+
             session_mgr.register(issue.id, issue.state, child);
             session_mgr.update_run_id(issue.id, run_id);
             tracing::info!(
                 issue_number = issue.github_issue_number,
                 run_id,
+                pid,
                 type_ = ?type_,
                 "spawned process"
             );
@@ -532,7 +532,7 @@ mod tests {
             },
         ];
         effects.sort_by_key(|e| e.priority());
-        assert_eq!(effects[0], Effect::PostCompletedComment); // priority 2 (transition)
+        assert_eq!(effects[0], Effect::PostCompletedComment); // priority 1 (transition)
         assert!(matches!(effects[1], Effect::SpawnProcess { .. })); // priority 5
         assert_eq!(effects[2], Effect::CloseIssue); // priority 7
     }

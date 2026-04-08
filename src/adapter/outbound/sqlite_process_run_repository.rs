@@ -163,6 +163,26 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
         .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
     }
 
+    async fn mark_stale(&self, run_id: i64) -> Result<()> {
+        let db = self.db.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = db
+                .conn()
+                .lock()
+                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            conn.execute(
+                "UPDATE process_runs
+                 SET state = 'stale', pid = NULL, finished_at = datetime('now')
+                 WHERE id = ?1",
+                rusqlite::params![run_id],
+            )
+            .context("mark_stale failed")?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+    }
+
     async fn mark_stale_for_issue(&self, issue_id: i64) -> Result<()> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
@@ -171,7 +191,9 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
                 .lock()
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             conn.execute(
-                "UPDATE process_runs SET state = 'stale' WHERE issue_id = ?1 AND state = 'running'",
+                "UPDATE process_runs
+                 SET state = 'stale', pid = NULL, finished_at = datetime('now')
+                 WHERE issue_id = ?1 AND state = 'running'",
                 rusqlite::params![issue_id],
             )
             .context("mark_stale_for_issue failed")?;

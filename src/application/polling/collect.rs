@@ -22,9 +22,13 @@ pub struct IssueObservation {
     pub snapshot: WorldSnapshot,
 }
 
-/// Collect observations for all active issues.
+/// Collect observations for every issue tracked in the DB.
 ///
-/// Issues that fail to observe (e.g. GitHub API 5xx) are skipped and logged.
+/// Terminal states (`Completed`, `Cancelled`) are included on purpose: Completed
+/// still runs persistent effects (CleanupWorktree, CloseIssue) until the worktree
+/// is gone and the issue is closed; Cancelled may transition back to Idle via the
+/// `close_finished && github_issue.state == open` rule. Issues that fail to observe
+/// (e.g. GitHub API 5xx) are skipped and logged.
 pub async fn collect_all<G, I, P>(
     github: &G,
     issue_repo: &I,
@@ -36,7 +40,7 @@ where
     I: IssueRepository,
     P: ProcessRunRepository,
 {
-    // Load all non-terminal issues
+    // Load every issue (terminal states included — see above).
     let issues = issue_repo.find_all().await?;
 
     let mut observations = Vec::new();
@@ -209,23 +213,28 @@ where
 fn derive_ci_status(
     check_runs: &[crate::application::port::github_client::GitHubCheckRun],
 ) -> CiStatus {
-    // If any check run is failure or timed_out → Failure
-    // cancelled → Unknown (new push may have auto-cancelled)
-    // In-progress (null conclusion) → Unknown
-    let mut any_failure = false;
+    // Aggregation rules (docs/architecture/observations.md):
+    //   failure | timed_out       → Failure (hard signal)
+    //   cancelled | null (pending)→ Unknown (transient)
+    //   success | neutral | skipped etc. → counts toward "all good"
+    //   no check runs at all      → Unknown (no information)
+    if check_runs.is_empty() {
+        return CiStatus::Unknown;
+    }
 
+    let mut any_unknown = false;
     for run in check_runs {
         match run.conclusion.as_deref() {
-            Some("failure") | Some("timed_out") => any_failure = true,
-            Some("cancelled") | None => {} // Unknown
-            _ => {}                        // success, neutral, skipped, etc.
+            Some("failure") | Some("timed_out") => return CiStatus::Failure,
+            Some("cancelled") | None => any_unknown = true,
+            _ => {} // success, neutral, skipped — clean
         }
     }
 
-    if any_failure {
-        CiStatus::Failure
-    } else {
+    if any_unknown {
         CiStatus::Unknown
+    } else {
+        CiStatus::Ok
     }
 }
 
@@ -375,9 +384,9 @@ mod tests {
         assert_eq!(derive_ci_status(&runs), CiStatus::Failure);
     }
 
-    /// T-3.CO.2: derive_ci_status returns Unknown when all pass or in-progress
+    /// derive_ci_status returns Ok when every check run is a clean success.
     #[test]
-    fn ci_status_unknown_on_success() {
+    fn ci_status_ok_when_all_success() {
         let runs = vec![GitHubCheckRun {
             id: 1,
             name: "ci".into(),
@@ -386,10 +395,11 @@ mod tests {
             output_summary: None,
             output_text: None,
         }];
-        assert_eq!(derive_ci_status(&runs), CiStatus::Unknown);
+        assert_eq!(derive_ci_status(&runs), CiStatus::Ok);
     }
 
-    /// T-3.CO.3: derive_ci_status returns Unknown on cancelled
+    /// derive_ci_status returns Unknown on cancelled (transient — a new push
+    /// likely auto-cancelled the run; wait for the next round).
     #[test]
     fn ci_status_unknown_on_cancelled() {
         let runs = vec![GitHubCheckRun {
@@ -400,6 +410,51 @@ mod tests {
             output_summary: None,
             output_text: None,
         }];
+        assert_eq!(derive_ci_status(&runs), CiStatus::Unknown);
+    }
+
+    /// derive_ci_status returns Unknown while a check run is still in progress.
+    #[test]
+    fn ci_status_unknown_while_in_progress() {
+        let runs = vec![GitHubCheckRun {
+            id: 1,
+            name: "ci".into(),
+            status: "in_progress".into(),
+            conclusion: None,
+            output_summary: None,
+            output_text: None,
+        }];
+        assert_eq!(derive_ci_status(&runs), CiStatus::Unknown);
+    }
+
+    /// derive_ci_status returns Unknown when there are no check runs at all.
+    #[test]
+    fn ci_status_unknown_when_no_runs() {
+        assert_eq!(derive_ci_status(&[]), CiStatus::Unknown);
+    }
+
+    /// If any run is in progress, the aggregation stays Unknown even when
+    /// another run has already succeeded.
+    #[test]
+    fn ci_status_unknown_when_one_in_progress_one_success() {
+        let runs = vec![
+            GitHubCheckRun {
+                id: 1,
+                name: "test".into(),
+                status: "completed".into(),
+                conclusion: Some("success".into()),
+                output_summary: None,
+                output_text: None,
+            },
+            GitHubCheckRun {
+                id: 2,
+                name: "lint".into(),
+                status: "in_progress".into(),
+                conclusion: None,
+                output_summary: None,
+                output_text: None,
+            },
+        ];
         assert_eq!(derive_ci_status(&runs), CiStatus::Unknown);
     }
 }

@@ -49,6 +49,9 @@ impl ProcessRunRepository for NoopProcessRunRepository {
     async fn mark_failed(&self, _: i64, _: Option<String>) -> Result<()> {
         Err(anyhow::anyhow!("NoopProcessRunRepository: not wired"))
     }
+    async fn mark_stale(&self, _: i64) -> Result<()> {
+        Err(anyhow::anyhow!("NoopProcessRunRepository: not wired"))
+    }
     async fn mark_stale_for_issue(&self, _: i64) -> Result<()> {
         Err(anyhow::anyhow!("NoopProcessRunRepository: not wired"))
     }
@@ -140,7 +143,9 @@ where
     I: IssueRepository,
     E: ExecutionLogRepository,
     C: ClaudeCodeRunner,
-    W: GitWorktree,
+    // Clone + 'static is required because SpawnInit moves a worktree handle
+    // into a `tokio::spawn` task per docs/architecture/effects.md.
+    W: GitWorktree + Clone + 'static,
     P: ProcessRunRepository,
 {
     /// Wire a real ProcessRunRepository (used by bootstrap once Phase 5 is complete).
