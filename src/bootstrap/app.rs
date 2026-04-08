@@ -16,7 +16,24 @@ use crate::adapter::outbound::process_command_runner::ProcessCommandRunner;
 use crate::adapter::outbound::sqlite_connection::SqliteConnection;
 use crate::adapter::outbound::sqlite_execution_log_repository::SqliteExecutionLogRepository;
 use crate::adapter::outbound::sqlite_issue_repository::SqliteIssueRepository;
+use crate::adapter::outbound::sqlite_process_run_repository::SqliteProcessRunRepository;
 use crate::application::cleanup_use_case::CleanupUseCase;
+use crate::application::start_use_case::{ProcessAlivePort, recover_orphans};
+
+/// Production ProcessAlivePort using nix::sys::signal::kill(pid, 0).
+struct NixProcessAlive;
+impl ProcessAlivePort for NixProcessAlive {
+    fn is_alive(&self, pid: u32) -> bool {
+        use nix::sys::signal::kill;
+        use nix::unistd::Pid;
+        kill(Pid::from_raw(pid as i32), None).is_ok()
+    }
+    fn kill(&self, pid: u32) {
+        use nix::sys::signal::{Signal, kill};
+        use nix::unistd::Pid;
+        let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
+    }
+}
 use crate::application::doctor_use_case::{CheckStatus, DoctorUseCase};
 use crate::application::init_use_case::InitUseCase;
 use crate::application::polling_use_case::PollingUseCase;
@@ -453,6 +470,15 @@ async fn start_foreground(
         let graphql = GraphQLClient::new(token, cfg.owner.clone(), cfg.repo.clone());
         let github = GitHubClientImpl::new(rest, graphql);
         let issue_repo = SqliteIssueRepository::new(db.clone());
+        let process_repo = SqliteProcessRunRepository::new(db.clone());
+
+        // Orphan recovery: mark stale running process_runs as failed=orphaned.
+        // Must run before the polling loop observes them, otherwise Resolve's
+        // stale guard may act on ghost state.
+        if let Err(e) = recover_orphans(&process_repo, &NixProcessAlive).await {
+            tracing::warn!(error = %e, "orphan recovery failed at startup");
+        }
+
         let exec_log_repo = SqliteExecutionLogRepository::new(db);
         let claude_runner = ClaudeCodeProcess::new("claude");
         let worktree = GitWorktreeManager::new(".");
@@ -466,6 +492,7 @@ async fn start_foreground(
             worktree,
             cfg,
         )
+        .with_process_repo(process_repo)
         .with_pid_file(Box::new(pid_file_manager));
 
         polling.run().await
@@ -598,6 +625,15 @@ async fn start_daemon_child(
         let graphql = GraphQLClient::new(token, cfg.owner.clone(), cfg.repo.clone());
         let github = GitHubClientImpl::new(rest, graphql);
         let issue_repo = SqliteIssueRepository::new(db.clone());
+        let process_repo = SqliteProcessRunRepository::new(db.clone());
+
+        // Orphan recovery: mark stale running process_runs as failed=orphaned.
+        // Must run before the polling loop observes them, otherwise Resolve's
+        // stale guard may act on ghost state.
+        if let Err(e) = recover_orphans(&process_repo, &NixProcessAlive).await {
+            tracing::warn!(error = %e, "orphan recovery failed at startup");
+        }
+
         let exec_log_repo = SqliteExecutionLogRepository::new(db);
         let claude_runner = ClaudeCodeProcess::new("claude");
         let worktree = GitWorktreeManager::new(".");
@@ -611,6 +647,7 @@ async fn start_daemon_child(
             worktree,
             cfg,
         )
+        .with_process_repo(process_repo)
         .with_pid_file(Box::new(pid_file_manager));
 
         polling.run().await
