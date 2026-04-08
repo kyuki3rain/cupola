@@ -18,6 +18,27 @@ use crate::domain::state::State;
 /// Longer stderr payloads are truncated; the full output remains in the log file.
 const STDERR_SNIPPET_MAX: usize = 512;
 
+/// Persist full stdout/stderr of a finished process to
+/// `.cupola/logs/process-runs/run-{run_id}-{stdout|stderr}.log` (best-effort).
+/// This is critical for debugging Claude failures where stderr may be empty
+/// but stdout contains the real diagnostic (e.g. Claude JSON error payload).
+fn dump_session_io(run_id: i64, stdout: &str, stderr: &str) {
+    if run_id <= 0 {
+        return;
+    }
+    let dir = std::path::Path::new(".cupola/logs/process-runs");
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        tracing::warn!(error = %e, "failed to create process-runs log dir");
+        return;
+    }
+    for (name, content) in [("stdout", stdout), ("stderr", stderr)] {
+        let path = dir.join(format!("run-{run_id}-{name}.log"));
+        if let Err(e) = std::fs::write(&path, content) {
+            tracing::warn!(path = %path.display(), error = %e, "failed to write process log");
+        }
+    }
+}
+
 /// Process all exited sessions and update ProcessRun + Issue metadata.
 pub async fn resolve_exited_sessions<G, I, P>(
     github: &G,
@@ -87,6 +108,11 @@ where
         }
         return Ok(());
     }
+
+    // Always dump stdout+stderr to .cupola/logs/process-runs/ before any
+    // success/failure branching. Essential for diagnosing Claude exit code 1
+    // with empty stderr, JSON schema mismatches, etc.
+    dump_session_io(run_id, &session.stdout, &session.stderr);
 
     let is_running_phase = matches!(
         session.registered_state,
