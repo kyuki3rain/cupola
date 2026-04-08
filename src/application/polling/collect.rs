@@ -40,6 +40,40 @@ where
     I: IssueRepository,
     P: ProcessRunRepository,
 {
+    // Discover newly-labeled GitHub issues and upsert them into the DB as Idle.
+    // Without this step the DB stays empty forever and the polling loop has nothing
+    // to observe. list_ready_issues returns issues currently carrying agent:ready.
+    match github.list_ready_issues().await {
+        Ok(ready) => {
+            for gi in ready {
+                match issue_repo.find_by_issue_number(gi.number).await {
+                    Ok(Some(_)) => {}
+                    Ok(None) => {
+                        let issue = Issue::new(gi.number, format!("issue-{}", gi.number));
+                        if let Err(e) = issue_repo.save(&issue).await {
+                            tracing::warn!(
+                                issue_number = gi.number,
+                                error = %e,
+                                "failed to insert newly-discovered ready issue"
+                            );
+                        } else {
+                            tracing::info!(
+                                issue_number = gi.number,
+                                "discovered new ready issue, inserted as Idle"
+                            );
+                        }
+                    }
+                    Err(e) => tracing::warn!(
+                        issue_number = gi.number,
+                        error = %e,
+                        "find_by_issue_number failed during discovery"
+                    ),
+                }
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "list_ready_issues failed, skipping discovery"),
+    }
+
     // Load every issue (terminal states included — see above).
     let issues = issue_repo.find_all().await?;
 
