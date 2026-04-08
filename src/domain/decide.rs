@@ -24,42 +24,106 @@ pub fn decide(prev: &Issue, snap: &WorldSnapshot, cfg: &Config) -> Decision {
         metadata_updates.weight = Some(snap_weight);
     }
 
-    let next_state = match prev.state {
-        State::Idle => decide_idle(prev, snap, cfg, &mut effects, &mut metadata_updates),
-        State::InitializeRunning => {
-            decide_initialize_running(prev, snap, cfg, &mut effects, &mut metadata_updates)
-        }
-        State::DesignRunning => {
-            decide_design_running(prev, snap, cfg, &mut effects, &mut metadata_updates)
-        }
-        State::DesignReviewWaiting => {
-            decide_design_review_waiting(prev, snap, cfg, &mut effects, &mut metadata_updates)
-        }
-        State::DesignFixing => {
-            decide_design_fixing(prev, snap, cfg, &mut effects, &mut metadata_updates)
-        }
-        State::ImplementationRunning => {
-            decide_implementation_running(prev, snap, cfg, &mut effects, &mut metadata_updates)
-        }
-        State::ImplementationReviewWaiting => decide_implementation_review_waiting(
-            prev,
+    let next_state = dispatch_state(prev, snap, cfg, &mut effects, &mut metadata_updates);
+
+    // Second-pass dispatch on the new state.
+    //
+    // The persistent-effect rules in `docs/architecture/effects.md` are stated
+    // in terms of `next_state` ("if state is ImplementationRunning and the impl
+    // process is not running, emit SwitchToImplBranch → SpawnProcess"), so on a
+    // transition cycle we must evaluate them against the new state — not the
+    // old one. Without this pass the chain only gets emitted in the *next*
+    // polling cycle, leaving a `polling_interval_secs`-sized lag and (as
+    // happened with the impl spawn chain) creating an opportunity for someone
+    // to forget a step in the manually-mirrored transition emission.
+    //
+    // We re-dispatch the same `decide_X` family with a synthetic Issue whose
+    // state is `next_state`, and append only the spawn-side effects from that
+    // call. Transition-edge effects (Post*Comment) and the second pass's own
+    // next_state choice are intentionally discarded — the first pass is the
+    // single source of truth for the transition itself.
+    if next_state != prev.state && needs_persistent_spawn_pass(next_state) {
+        let mut secondary_effects: Vec<Effect> = Vec::new();
+        let mut secondary_meta = MetadataUpdates::default();
+        let synthetic = Issue {
+            state: next_state,
+            ..prev.clone()
+        };
+        let _ = dispatch_state(
+            &synthetic,
             snap,
             cfg,
-            &mut effects,
-            &mut metadata_updates,
-        ),
-        State::ImplementationFixing => {
-            decide_implementation_fixing(prev, snap, cfg, &mut effects, &mut metadata_updates)
+            &mut secondary_effects,
+            &mut secondary_meta,
+        );
+        for e in secondary_effects {
+            if is_persistent_spawn_effect(&e) {
+                effects.push(e);
+            }
         }
-        State::Completed => decide_completed(prev, snap, &mut effects, &mut metadata_updates),
-        State::Cancelled => decide_cancelled(prev, snap, &mut effects, &mut metadata_updates),
-    };
+    }
 
     if next_state != prev.state {
         metadata_updates.state = Some(next_state);
     }
 
     Decision::new(next_state, metadata_updates, effects)
+}
+
+/// States whose persistent-effect table contains a spawn-side action that must
+/// be evaluated immediately on transition (not deferred to the next cycle).
+fn needs_persistent_spawn_pass(state: State) -> bool {
+    matches!(
+        state,
+        State::InitializeRunning
+            | State::DesignRunning
+            | State::ImplementationRunning
+            | State::DesignFixing
+            | State::ImplementationFixing
+    )
+}
+
+/// Whitelist of effects we accept from the second-pass dispatch. These are the
+/// "持続性エフェクト" of the spawn-side rows in `effects.md`. Transition-edge
+/// effects are intentionally excluded so the first pass remains authoritative.
+fn is_persistent_spawn_effect(effect: &Effect) -> bool {
+    matches!(
+        effect,
+        Effect::SpawnInit | Effect::SwitchToImplBranch | Effect::SpawnProcess { .. }
+    )
+}
+
+/// Internal dispatch helper used by both the primary pass and the second-pass
+/// re-evaluation. Returns the `decide_X` result for `issue.state`.
+fn dispatch_state(
+    issue: &Issue,
+    snap: &WorldSnapshot,
+    cfg: &Config,
+    effects: &mut Vec<Effect>,
+    metadata_updates: &mut MetadataUpdates,
+) -> State {
+    match issue.state {
+        State::Idle => decide_idle(issue, snap, cfg, effects, metadata_updates),
+        State::InitializeRunning => {
+            decide_initialize_running(issue, snap, cfg, effects, metadata_updates)
+        }
+        State::DesignRunning => decide_design_running(issue, snap, cfg, effects, metadata_updates),
+        State::DesignReviewWaiting => {
+            decide_design_review_waiting(issue, snap, cfg, effects, metadata_updates)
+        }
+        State::DesignFixing => decide_design_fixing(issue, snap, cfg, effects, metadata_updates),
+        State::ImplementationRunning => {
+            decide_implementation_running(issue, snap, cfg, effects, metadata_updates)
+        }
+        State::ImplementationReviewWaiting => {
+            decide_implementation_review_waiting(issue, snap, cfg, effects, metadata_updates)
+        }
+        State::ImplementationFixing => {
+            decide_implementation_fixing(issue, snap, cfg, effects, metadata_updates)
+        }
+        State::Completed => decide_completed(issue, snap, effects, metadata_updates),
+        State::Cancelled => decide_cancelled(issue, snap, effects, metadata_updates),
+    }
 }
 
 fn issue_is_closed(snap: &WorldSnapshot) -> bool {
@@ -108,10 +172,6 @@ fn decide_idle(
 ) -> State {
     if snap.github_issue.has_ready_label {
         if snap.github_issue.ready_label_trusted {
-            // Entry effect: the new state expects an init task to be running.
-            // Emit SpawnInit in the same cycle so there's no 1-tick lag
-            // between the state transition and the work starting.
-            effects.push(Effect::SpawnInit);
             State::InitializeRunning
         } else {
             effects.push(Effect::RejectUntrustedReadyIssue);
@@ -158,20 +218,12 @@ fn decide_initialize_running(
             if let Some(design_pr) = &snap.design_pr {
                 if design_pr.state == PrState::Merged {
                     metadata_updates.ci_fix_count = Some(0);
-                    effects.push(Effect::SpawnProcess {
-                        type_: ProcessRunType::Impl,
-                        causes: vec![],
-                    });
                     return State::ImplementationRunning;
                 }
                 if design_pr.state == PrState::Open {
                     return State::DesignReviewWaiting;
                 }
             }
-            effects.push(Effect::SpawnProcess {
-                type_: ProcessRunType::Design,
-                causes: vec![],
-            });
             return State::DesignRunning;
         }
         // init.state == Running or Stale: emit SpawnInit if not running
@@ -220,10 +272,6 @@ fn decide_design_running(
         {
             if design_pr.state == PrState::Merged {
                 metadata_updates.ci_fix_count = Some(0);
-                effects.push(Effect::SpawnProcess {
-                    type_: ProcessRunType::Impl,
-                    causes: vec![],
-                });
                 return State::ImplementationRunning;
             }
             if design_pr.state == PrState::Closed {
@@ -271,18 +319,10 @@ fn decide_design_review_waiting(
     // Priority: merge > close > review > ci > conflict
     if design_pr.state == PrState::Merged {
         metadata_updates.ci_fix_count = Some(0);
-        effects.push(Effect::SpawnProcess {
-            type_: ProcessRunType::Impl,
-            causes: vec![],
-        });
         return State::ImplementationRunning;
     }
     if design_pr.state == PrState::Closed {
         metadata_updates.ci_fix_count = Some(0);
-        effects.push(Effect::SpawnProcess {
-            type_: ProcessRunType::Design,
-            causes: vec![],
-        });
         return State::DesignRunning;
     }
     if design_pr.has_review_comments {
@@ -336,18 +376,10 @@ fn decide_design_fixing(
     // PR state checks first
     if design_pr.state == PrState::Merged {
         metadata_updates.ci_fix_count = Some(0);
-        effects.push(Effect::SpawnProcess {
-            type_: ProcessRunType::Impl,
-            causes: vec![],
-        });
         return State::ImplementationRunning;
     }
     if design_pr.state == PrState::Closed {
         metadata_updates.ci_fix_count = Some(0);
-        effects.push(Effect::SpawnProcess {
-            type_: ProcessRunType::Design,
-            causes: vec![],
-        });
         return State::DesignRunning;
     }
 

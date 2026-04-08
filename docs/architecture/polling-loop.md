@@ -124,11 +124,18 @@ Output:
 
 エフェクトの詳細は [effects.md](./effects.md) を参照。メタデータ更新ルールの詳細は [metadata.md](./metadata.md) を参照。
 
-### Entry effect 不変条件
+### 持続性エフェクトを next_state 基準で評価する
 
-`*Running` 系の next_state（`InitializeRunning` / `DesignRunning` / `ImplementationRunning`）への**遷移**を返す分岐では、同じサイクル内で対応する起動 effect（`SpawnInit` / `SpawnProcess { Design }` / `SpawnProcess { Impl }`）を必ず effects に push する。これがないと「遷移サイクルでは Execute が起動 effect を発行せず、次サイクルの Decide が `processes.* == None` を観測してようやく spawn する」という 1 サイクル分（デフォルト 30 秒）の遅延が生まれる。
+[effects.md](./effects.md) の「持続性エフェクト」表は **next_state を基準に**条件が定義されている（例: 「`ImplementationRunning` + `processes.impl.state != running` → SwitchToImplBranch → SpawnProcess」）。Decide はこの不変条件を、遷移サイクルでも維持しなければならない。
 
-すでに同 state に滞在しているサイクル（`prev_state == next_state`）では Decide 内の通常分岐（`processes.* == None` や `Failed` / `Stale` など）が再 spawn を担当するため、entry effect は遷移エッジでのみ発行する。同一サイクル内で entry effect が走った後の次サイクルでは、Persist で挿入された ProcessRun が `state=running` で観測されるため重複 spawn は発生しない。
+実装上は2段階で評価する：
+
+1. **第一段**: `prev.state` で `decide_X` を dispatch して `next_state` と一回性エフェクト（`Post*Comment` / `RejectUntrustedReadyIssue` / `PostCiFixLimitComment` 等）を確定する。
+2. **第二段**: `next_state != prev.state` かつ `next_state` が spawn 系の持続性エフェクトを持つ state（`InitializeRunning` / `DesignRunning` / `ImplementationRunning` / `DesignFixing` / `ImplementationFixing`）の場合、`state=next_state` の合成 Issue で同じ `decide_X` を再 dispatch し、その結果から **spawn 系持続性エフェクト（`SpawnInit` / `SwitchToImplBranch` / `SpawnProcess`）のみ** を抽出して append する。
+
+これにより、effect chain の知識（例: 「`ImplementationRunning` には `SwitchToImplBranch → SpawnProcess` のチェーンが要る」）は **`decide_X` 関数の中に1箇所だけ存在する**。遷移エッジ用の重複した emit ロジックを書かないで済むため、将来チェーンが伸びても1箇所を直せば transition cycle と stable cycle 双方に反映される。
+
+第二段で次 state の transition 判断や transition-edge エフェクトを採用しないのは、第一段が transition の単一の真実であり続けるため。第二段は **「next_state に居るとき必要な spawn の有無」だけを尋ねる** 副次評価である。
 
 ## Persist
 
