@@ -3,8 +3,8 @@ use chrono::{DateTime, Utc};
 use rusqlite::OptionalExtension;
 
 use crate::application::port::issue_repository::IssueRepository;
-use crate::domain::fixing_problem_kind::FixingProblemKind;
 use crate::domain::issue::Issue;
+use crate::domain::metadata_update::MetadataUpdates;
 use crate::domain::state::State;
 use crate::domain::task_weight::TaskWeight;
 
@@ -29,9 +29,9 @@ impl IssueRepository for SqliteIssueRepository {
                 .lock()
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let mut stmt = conn.prepare(
-                "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, weight,
-                        fixing_causes, created_at, updated_at, ci_fix_count
+                "SELECT id, github_issue_number, state, feature_name, weight,
+                        worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
+                        created_at, updated_at
                  FROM issues WHERE id = ?1",
             )?;
             let issue = stmt
@@ -52,9 +52,9 @@ impl IssueRepository for SqliteIssueRepository {
                 .lock()
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let mut stmt = conn.prepare(
-                "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, weight,
-                        fixing_causes, created_at, updated_at, ci_fix_count
+                "SELECT id, github_issue_number, state, feature_name, weight,
+                        worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
+                        created_at, updated_at
                  FROM issues WHERE github_issue_number = ?1",
             )?;
             let issue = stmt
@@ -75,9 +75,9 @@ impl IssueRepository for SqliteIssueRepository {
                 .lock()
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let mut stmt = conn.prepare(
-                "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, weight,
-                        fixing_causes, created_at, updated_at, ci_fix_count
+                "SELECT id, github_issue_number, state, feature_name, weight,
+                        worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
+                        created_at, updated_at
                  FROM issues WHERE state NOT IN ('completed', 'cancelled')",
             )?;
             let issues = stmt
@@ -90,7 +90,7 @@ impl IssueRepository for SqliteIssueRepository {
         .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
     }
 
-    async fn find_needing_process(&self) -> Result<Vec<Issue>> {
+    async fn find_all(&self) -> Result<Vec<Issue>> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db
@@ -98,15 +98,15 @@ impl IssueRepository for SqliteIssueRepository {
                 .lock()
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let mut stmt = conn.prepare(
-                "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, weight,
-                        fixing_causes, created_at, updated_at, ci_fix_count
-                 FROM issues WHERE state IN ('design_running', 'design_fixing', 'implementation_running', 'implementation_fixing')",
+                "SELECT id, github_issue_number, state, feature_name, weight,
+                        worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
+                        created_at, updated_at
+                 FROM issues",
             )?;
             let issues = stmt
                 .query_map([], row_to_issue)?
                 .collect::<std::result::Result<Vec<_>, _>>()
-                .context("find_needing_process query failed")?;
+                .context("find_all query failed")?;
             Ok(issues)
         })
         .await
@@ -121,26 +121,22 @@ impl IssueRepository for SqliteIssueRepository {
                 .conn()
                 .lock()
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
-            let fixing_causes_json = serde_json::to_string(&issue.fixing_causes)
-                .context("failed to serialize fixing_causes")?;
             conn.execute(
-                "INSERT INTO issues (github_issue_number, state, design_pr_number, impl_pr_number,
-                                     worktree_path, retry_count, current_pid, error_message, feature_name, weight,
-                                     fixing_causes, ci_fix_count)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                "INSERT INTO issues (github_issue_number, state, feature_name, weight,
+                                     worktree_path, ci_fix_count, close_finished,
+                                     consecutive_failures_epoch)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 rusqlite::params![
                     issue.github_issue_number,
-                    state_to_str(&issue.state),
-                    issue.design_pr_number,
-                    issue.impl_pr_number,
-                    issue.worktree_path,
-                    issue.retry_count,
-                    issue.current_pid,
-                    issue.error_message,
+                    issue.state.to_string(),
                     issue.feature_name,
                     task_weight_to_str(issue.weight),
-                    fixing_causes_json,
+                    issue.worktree_path,
                     issue.ci_fix_count,
+                    issue.close_finished as i64,
+                    issue
+                        .consecutive_failures_epoch
+                        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
                 ],
             )
             .context("save issue failed")?;
@@ -152,6 +148,7 @@ impl IssueRepository for SqliteIssueRepository {
 
     async fn update_state(&self, id: i64, state: State) -> Result<()> {
         let db = self.db.clone();
+        let state_str = state.to_string();
         tokio::task::spawn_blocking(move || {
             let conn = db
                 .conn()
@@ -159,7 +156,7 @@ impl IssueRepository for SqliteIssueRepository {
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             conn.execute(
                 "UPDATE issues SET state = ?1, updated_at = datetime('now') WHERE id = ?2",
-                rusqlite::params![state_to_str(&state), id],
+                rusqlite::params![state_str, id],
             )
             .context("update_state failed")?;
             Ok(())
@@ -176,26 +173,21 @@ impl IssueRepository for SqliteIssueRepository {
                 .conn()
                 .lock()
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
-            let fixing_causes_json = serde_json::to_string(&issue.fixing_causes)
-                .context("failed to serialize fixing_causes")?;
             conn.execute(
-                "UPDATE issues SET state = ?1, design_pr_number = ?2, impl_pr_number = ?3,
-                                   worktree_path = ?4, retry_count = ?5, current_pid = ?6,
-                                   error_message = ?7, feature_name = ?8, weight = ?9,
-                                   fixing_causes = ?10, ci_fix_count = ?11, updated_at = datetime('now')
-                 WHERE id = ?12",
+                "UPDATE issues SET state = ?1, feature_name = ?2, weight = ?3,
+                                   worktree_path = ?4, ci_fix_count = ?5, close_finished = ?6,
+                                   consecutive_failures_epoch = ?7, updated_at = datetime('now')
+                 WHERE id = ?8",
                 rusqlite::params![
-                    state_to_str(&issue.state),
-                    issue.design_pr_number,
-                    issue.impl_pr_number,
-                    issue.worktree_path,
-                    issue.retry_count,
-                    issue.current_pid,
-                    issue.error_message,
+                    issue.state.to_string(),
                     issue.feature_name,
                     task_weight_to_str(issue.weight),
-                    fixing_causes_json,
+                    issue.worktree_path,
                     issue.ci_fix_count,
+                    issue.close_finished as i64,
+                    issue
+                        .consecutive_failures_epoch
+                        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
                     issue.id,
                 ],
             )
@@ -206,25 +198,85 @@ impl IssueRepository for SqliteIssueRepository {
         .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
     }
 
-    async fn reset_for_restart(&self, id: i64) -> Result<()> {
+    async fn update_state_and_metadata(
+        &self,
+        issue_id: i64,
+        updates: &MetadataUpdates,
+    ) -> Result<()> {
+        let updates = updates.clone();
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db
                 .conn()
                 .lock()
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
-            conn.execute(
-                "UPDATE issues
-                 SET state = 'idle',
-                     retry_count = 0,
-                     current_pid = NULL,
-                     error_message = NULL,
-                     fixing_causes = '[]',
-                     updated_at = datetime('now')
-                 WHERE id = ?1",
-                [id],
-            )
-            .context("reset_for_restart failed")?;
+            // Build dynamic SQL update
+            let mut set_clauses = vec!["updated_at = datetime('now')".to_string()];
+            let mut param_values: Vec<rusqlite::types::Value> = Vec::new();
+            let mut param_idx = 1usize;
+
+            if let Some(state) = updates.state {
+                set_clauses.push(format!("state = ?{param_idx}"));
+                param_values.push(rusqlite::types::Value::Text(state.to_string()));
+                param_idx += 1;
+            }
+            if let Some(weight) = updates.weight {
+                set_clauses.push(format!("weight = ?{param_idx}"));
+                param_values.push(rusqlite::types::Value::Text(
+                    task_weight_to_str(weight).to_string(),
+                ));
+                param_idx += 1;
+            }
+            if let Some(ci_fix_count) = updates.ci_fix_count {
+                set_clauses.push(format!("ci_fix_count = ?{param_idx}"));
+                param_values.push(rusqlite::types::Value::Integer(ci_fix_count as i64));
+                param_idx += 1;
+            }
+            if let Some(close_finished) = updates.close_finished {
+                set_clauses.push(format!("close_finished = ?{param_idx}"));
+                param_values.push(rusqlite::types::Value::Integer(close_finished as i64));
+                param_idx += 1;
+            }
+            if let Some(ref feature_name) = updates.feature_name {
+                set_clauses.push(format!("feature_name = ?{param_idx}"));
+                param_values.push(rusqlite::types::Value::Text(feature_name.clone()));
+                param_idx += 1;
+            }
+            if let Some(epoch) = updates.consecutive_failures_epoch {
+                set_clauses.push(format!("consecutive_failures_epoch = ?{param_idx}"));
+                let v = epoch
+                    .map(|dt| {
+                        rusqlite::types::Value::Text(dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+                    })
+                    .unwrap_or(rusqlite::types::Value::Null);
+                param_values.push(v);
+                param_idx += 1;
+            }
+            if let Some(ref worktree_path) = updates.worktree_path {
+                set_clauses.push(format!("worktree_path = ?{param_idx}"));
+                let v = worktree_path
+                    .as_ref()
+                    .map(|p| rusqlite::types::Value::Text(p.clone()))
+                    .unwrap_or(rusqlite::types::Value::Null);
+                param_values.push(v);
+                param_idx += 1;
+            }
+
+            // Add the WHERE id = ?{param_idx}
+            let sql = format!(
+                "UPDATE issues SET {} WHERE id = ?{}",
+                set_clauses.join(", "),
+                param_idx
+            );
+            param_values.push(rusqlite::types::Value::Integer(issue_id));
+
+            let params: Vec<&dyn rusqlite::ToSql> = param_values
+                .iter()
+                .map(|v| v as &dyn rusqlite::ToSql)
+                .collect();
+
+            conn.execute(&sql, params.as_slice())
+                .context("update_state_and_metadata failed")?;
             Ok(())
         })
         .await
@@ -233,16 +285,16 @@ impl IssueRepository for SqliteIssueRepository {
 
     async fn find_by_state(&self, state: State) -> Result<Vec<Issue>> {
         let db = self.db.clone();
-        let state_str = state_to_str(&state).to_string();
+        let state_str = state.to_string();
         tokio::task::spawn_blocking(move || {
             let conn = db
                 .conn()
                 .lock()
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
             let mut stmt = conn.prepare(
-                "SELECT id, github_issue_number, state, design_pr_number, impl_pr_number,
-                        worktree_path, retry_count, current_pid, error_message, feature_name, weight,
-                        fixing_causes, created_at, updated_at, ci_fix_count
+                "SELECT id, github_issue_number, state, feature_name, weight,
+                        worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
+                        created_at, updated_at
                  FROM issues WHERE state = ?1",
             )?;
             let issues = stmt
@@ -256,39 +308,10 @@ impl IssueRepository for SqliteIssueRepository {
     }
 }
 
-fn state_to_str(state: &State) -> &'static str {
-    match state {
-        State::Idle => "idle",
-        State::Initialized => "initialized",
-        State::DesignRunning => "design_running",
-        State::DesignReviewWaiting => "design_review_waiting",
-        State::DesignFixing => "design_fixing",
-        State::ImplementationRunning => "implementation_running",
-        State::ImplementationReviewWaiting => "implementation_review_waiting",
-        State::ImplementationFixing => "implementation_fixing",
-        State::Completed => "completed",
-        State::Cancelled => "cancelled",
-    }
-}
-
 pub fn str_to_state(col_idx: usize, s: &str) -> rusqlite::Result<State> {
-    match s {
-        "idle" => Ok(State::Idle),
-        "initialized" => Ok(State::Initialized),
-        "design_running" => Ok(State::DesignRunning),
-        "design_review_waiting" => Ok(State::DesignReviewWaiting),
-        "design_fixing" => Ok(State::DesignFixing),
-        "implementation_running" => Ok(State::ImplementationRunning),
-        "implementation_review_waiting" => Ok(State::ImplementationReviewWaiting),
-        "implementation_fixing" => Ok(State::ImplementationFixing),
-        "completed" => Ok(State::Completed),
-        "cancelled" => Ok(State::Cancelled),
-        _ => Err(rusqlite::Error::InvalidColumnType(
-            col_idx,
-            s.to_owned(),
-            rusqlite::types::Type::Text,
-        )),
-    }
+    s.parse::<State>().map_err(|_| {
+        rusqlite::Error::InvalidColumnType(col_idx, s.to_owned(), rusqlite::types::Type::Text)
+    })
 }
 
 fn task_weight_to_str(weight: TaskWeight) -> &'static str {
@@ -314,36 +337,37 @@ fn str_to_task_weight(col_idx: usize, s: &str) -> rusqlite::Result<TaskWeight> {
 
 fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
     let state_str: String = row.get(2)?;
-    let weight_str: String = row.get(10)?;
-    let fixing_causes_json: String = row.get(11)?;
-    let created_str: String = row.get(12)?;
-    let updated_str: String = row.get(13)?;
-
-    let fixing_causes: Vec<FixingProblemKind> =
-        serde_json::from_str::<Vec<FixingProblemKind>>(&fixing_causes_json).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(e))
-        })?;
+    let weight_str: String = row.get(4)?;
+    let created_str: String = row.get(9)?;
+    let updated_str: String = row.get(10)?;
 
     let github_issue_number: u64 = row.get(1)?;
+
+    let consecutive_failures_epoch: Option<String> = row.get(8)?;
+    let consecutive_failures_epoch = consecutive_failures_epoch
+        .map(|s| parse_rfc3339_datetime(8, &s))
+        .transpose()?;
 
     Ok(Issue {
         id: row.get(0)?,
         github_issue_number,
         state: str_to_state(2, &state_str)?,
-        design_pr_number: row.get(3)?,
-        impl_pr_number: row.get(4)?,
-        worktree_path: row.get(5)?,
-        retry_count: row.get(6)?,
-        current_pid: row.get(7)?,
-        error_message: row.get(8)?,
         feature_name: row
-            .get::<_, Option<String>>(9)?
+            .get::<_, Option<String>>(3)?
             .unwrap_or_else(|| format!("issue-{github_issue_number}")),
-        weight: str_to_task_weight(10, &weight_str)?,
-        fixing_causes,
-        created_at: parse_sqlite_datetime(12, &created_str)?,
-        updated_at: parse_sqlite_datetime(13, &updated_str)?,
-        ci_fix_count: row.get(14)?,
+        weight: str_to_task_weight(4, &weight_str)?,
+        worktree_path: row.get(5)?,
+        ci_fix_count: {
+            let v: i64 = row.get(6)?;
+            v as u32
+        },
+        close_finished: {
+            let v: i64 = row.get(7)?;
+            v != 0
+        },
+        consecutive_failures_epoch,
+        created_at: parse_sqlite_datetime(9, &created_str)?,
+        updated_at: parse_sqlite_datetime(10, &updated_str)?,
     })
 }
 
@@ -355,10 +379,25 @@ fn parse_sqlite_datetime(col_idx: usize, s: &str) -> rusqlite::Result<DateTime<U
         })
 }
 
+fn parse_rfc3339_datetime(col_idx: usize, s: &str) -> rusqlite::Result<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.with_timezone(&Utc))
+        .or_else(|_| {
+            // Try parsing as sqlite datetime format
+            chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+                .map(|naive| naive.and_utc())
+                .map_err(|_| ())
+        })
+        .map_err(|_| {
+            rusqlite::Error::InvalidColumnType(col_idx, s.to_owned(), rusqlite::types::Type::Text)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::adapter::outbound::sqlite_connection::SqliteConnection;
+    use chrono::TimeZone;
 
     fn setup() -> (SqliteConnection, SqliteIssueRepository) {
         let db = SqliteConnection::open_in_memory().expect("open");
@@ -368,23 +407,139 @@ mod tests {
     }
 
     fn new_issue(issue_number: u64) -> Issue {
-        Issue {
-            id: 0,
-            github_issue_number: issue_number,
-            state: State::Idle,
-            design_pr_number: None,
-            impl_pr_number: None,
-            worktree_path: None,
-            retry_count: 0,
-            ci_fix_count: 0,
-            current_pid: None,
-            error_message: None,
-            feature_name: format!("issue-{issue_number}"),
-            fixing_causes: vec![],
-            weight: TaskWeight::Medium,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        }
+        Issue::new(issue_number, format!("issue-{issue_number}"))
+    }
+
+    /// T-2.IR.1: migration idempotency
+    #[test]
+    fn migration_is_idempotent() {
+        let db = SqliteConnection::open_in_memory().expect("open");
+        db.init_schema().expect("first init");
+        db.init_schema().expect("second init should succeed");
+    }
+
+    /// T-2.IR.2: find_active excludes Completed and Cancelled
+    #[tokio::test]
+    async fn find_active_excludes_terminal() {
+        let (_db, repo) = setup();
+        let id1 = repo.save(&new_issue(1)).await.expect("save");
+        let id2 = repo.save(&new_issue(2)).await.expect("save");
+        let id3 = repo.save(&new_issue(3)).await.expect("save");
+
+        repo.update_state(id1, State::DesignRunning)
+            .await
+            .expect("update");
+        repo.update_state(id2, State::Completed)
+            .await
+            .expect("update");
+        repo.update_state(id3, State::Cancelled)
+            .await
+            .expect("update");
+
+        let active = repo.find_active().await.expect("find_active");
+        let numbers: Vec<u64> = active.iter().map(|i| i.github_issue_number).collect();
+        assert!(numbers.contains(&1));
+        assert!(!numbers.contains(&2));
+        assert!(!numbers.contains(&3));
+    }
+
+    /// T-2.IR.3: find_all includes Completed and Cancelled
+    #[tokio::test]
+    async fn find_all_includes_terminal() {
+        let (_db, repo) = setup();
+        let id1 = repo.save(&new_issue(1)).await.expect("save");
+        let id2 = repo.save(&new_issue(2)).await.expect("save");
+
+        repo.update_state(id1, State::Completed)
+            .await
+            .expect("update");
+        repo.update_state(id2, State::Cancelled)
+            .await
+            .expect("update");
+
+        let all = repo.find_all().await.expect("find_all");
+        assert_eq!(all.len(), 2);
+    }
+
+    /// T-2.IR.4: update_state_and_metadata writes only non-None fields
+    #[tokio::test]
+    async fn update_state_and_metadata_writes_only_some_fields() {
+        let (_db, repo) = setup();
+        let id = repo.save(&new_issue(10)).await.expect("save");
+
+        let updates = MetadataUpdates {
+            state: Some(State::DesignRunning),
+            ci_fix_count: Some(3),
+            ..Default::default()
+        };
+        repo.update_state_and_metadata(id, &updates)
+            .await
+            .expect("update");
+
+        let found = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert_eq!(found.state, State::DesignRunning);
+        assert_eq!(found.ci_fix_count, 3);
+        // weight was not updated
+        assert_eq!(found.weight, TaskWeight::Medium);
+    }
+
+    /// T-2.IR.5: consecutive_failures_epoch roundtrips
+    #[tokio::test]
+    async fn consecutive_failures_epoch_roundtrip() {
+        let (_db, repo) = setup();
+        let id = repo.save(&new_issue(20)).await.expect("save");
+
+        // Set epoch
+        let epoch = Utc.with_ymd_and_hms(2026, 1, 15, 10, 30, 0).unwrap();
+        let updates = MetadataUpdates {
+            consecutive_failures_epoch: Some(Some(epoch)),
+            ..Default::default()
+        };
+        repo.update_state_and_metadata(id, &updates)
+            .await
+            .expect("update");
+
+        let found = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert!(found.consecutive_failures_epoch.is_some());
+        let loaded = found.consecutive_failures_epoch.unwrap();
+        // Compare at second precision
+        assert_eq!(
+            loaded.format("%Y-%m-%dT%H:%M:%S").to_string(),
+            epoch.format("%Y-%m-%dT%H:%M:%S").to_string()
+        );
+
+        // Set to None
+        let updates_none = MetadataUpdates {
+            consecutive_failures_epoch: Some(None),
+            ..Default::default()
+        };
+        repo.update_state_and_metadata(id, &updates_none)
+            .await
+            .expect("update");
+        let found2 = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert!(found2.consecutive_failures_epoch.is_none());
+    }
+
+    /// T-2.IR.6: close_finished roundtrips bool
+    #[tokio::test]
+    async fn close_finished_roundtrip() {
+        let (_db, repo) = setup();
+        let id = repo.save(&new_issue(30)).await.expect("save");
+
+        // Default false
+        let found = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert!(!found.close_finished);
+
+        // Set to true
+        let updates = MetadataUpdates {
+            close_finished: Some(true),
+            ..Default::default()
+        };
+        repo.update_state_and_metadata(id, &updates)
+            .await
+            .expect("update");
+        let found2 = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert!(found2.close_finished);
     }
 
     #[tokio::test]
@@ -400,6 +555,8 @@ mod tests {
         assert_eq!(found.github_issue_number, 42);
         assert_eq!(found.state, State::Idle);
         assert_eq!(found.weight, TaskWeight::Medium);
+        assert!(!found.close_finished);
+        assert!(found.consecutive_failures_epoch.is_none());
     }
 
     #[tokio::test]
@@ -415,56 +572,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn find_active_excludes_terminal() {
-        let (_db, repo) = setup();
-        let id1 = repo.save(&new_issue(1)).await.expect("save");
-        let id2 = repo.save(&new_issue(2)).await.expect("save");
-        repo.save(&new_issue(3)).await.expect("save");
-
-        repo.update_state(id1, State::DesignRunning)
-            .await
-            .expect("update");
-        repo.update_state(id2, State::Completed)
-            .await
-            .expect("update");
-
-        let active = repo.find_active().await.expect("find_active");
-        let numbers: Vec<u64> = active.iter().map(|i| i.github_issue_number).collect();
-        assert!(numbers.contains(&1));
-        assert!(!numbers.contains(&2));
-        assert!(numbers.contains(&3));
-    }
-
-    #[tokio::test]
-    async fn find_needing_process() {
-        let (_db, repo) = setup();
-        let id1 = repo.save(&new_issue(10)).await.expect("save");
-        let id2 = repo.save(&new_issue(20)).await.expect("save");
-        repo.save(&new_issue(30)).await.expect("save");
-
-        repo.update_state(id1, State::DesignRunning)
-            .await
-            .expect("update");
-        repo.update_state(id2, State::DesignReviewWaiting)
-            .await
-            .expect("update");
-
-        let needing = repo.find_needing_process().await.expect("find");
-        assert_eq!(needing.len(), 1);
-        assert_eq!(needing[0].github_issue_number, 10);
-    }
-
-    #[tokio::test]
     async fn update_state() {
         let (_db, repo) = setup();
         let id = repo.save(&new_issue(50)).await.expect("save");
 
-        repo.update_state(id, State::Initialized)
+        repo.update_state(id, State::InitializeRunning)
             .await
             .expect("update_state");
 
         let found = repo.find_by_id(id).await.expect("find").expect("exists");
-        assert_eq!(found.state, State::Initialized);
+        assert_eq!(found.state, State::InitializeRunning);
     }
 
     #[tokio::test]
@@ -475,61 +592,16 @@ mod tests {
         let mut issue = repo.find_by_id(id).await.expect("find").expect("exists");
         issue.state = State::DesignRunning;
         issue.worktree_path = Some("/tmp/wt".to_string());
-        issue.retry_count = 2;
+        issue.ci_fix_count = 2;
+        issue.close_finished = true;
 
         repo.update(&issue).await.expect("update");
 
         let found = repo.find_by_id(id).await.expect("find").expect("exists");
         assert_eq!(found.state, State::DesignRunning);
         assert_eq!(found.worktree_path.as_deref(), Some("/tmp/wt"));
-        assert_eq!(found.retry_count, 2);
-    }
-
-    #[tokio::test]
-    async fn reset_for_restart_clears_transient_fields() {
-        let (_db, repo) = setup();
-        let id = repo.save(&new_issue(70)).await.expect("save");
-
-        repo.update_state(id, State::Cancelled)
-            .await
-            .expect("update");
-        repo.reset_for_restart(id).await.expect("reset");
-
-        let found = repo.find_by_id(id).await.expect("find").expect("exists");
-        assert_eq!(found.state, State::Idle);
-        assert_eq!(found.retry_count, 0);
-        assert!(found.current_pid.is_none());
-        assert!(found.error_message.is_none());
-    }
-
-    #[tokio::test]
-    async fn reset_for_restart_preserves_resource_fields() {
-        let (_db, repo) = setup();
-        let id = repo.save(&new_issue(71)).await.expect("save");
-
-        // Set resource fields before cancelling
-        let mut issue = repo.find_by_id(id).await.expect("find").expect("exists");
-        issue.state = State::Cancelled;
-        issue.design_pr_number = Some(42);
-        issue.impl_pr_number = Some(99);
-        issue.worktree_path = Some("/tmp/worktrees/71".to_string());
-        issue.feature_name = "my-feature".to_string();
-        issue.retry_count = 3;
-        issue.error_message = Some("some error".to_string());
-        repo.update(&issue).await.expect("update");
-
-        repo.reset_for_restart(id).await.expect("reset");
-
-        let found = repo.find_by_id(id).await.expect("find").expect("exists");
-        // Transient fields reset
-        assert_eq!(found.state, State::Idle);
-        assert_eq!(found.retry_count, 0);
-        assert!(found.error_message.is_none());
-        // Resource fields preserved
-        assert_eq!(found.design_pr_number, Some(42));
-        assert_eq!(found.impl_pr_number, Some(99));
-        assert_eq!(found.worktree_path.as_deref(), Some("/tmp/worktrees/71"));
-        assert_eq!(found.feature_name, "my-feature");
+        assert_eq!(found.ci_fix_count, 2);
+        assert!(found.close_finished);
     }
 
     #[tokio::test]
@@ -554,295 +626,13 @@ mod tests {
             .await
             .expect("find_by_state");
         assert_eq!(cancelled.len(), 2);
-        let numbers: Vec<u64> = cancelled.iter().map(|i| i.github_issue_number).collect();
-        assert!(numbers.contains(&100));
-        assert!(numbers.contains(&101));
-        assert!(!numbers.contains(&102));
-    }
-
-    #[tokio::test]
-    async fn find_by_state_returns_empty_when_none_match() {
-        let (_db, repo) = setup();
-        repo.save(&new_issue(200)).await.expect("save");
-
-        let cancelled = repo
-            .find_by_state(State::Cancelled)
-            .await
-            .expect("find_by_state");
-        assert!(cancelled.is_empty());
-    }
-
-    #[tokio::test]
-    async fn fixing_causes_persist_and_load() {
-        use crate::domain::fixing_problem_kind::FixingProblemKind;
-
-        let (_db, repo) = setup();
-        let id = repo.save(&new_issue(80)).await.expect("save");
-
-        let mut issue = repo.find_by_id(id).await.expect("find").expect("exists");
-        assert!(issue.fixing_causes.is_empty());
-
-        issue.fixing_causes = vec![FixingProblemKind::CiFailure, FixingProblemKind::Conflict];
-        repo.update(&issue).await.expect("update");
-
-        let found = repo.find_by_id(id).await.expect("find").expect("exists");
-        assert_eq!(found.fixing_causes.len(), 2);
-        assert_eq!(found.fixing_causes[0], FixingProblemKind::CiFailure);
-        assert_eq!(found.fixing_causes[1], FixingProblemKind::Conflict);
     }
 
     #[test]
-    fn state_roundtrip() {
-        let states = [
-            State::Idle,
-            State::Initialized,
-            State::DesignRunning,
-            State::DesignReviewWaiting,
-            State::DesignFixing,
-            State::ImplementationRunning,
-            State::ImplementationReviewWaiting,
-            State::ImplementationFixing,
-            State::Completed,
-            State::Cancelled,
-        ];
-        for state in states {
-            assert_eq!(str_to_state(0, state_to_str(&state)).unwrap(), state);
+    fn state_roundtrip_includes_initialize_running() {
+        for s in crate::domain::state::State::all() {
+            let displayed = s.to_string();
+            assert_eq!(str_to_state(0, &displayed).unwrap(), s);
         }
-    }
-
-    #[test]
-    fn str_to_state_known_states() {
-        let cases = [
-            ("idle", State::Idle),
-            ("initialized", State::Initialized),
-            ("design_running", State::DesignRunning),
-            ("design_review_waiting", State::DesignReviewWaiting),
-            ("design_fixing", State::DesignFixing),
-            ("implementation_running", State::ImplementationRunning),
-            (
-                "implementation_review_waiting",
-                State::ImplementationReviewWaiting,
-            ),
-            ("implementation_fixing", State::ImplementationFixing),
-            ("completed", State::Completed),
-            ("cancelled", State::Cancelled),
-        ];
-        for (s, expected) in cases {
-            assert_eq!(str_to_state(2, s).expect(s), expected);
-        }
-    }
-
-    #[test]
-    fn str_to_state_unknown_returns_err() {
-        assert!(str_to_state(2, "unknown_state").is_err());
-        assert!(str_to_state(2, "").is_err());
-        assert!(str_to_state(2, "IDLE").is_err());
-    }
-
-    #[test]
-    fn task_weight_roundtrip() {
-        let weights = [TaskWeight::Light, TaskWeight::Medium, TaskWeight::Heavy];
-        for weight in weights {
-            assert_eq!(
-                str_to_task_weight(0, task_weight_to_str(weight)).unwrap(),
-                weight
-            );
-        }
-    }
-
-    #[test]
-    fn str_to_task_weight_unknown_returns_err() {
-        assert!(str_to_task_weight(10, "unknown").is_err());
-        assert!(str_to_task_weight(10, "").is_err());
-        assert!(str_to_task_weight(10, "MEDIUM").is_err());
-    }
-
-    #[tokio::test]
-    async fn weight_persists_and_loads() {
-        let (_db, repo) = setup();
-
-        let mut issue = new_issue(500);
-        issue.weight = TaskWeight::Heavy;
-        let id = repo.save(&issue).await.expect("save");
-
-        let found = repo.find_by_id(id).await.expect("find").expect("exists");
-        assert_eq!(found.weight, TaskWeight::Heavy);
-
-        // Update to Light
-        let mut loaded = found;
-        loaded.weight = TaskWeight::Light;
-        repo.update(&loaded).await.expect("update");
-
-        let found2 = repo.find_by_id(id).await.expect("find").expect("exists");
-        assert_eq!(found2.weight, TaskWeight::Light);
-    }
-
-    #[tokio::test]
-    async fn unknown_weight_in_db_returns_err() {
-        let (db, repo) = setup();
-        {
-            let conn = db.conn().lock().expect("lock");
-            conn.execute(
-                "INSERT INTO issues (github_issue_number, state, weight, fixing_causes, created_at, updated_at)
-                 VALUES (999, 'idle', 'unknown_weight', '[]', datetime('now'), datetime('now'))",
-                [],
-            )
-            .expect("insert corrupt row");
-        }
-
-        let result = repo.find_by_issue_number(999).await;
-        assert!(result.is_err(), "unknown weight should return Err");
-    }
-
-    #[test]
-    fn parse_sqlite_datetime_valid() {
-        let result = parse_sqlite_datetime(12, "2024-01-15 10:30:00");
-        assert!(result.is_ok());
-        let dt = result.unwrap();
-        assert_eq!(
-            dt.format("%Y-%m-%d %H:%M:%S").to_string(),
-            "2024-01-15 10:30:00"
-        );
-    }
-
-    #[test]
-    fn parse_sqlite_datetime_invalid() {
-        assert!(parse_sqlite_datetime(12, "not-a-date").is_err());
-        assert!(parse_sqlite_datetime(12, "").is_err());
-        assert!(parse_sqlite_datetime(12, "2024/01/15 10:30:00").is_err());
-    }
-
-    #[tokio::test]
-    async fn find_active_with_corrupt_state_returns_err() {
-        let (db, repo) = setup();
-        {
-            let conn = db.conn().lock().expect("lock");
-            conn.execute(
-                "INSERT INTO issues (github_issue_number, state, weight, fixing_causes, created_at, updated_at)
-                 VALUES (998, 'unknown_corrupt_state', 'medium', '[]', datetime('now'), datetime('now'))",
-                [],
-            )
-            .expect("insert corrupt row");
-        }
-
-        let result = repo.find_active().await;
-        assert!(
-            result.is_err(),
-            "find_active should return Err for corrupt state"
-        );
-    }
-
-    #[tokio::test]
-    async fn find_active_with_corrupt_fixing_causes_returns_err() {
-        let (db, repo) = setup();
-        {
-            let conn = db.conn().lock().expect("lock");
-            conn.execute(
-                "INSERT INTO issues (github_issue_number, state, weight, fixing_causes, created_at, updated_at)
-                 VALUES (997, 'idle', 'medium', 'not_json', datetime('now'), datetime('now'))",
-                [],
-            )
-            .expect("insert corrupt row");
-        }
-
-        let result = repo.find_active().await;
-        assert!(
-            result.is_err(),
-            "find_active should return Err for corrupt fixing_causes"
-        );
-    }
-
-    #[tokio::test]
-    async fn ci_fix_count_persists_and_loads() {
-        let (_db, repo) = setup();
-        let id = repo.save(&new_issue(400)).await.expect("save");
-
-        let mut issue = repo.find_by_id(id).await.expect("find").expect("exists");
-        assert_eq!(issue.ci_fix_count, 0);
-
-        issue.ci_fix_count = 2;
-        repo.update(&issue).await.expect("update");
-
-        let found = repo.find_by_id(id).await.expect("find").expect("exists");
-        assert_eq!(found.ci_fix_count, 2);
-    }
-
-    #[tokio::test]
-    async fn ci_fix_count_default_is_zero_on_save() {
-        let (_db, repo) = setup();
-        let id = repo.save(&new_issue(401)).await.expect("save");
-
-        let found = repo.find_by_id(id).await.expect("find").expect("exists");
-        assert_eq!(found.ci_fix_count, 0);
-    }
-
-    #[test]
-    fn migration_adds_ci_fix_count_column_to_existing_db() {
-        let db = SqliteConnection::open_in_memory().expect("should open");
-        let conn = db.conn().lock().expect("mutex");
-
-        // Create a legacy issues table without ci_fix_count column
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS issues (
-                id                  INTEGER PRIMARY KEY,
-                github_issue_number INTEGER UNIQUE NOT NULL,
-                state               TEXT NOT NULL DEFAULT 'idle',
-                design_pr_number    INTEGER,
-                impl_pr_number      INTEGER,
-                worktree_path       TEXT,
-                retry_count         INTEGER NOT NULL DEFAULT 0,
-                current_pid         INTEGER,
-                created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
-                error_message       TEXT,
-                feature_name        TEXT,
-                weight              TEXT NOT NULL DEFAULT 'medium',
-                fixing_causes       TEXT NOT NULL DEFAULT '[]'
-            );",
-        )
-        .expect("create legacy table");
-
-        conn.execute(
-            "INSERT INTO issues (github_issue_number, state) VALUES (1, 'idle')",
-            [],
-        )
-        .expect("insert");
-
-        drop(conn);
-
-        db.init_schema().expect("migration should succeed");
-
-        let conn = db.conn().lock().expect("mutex");
-        let ci_fix_count: i64 = conn
-            .query_row(
-                "SELECT ci_fix_count FROM issues WHERE github_issue_number = 1",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query");
-        assert_eq!(
-            ci_fix_count, 0,
-            "existing record should have default ci_fix_count 0"
-        );
-    }
-
-    #[tokio::test]
-    async fn reset_for_restart_clears_fixing_causes() {
-        use crate::domain::fixing_problem_kind::FixingProblemKind;
-
-        let (_db, repo) = setup();
-        let id = repo.save(&new_issue(300)).await.expect("save");
-
-        let mut issue = repo.find_by_id(id).await.expect("find").expect("exists");
-        issue.fixing_causes = vec![FixingProblemKind::CiFailure];
-        repo.update(&issue).await.expect("update");
-
-        repo.reset_for_restart(id).await.expect("reset");
-
-        let found = repo.find_by_id(id).await.expect("find").expect("exists");
-        assert!(
-            found.fixing_causes.is_empty(),
-            "fixing_causes should be empty after reset"
-        );
     }
 }

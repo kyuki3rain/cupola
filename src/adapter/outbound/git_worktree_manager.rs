@@ -5,6 +5,7 @@ use anyhow::{Context, Result, anyhow};
 
 use crate::application::port::git_worktree::{GitWorktree, MergeConflictError};
 
+#[derive(Clone)]
 pub struct GitWorktreeManager {
     repo_root: std::path::PathBuf,
 }
@@ -511,6 +512,217 @@ mod tests {
         assert!(
             result.unwrap_err().is::<MergeConflictError>(),
             "conflicting merge should return MergeConflictError"
+        );
+    }
+
+    /// T-4.WT.1: fetch_and_merge — conflict path returns Ok (merge state left for Claude to resolve).
+    /// This mirrors merge_conflict_returns_err but uses the public fetch+merge sequence.
+    #[test]
+    fn t_4_wt_1_fetch_and_merge_conflict_returns_ok() {
+        // Set up a bare origin repo
+        let origin_dir = tempfile::tempdir().unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "--bare"])
+                .current_dir(origin_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        // Set up local repo
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_git_repo(repo_dir.path());
+        set_initial_branch_main(repo_dir.path());
+        assert!(
+            Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    origin_dir.path().to_str().unwrap()
+                ])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        make_commit(repo_dir.path(), "conflict.txt", "original", "init");
+        assert!(
+            Command::new("git")
+                .args(["push", "-u", "origin", "main"])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        // Create feature branch with conflicting change
+        assert!(
+            Command::new("git")
+                .args(["checkout", "-b", "feature"])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        make_commit(repo_dir.path(), "conflict.txt", "feature version", "feat");
+
+        // Push conflicting commit to origin/main
+        let other_dir = tempfile::tempdir().unwrap();
+        init_git_repo(other_dir.path());
+        assert!(
+            Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    origin_dir.path().to_str().unwrap()
+                ])
+                .current_dir(other_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["fetch", "origin"])
+                .current_dir(other_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["checkout", "-b", "main", "origin/main"])
+                .current_dir(other_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        make_commit(
+            other_dir.path(),
+            "conflict.txt",
+            "main version (different)",
+            "main change",
+        );
+        assert!(
+            Command::new("git")
+                .args(["push", "origin", "main"])
+                .current_dir(other_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        // The GitWorktreeManager fetch+merge:
+        // merge() returns MergeConflictError on conflict (which callers treat as Ok for Claude resolution)
+        let mgr = GitWorktreeManager::new(repo_dir.path());
+        mgr.fetch().expect("fetch should succeed");
+        let result = mgr.merge(repo_dir.path(), "main");
+        // Conflict → MergeConflictError (caller in execute.rs logs warn and proceeds)
+        assert!(
+            result.is_err(),
+            "conflict should return error that caller can handle"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.is::<MergeConflictError>(),
+            "should be MergeConflictError specifically"
+        );
+    }
+
+    /// T-4.WT.2: checkout + pull chain on clean worktree.
+    #[test]
+    fn t_4_wt_2_checkout_and_pull_on_clean_worktree() {
+        // Set up bare origin and clone
+        let origin_dir = tempfile::tempdir().unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "--bare"])
+                .current_dir(origin_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_git_repo(repo_dir.path());
+        set_initial_branch_main(repo_dir.path());
+        assert!(
+            Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    origin_dir.path().to_str().unwrap()
+                ])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        make_commit(repo_dir.path(), "init.txt", "init content", "init");
+        assert!(
+            Command::new("git")
+                .args(["push", "-u", "origin", "main"])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        // Create a feature branch
+        assert!(
+            Command::new("git")
+                .args(["checkout", "-b", "feature"])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        make_commit(repo_dir.path(), "feature.txt", "feature", "feature");
+        assert!(
+            Command::new("git")
+                .args(["push", "-u", "origin", "feature"])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        // Switch back to main and test checkout+pull
+        assert!(
+            Command::new("git")
+                .args(["checkout", "main"])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let mgr = GitWorktreeManager::new(repo_dir.path());
+        // checkout to feature branch
+        let co_result = mgr.checkout(repo_dir.path(), "feature");
+        assert!(co_result.is_ok(), "checkout should succeed: {co_result:?}");
+        // pull should succeed (already up to date)
+        let pull_result = mgr.pull(repo_dir.path());
+        assert!(pull_result.is_ok(), "pull should succeed: {pull_result:?}");
+    }
+
+    /// T-4.WT.3: delete_branch is idempotent on missing branch.
+    #[test]
+    fn t_4_wt_3_delete_branch_idempotent_on_missing() {
+        let mgr = GitWorktreeManager::new("/tmp");
+        let result1 = mgr.delete_branch("nonexistent-branch-xyz-abc");
+        let result2 = mgr.delete_branch("nonexistent-branch-xyz-abc");
+        assert!(
+            result1.is_ok(),
+            "first delete of missing branch should succeed"
+        );
+        assert!(
+            result2.is_ok(),
+            "second delete of missing branch should succeed"
         );
     }
 }

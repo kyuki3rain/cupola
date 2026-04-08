@@ -10,3 +10,4 @@ pub mod process_command_runner;
 pub mod sqlite_connection;
 pub mod sqlite_execution_log_repository;
 pub mod sqlite_issue_repository;
+pub mod sqlite_process_run_repository;

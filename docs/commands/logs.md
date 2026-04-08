@@ -20,7 +20,8 @@
 
 ## ログファイルの選び方
 
-- 対象ディレクトリ内の通常ファイルのうち、ファイル名が `cupola.` で始まるものだけを見る
+- 対象ディレクトリ直下の**通常ファイル**のうち、ファイル名が `cupola.` で始まるものだけを見る
+- サブディレクトリは再帰しない（特に `.cupola/logs/process-runs/` は意図的に除外対象。これは Resolve が書き出す Claude プロセス個別の stdout/stderr 保管場所であり、`cupola logs` の対象ではない。詳細は [architecture/polling-loop.md の Resolve 節](../architecture/polling-loop.md#resolve) を参照）
 - それらをファイル名の辞書順でソートし、最後の 1 件を「最新」とみなす
 
 現行 logging 実装は日次ローテーションで `cupola.YYYY-MM-DD` を作るため、この選び方と整合する。

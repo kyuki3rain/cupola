@@ -68,7 +68,7 @@ mod tests {
     fn from_state_non_spawn_states_return_none() {
         let non_spawn = [
             State::Idle,
-            State::Initialized,
+            State::InitializeRunning,
             State::DesignReviewWaiting,
             State::ImplementationReviewWaiting,
             State::Completed,

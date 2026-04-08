@@ -17,6 +17,8 @@ struct SessionEntry {
     stdout_handle: Option<JoinHandle<String>>,
     stderr_handle: Option<JoinHandle<String>>,
     log_id: i64,
+    /// ProcessRun id (Phase 3+); 0 if not yet set.
+    run_id: i64,
 }
 
 pub struct ExitedSession {
@@ -25,6 +27,8 @@ pub struct ExitedSession {
     pub stdout: String,
     pub stderr: String,
     pub log_id: i64,
+    /// ProcessRun id that owns this session (0 if not used).
+    pub run_id: i64,
     /// The issue state at the time this session was registered.
     pub registered_state: State,
 }
@@ -72,6 +76,7 @@ impl SessionManager {
                 stdout_handle,
                 stderr_handle,
                 log_id: 0,
+                run_id: 0,
             },
         );
     }
@@ -122,6 +127,7 @@ impl SessionManager {
                     stdout,
                     stderr,
                     log_id: entry.log_id,
+                    run_id: entry.run_id,
                     registered_state: entry.registered_state,
                 });
             }
@@ -154,6 +160,12 @@ impl SessionManager {
     pub fn update_log_id(&mut self, issue_id: i64, log_id: i64) {
         if let Some(entry) = self.sessions.get_mut(&issue_id) {
             entry.log_id = log_id;
+        }
+    }
+
+    pub fn update_run_id(&mut self, issue_id: i64, run_id: i64) {
+        if let Some(entry) = self.sessions.get_mut(&issue_id) {
+            entry.run_id = run_id;
         }
     }
 

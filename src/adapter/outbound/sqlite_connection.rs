@@ -47,22 +47,35 @@ impl SqliteConnection {
             .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS issues (
-                id                  INTEGER PRIMARY KEY,
-                github_issue_number INTEGER UNIQUE NOT NULL,
-                state               TEXT NOT NULL DEFAULT 'idle',
-                design_pr_number    INTEGER,
-                impl_pr_number      INTEGER,
-                worktree_path       TEXT,
-                retry_count         INTEGER NOT NULL DEFAULT 0,
-                current_pid         INTEGER,
-                created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
-                error_message       TEXT,
-                feature_name        TEXT,
-                weight              TEXT NOT NULL DEFAULT 'medium',
-                fixing_causes       TEXT NOT NULL DEFAULT '[]',
-                ci_fix_count        INTEGER NOT NULL DEFAULT 0
+                id                          INTEGER PRIMARY KEY,
+                github_issue_number         INTEGER UNIQUE NOT NULL,
+                state                       TEXT NOT NULL DEFAULT 'idle',
+                feature_name                TEXT,
+                weight                      TEXT NOT NULL DEFAULT 'medium',
+                worktree_path               TEXT,
+                ci_fix_count                INTEGER NOT NULL DEFAULT 0,
+                close_finished              INTEGER NOT NULL DEFAULT 0,
+                consecutive_failures_epoch  TEXT,
+                created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at                  TEXT NOT NULL DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS process_runs (
+                id           INTEGER PRIMARY KEY,
+                issue_id     INTEGER NOT NULL REFERENCES issues(id),
+                type         TEXT NOT NULL,
+                idx          INTEGER NOT NULL DEFAULT 0,
+                state        TEXT NOT NULL DEFAULT 'running',
+                pid          INTEGER,
+                pr_number    INTEGER,
+                causes       TEXT NOT NULL DEFAULT '[]',
+                error_message TEXT,
+                started_at   TEXT NOT NULL DEFAULT (datetime('now')),
+                finished_at  TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_process_runs_issue_id
+                ON process_runs(issue_id);
 
             CREATE TABLE IF NOT EXISTS execution_log (
                 id                INTEGER PRIMARY KEY,
@@ -80,19 +93,21 @@ impl SqliteConnection {
         )
         .context("failed to initialize SQLite schema")?;
 
-        // Migration: add feature_name column for existing databases
+        // Migrations for existing databases
+        // Add new columns to issues table if they don't exist
         Self::run_add_column_migration(&conn, "feature_name TEXT")?;
-
-        // Migration: add weight column for existing databases (replaces model)
         Self::run_add_column_migration(&conn, "weight TEXT NOT NULL DEFAULT 'medium'")?;
-
-        // Migration: add fixing_causes column for existing databases
-        Self::run_add_column_migration(&conn, "fixing_causes TEXT NOT NULL DEFAULT '[]'")?;
-
-        // Migration: add ci_fix_count column for existing databases
         Self::run_add_column_migration(&conn, "ci_fix_count INTEGER NOT NULL DEFAULT 0")?;
+        Self::run_add_column_migration(&conn, "close_finished INTEGER NOT NULL DEFAULT 0")?;
+        Self::run_add_column_migration(&conn, "consecutive_failures_epoch TEXT")?;
 
-        // Migration: backfill NULL feature_name with deterministic issue-{number}
+        // Migration: rename 'initialized' state to 'initialize_running'
+        conn.execute_batch(
+            "UPDATE issues SET state = 'initialize_running' WHERE state = 'initialized';",
+        )
+        .context("failed to migrate initialized -> initialize_running")?;
+
+        // Migration: backfill NULL feature_name
         conn.execute_batch(
             "UPDATE issues SET feature_name = 'issue-' || github_issue_number WHERE feature_name IS NULL;"
         ).context("failed to backfill feature_name")?;
