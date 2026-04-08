@@ -1084,9 +1084,36 @@ def phase_4_retry_and_cleanup(ctx: Context) -> None:
 # ----------------------------------------------------------------------------- #
 
 
+def _drain_other_agent_ready(ctx: Context) -> None:
+    """Remove agent:ready from every other open labeled issue.
+
+    When --reuse-repo inherits a repo where an earlier phase left an open
+    agent:ready issue behind (e.g. phase_5 aborted before cancel), cupola
+    will re-discover that issue and consume the single concurrent session
+    slot, starving the issue this phase is about to create. Drop the label
+    so cupola stops processing them."""
+    data = json.loads(sh_ok([
+        "gh", "issue", "list", "--repo", ctx.repo_full,
+        "--state", "open", "--label", "agent:ready",
+        "--json", "number", "--limit", "100",
+    ]))
+    for item in data:
+        n = item["number"]
+        log_info(f"Draining agent:ready from leftover open issue #{n}")
+        sh(["gh", "issue", "edit", str(n), "--repo", ctx.repo_full,
+            "--remove-label", "agent:ready"])
+
+
 def phase_5_orphan_recovery(ctx: Context) -> None:
     log_section("Phase 5: Orphan recovery")
-    _ensure_daemon(ctx)
+    # Isolation: stop daemon → drain labels → restart. Stopping first kills
+    # any in-flight Claude child for leftover issues so their process_runs
+    # rows go stale; the restart's orphan recovery marks them failed and
+    # frees the max_concurrent_sessions slot.
+    ctx.cupola("stop")
+    _drain_other_agent_ready(ctx)
+    daemon_start(ctx)
+    time.sleep(2)
 
     issue_n = None
 
@@ -1120,7 +1147,11 @@ def phase_5_orphan_recovery(ctx: Context) -> None:
                 orig_run_id = row[0]
                 return True
             return False
-        wait_until(pred, timeout=30, desc="design running row")
+        # The design process is spawned in the polling cycle *after* the
+        # state transitions to DesignRunning (decide_initialize_running
+        # emits no SpawnProcess; decide_design_running does on next tick),
+        # so we have to wait more than one polling_interval_secs (30s).
+        wait_until(pred, timeout=90, desc="design running row")
         log_info(f"ORIG_RUN_ID={orig_run_id}")
 
     ctx.check("CP-71", f"DB design process_run for #{issue_n} is running", cp71)
