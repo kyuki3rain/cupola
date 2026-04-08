@@ -78,6 +78,27 @@ fn go_cancelled_retry_exhausted(effects: &mut Vec<Effect>) -> State {
     State::Cancelled
 }
 
+/// If the impl PR is Merged, unconditionally transition to Completed.
+/// This must be checked *before* `issue_is_closed`, because GitHub auto-closes
+/// issues when a linked PR merges — without this short-circuit the next
+/// polling cycle would observe Closed and incorrectly cancel a successful run.
+fn try_complete_from_impl_merged(
+    snap: &WorldSnapshot,
+    effects: &mut Vec<Effect>,
+    metadata_updates: &mut MetadataUpdates,
+) -> Option<State> {
+    if let Some(impl_pr) = &snap.impl_pr
+        && impl_pr.state == PrState::Merged
+    {
+        effects.push(Effect::PostCompletedComment);
+        effects.push(Effect::CleanupWorktree);
+        effects.push(Effect::CloseIssue);
+        metadata_updates.ci_fix_count = Some(0);
+        return Some(State::Completed);
+    }
+    None
+}
+
 fn decide_idle(
     _prev: &Issue,
     snap: &WorldSnapshot,
@@ -357,6 +378,9 @@ fn decide_implementation_running(
     effects: &mut Vec<Effect>,
     metadata_updates: &mut MetadataUpdates,
 ) -> State {
+    if let Some(s) = try_complete_from_impl_merged(snap, effects, metadata_updates) {
+        return s;
+    }
     if issue_is_closed(snap) {
         return go_cancelled_issue_closed(effects);
     }
@@ -423,6 +447,9 @@ fn decide_implementation_review_waiting(
     effects: &mut Vec<Effect>,
     metadata_updates: &mut MetadataUpdates,
 ) -> State {
+    if let Some(s) = try_complete_from_impl_merged(snap, effects, metadata_updates) {
+        return s;
+    }
     if issue_is_closed(snap) {
         return go_cancelled_issue_closed(effects);
     }
@@ -482,6 +509,9 @@ fn decide_implementation_fixing(
     effects: &mut Vec<Effect>,
     metadata_updates: &mut MetadataUpdates,
 ) -> State {
+    if let Some(s) = try_complete_from_impl_merged(snap, effects, metadata_updates) {
+        return s;
+    }
     if issue_is_closed(snap) {
         return go_cancelled_issue_closed(effects);
     }
