@@ -108,6 +108,10 @@ fn decide_idle(
 ) -> State {
     if snap.github_issue.has_ready_label {
         if snap.github_issue.ready_label_trusted {
+            // Entry effect: the new state expects an init task to be running.
+            // Emit SpawnInit in the same cycle so there's no 1-tick lag
+            // between the state transition and the work starting.
+            effects.push(Effect::SpawnInit);
             State::InitializeRunning
         } else {
             effects.push(Effect::RejectUntrustedReadyIssue);
@@ -154,12 +158,20 @@ fn decide_initialize_running(
             if let Some(design_pr) = &snap.design_pr {
                 if design_pr.state == PrState::Merged {
                     metadata_updates.ci_fix_count = Some(0);
+                    effects.push(Effect::SpawnProcess {
+                        type_: ProcessRunType::Impl,
+                        causes: vec![],
+                    });
                     return State::ImplementationRunning;
                 }
                 if design_pr.state == PrState::Open {
                     return State::DesignReviewWaiting;
                 }
             }
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::Design,
+                causes: vec![],
+            });
             return State::DesignRunning;
         }
         // init.state == Running or Stale: emit SpawnInit if not running
@@ -208,6 +220,10 @@ fn decide_design_running(
         {
             if design_pr.state == PrState::Merged {
                 metadata_updates.ci_fix_count = Some(0);
+                effects.push(Effect::SpawnProcess {
+                    type_: ProcessRunType::Impl,
+                    causes: vec![],
+                });
                 return State::ImplementationRunning;
             }
             if design_pr.state == PrState::Closed {
@@ -255,10 +271,18 @@ fn decide_design_review_waiting(
     // Priority: merge > close > review > ci > conflict
     if design_pr.state == PrState::Merged {
         metadata_updates.ci_fix_count = Some(0);
+        effects.push(Effect::SpawnProcess {
+            type_: ProcessRunType::Impl,
+            causes: vec![],
+        });
         return State::ImplementationRunning;
     }
     if design_pr.state == PrState::Closed {
         metadata_updates.ci_fix_count = Some(0);
+        effects.push(Effect::SpawnProcess {
+            type_: ProcessRunType::Design,
+            causes: vec![],
+        });
         return State::DesignRunning;
     }
     if design_pr.has_review_comments {
@@ -312,10 +336,18 @@ fn decide_design_fixing(
     // PR state checks first
     if design_pr.state == PrState::Merged {
         metadata_updates.ci_fix_count = Some(0);
+        effects.push(Effect::SpawnProcess {
+            type_: ProcessRunType::Impl,
+            causes: vec![],
+        });
         return State::ImplementationRunning;
     }
     if design_pr.state == PrState::Closed {
         metadata_updates.ci_fix_count = Some(0);
+        effects.push(Effect::SpawnProcess {
+            type_: ProcessRunType::Design,
+            causes: vec![],
+        });
         return State::DesignRunning;
     }
 
@@ -703,7 +735,7 @@ mod tests {
         let snap = snap_with_ready_label(true);
         let d = decide(&issue, &snap, &cfg());
         assert_eq!(d.next_state, State::InitializeRunning);
-        assert!(d.effects.is_empty());
+        assert!(d.effects.contains(&Effect::SpawnInit));
     }
 
     /// T-1.D.idle.2
