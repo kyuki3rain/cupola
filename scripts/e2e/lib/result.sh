@@ -63,19 +63,22 @@ result_summary() {
     return 0
   fi
 
-  local pass_count=0 fail_count=0
+  local pass_count=0 fail_count=0 skip_count=0
   if command -v jq >/dev/null 2>&1; then
     pass_count=$(jq '[.scenarios[] | select(.status == "pass")] | length' "$result_file")
     fail_count=$(jq '[.scenarios[] | select(.status == "fail")] | length' "$result_file")
+    skip_count=$(jq '[.scenarios[] | select(.status == "skipped")] | length' "$result_file")
   else
     pass_count=$(grep -o '"status":"pass"' "$result_file" | wc -l | tr -d ' ')
     fail_count=$(grep -o '"status":"fail"' "$result_file" | wc -l | tr -d ' ')
+    skip_count=$(grep -o '"status":"skipped"' "$result_file" | wc -l | tr -d ' ')
   fi
 
-  local total=$((pass_count + fail_count))
+  local total=$((pass_count + fail_count + skip_count))
   log_section "Results"
-  printf "  Total:  %d\n" "$total" >&2
-  printf "  Passed: %d\n" "$pass_count" >&2
-  printf "  Failed: %d\n" "$fail_count" >&2
+  printf "  Total:   %d\n" "$total" >&2
+  printf "  Passed:  %d\n" "$pass_count" >&2
+  printf "  Failed:  %d\n" "$fail_count" >&2
+  printf "  Skipped: %d\n" "$skip_count" >&2
   printf "  Result: %s\n" "$RUN_DIR/result.json" >&2
 }
