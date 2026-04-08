@@ -18,6 +18,103 @@ use crate::domain::state::State;
 /// Longer stderr payloads are truncated; the full output remains in the log file.
 const STDERR_SNIPPET_MAX: usize = 512;
 
+/// Remove GitHub "closing keyword" references (e.g. `Closes #42`, `fixes owner/repo#5`)
+/// from a PR body. Used for **design PRs only** — merging a design PR must not auto-close
+/// the parent issue, because the issue lifecycle is owned by cupola (an impl PR merge
+/// is the legitimate close trigger, and the CloseIssue effect handles that path).
+///
+/// Matches the case-insensitive verbs GitHub recognises — close/closes/closed,
+/// fix/fixes/fixed, resolve/resolves/resolved — followed by an issue reference of
+/// the form `#N` or `owner/repo#N`. Non-issue sentences like "this closes the gap"
+/// are left alone because they lack a `#number`.
+fn strip_closing_keywords(body: &str) -> String {
+    const VERBS: &[&str] = &[
+        "closes", "closed", "close", "fixes", "fixed", "fix", "resolves", "resolved", "resolve",
+    ];
+
+    let bytes = body.as_bytes();
+    let lower: Vec<u8> = bytes.iter().map(u8::to_ascii_lowercase).collect();
+    let mut out: Vec<u8> = Vec::with_capacity(body.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        // Must start at a word boundary
+        let at_boundary = i == 0 || !lower[i - 1].is_ascii_alphanumeric();
+        let mut matched = None;
+        if at_boundary {
+            for verb in VERBS {
+                let vb = verb.as_bytes();
+                if i + vb.len() <= lower.len()
+                    && lower[i..i + vb.len()] == *vb
+                    && (i + vb.len() == lower.len() || !lower[i + vb.len()].is_ascii_alphanumeric())
+                {
+                    // Check for whitespace + optional owner/repo + # + digits
+                    let mut j = i + vb.len();
+                    let ws_start = j;
+                    while j < lower.len() && (lower[j] == b' ' || lower[j] == b'\t') {
+                        j += 1;
+                    }
+                    if j == ws_start {
+                        continue;
+                    }
+                    // Optional owner/repo: [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+
+                    let or_start = j;
+                    while j < lower.len()
+                        && (lower[j].is_ascii_alphanumeric()
+                            || matches!(lower[j], b'_' | b'.' | b'-'))
+                    {
+                        j += 1;
+                    }
+                    if j > or_start && j < lower.len() && lower[j] == b'/' {
+                        j += 1;
+                        let repo_start = j;
+                        while j < lower.len()
+                            && (lower[j].is_ascii_alphanumeric()
+                                || matches!(lower[j], b'_' | b'.' | b'-'))
+                        {
+                            j += 1;
+                        }
+                        if j == repo_start {
+                            continue;
+                        }
+                    } else {
+                        j = or_start;
+                    }
+                    if j >= lower.len() || lower[j] != b'#' {
+                        continue;
+                    }
+                    j += 1;
+                    let num_start = j;
+                    while j < lower.len() && lower[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                    if j == num_start {
+                        continue;
+                    }
+                    // Consume trailing punctuation + whitespace
+                    if j < lower.len() && matches!(lower[j], b',' | b'.' | b';' | b':') {
+                        j += 1;
+                    }
+                    while j < lower.len() && (lower[j] == b' ' || lower[j] == b'\t') {
+                        j += 1;
+                    }
+                    matched = Some(j);
+                    break;
+                }
+            }
+        }
+        if let Some(end) = matched {
+            i = end;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    // SAFETY boundary: we only skip full ASCII byte runs (verbs + ASCII separators
+    // + `#` + digits) and copy every other byte verbatim, so UTF-8 boundaries are
+    // preserved.
+    String::from_utf8(out).unwrap_or_else(|_| body.to_string())
+}
+
 /// Persist full stdout/stderr of a finished process to
 /// `.cupola/logs/process-runs/run-{run_id}-{stdout|stderr}.log` (best-effort).
 /// This is critical for debugging Claude failures where stderr may be empty
@@ -167,7 +264,15 @@ where
 
         let n = current_issue.github_issue_number;
         let feature = &current_issue.feature_name;
-        let (head_branch, base_branch) = if session.registered_state == State::DesignRunning {
+        let is_design = session.registered_state == State::DesignRunning;
+        // Design PRs must not carry "Closes #N" — the issue belongs to cupola's
+        // state machine; only an impl PR merge should close it.
+        let body = if is_design {
+            strip_closing_keywords(&body)
+        } else {
+            body
+        };
+        let (head_branch, base_branch) = if is_design {
             (
                 format!("cupola/{feature}/design"),
                 config.default_branch.clone(),
@@ -335,6 +440,49 @@ mod tests {
         let exited = mgr.collect_exited();
         assert_eq!(exited.len(), 1, "stalled process should have been killed");
         assert!(!exited[0].exit_status.success());
+    }
+
+    #[test]
+    fn strip_closing_keywords_removes_plain_ref() {
+        assert_eq!(strip_closing_keywords("Closes #42"), "");
+        assert_eq!(strip_closing_keywords("fixes #5 "), "");
+        assert_eq!(strip_closing_keywords("Resolved #7."), "");
+    }
+
+    #[test]
+    fn strip_closing_keywords_removes_cross_repo_ref() {
+        assert_eq!(strip_closing_keywords("Fixes owner/repo#5"), "");
+    }
+
+    #[test]
+    fn strip_closing_keywords_respects_word_boundary() {
+        assert_eq!(strip_closing_keywords("fix a bug"), "fix a bug");
+        assert_eq!(
+            strip_closing_keywords("prefixes #1 should match"),
+            "prefixes #1 should match"
+        );
+    }
+
+    #[test]
+    fn strip_closing_keywords_leaves_non_issue_sentences() {
+        let s = "This PR closes the design issue.";
+        assert_eq!(strip_closing_keywords(s), s);
+    }
+
+    #[test]
+    fn strip_closing_keywords_preserves_surrounding_text() {
+        assert_eq!(
+            strip_closing_keywords("Overview.\n\nCloses #12\n\nDetails"),
+            "Overview.\n\n\n\nDetails"
+        );
+    }
+
+    #[test]
+    fn strip_closing_keywords_preserves_non_ascii() {
+        assert_eq!(
+            strip_closing_keywords("設計PR. Closes #42 完了"),
+            "設計PR. 完了"
+        );
     }
 
     /// T-3.RS.2: kill_stalled does not kill fresh process
