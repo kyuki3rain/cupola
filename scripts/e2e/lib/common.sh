@@ -49,7 +49,8 @@ log_section() {
 # random3 — 3-char [a-z0-9]
 # ---------------------------------------------------------------------------
 random3() {
-  LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c 3
+  # Read a few bytes and filter; avoid `tr | head -c` which trips SIGPIPE under pipefail.
+  LC_ALL=C awk 'BEGIN{srand(); c="abcdefghijklmnopqrstuvwxyz0123456789"; for(i=0;i<3;i++) printf "%s", substr(c, int(rand()*36)+1, 1)}'
 }
 
 # ---------------------------------------------------------------------------

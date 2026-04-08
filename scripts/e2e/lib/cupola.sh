@@ -36,6 +36,19 @@ init_cupola() {
     "$tmpl_path" > "$toml_dest"
   log_info "cupola.toml rendered: $toml_dest"
 
+  # Seed a minimal steering file so `doctor` passes (init creates the dir empty).
+  local steering_dir="$TARGET_DIR/.cupola/steering"
+  mkdir -p "$steering_dir"
+  if [ -z "$(ls -A "$steering_dir" 2>/dev/null)" ]; then
+    cat > "$steering_dir/product.md" <<'EOF'
+# Product (E2E placeholder)
+
+Minimal steering file seeded by the E2E runner so `cupola doctor` passes.
+Target system: TypeScript TODO CLI.
+EOF
+    log_info "Seeded placeholder steering/product.md"
+  fi
+
   # Verify doctor
   local doctor_out
   if doctor_out=$("$CUPOLA_BIN" doctor 2>&1); then
@@ -60,12 +73,13 @@ wait_for_state() {
 
   local elapsed=0
   local interval=5
-  local last_status=""
+  local last_state=""
 
+  # Query DB directly — `status` only lists active (non-terminal) issues, so it
+  # cannot observe `completed` / `cancelled`. DB is the single source of truth.
   while [ "$elapsed" -lt "$timeout_secs" ]; do
-    last_status=$( (cd "$TARGET_DIR" && "$CUPOLA_BIN" status --all 2>&1) || true)
-    if printf '%s' "$last_status" | grep -q "#${issue_number}" && \
-       printf '%s' "$last_status" | grep "#${issue_number}" | grep -q "$expected_state"; then
+    last_state=$(sqlite_query "SELECT state FROM issues WHERE github_issue_number=${issue_number};" 2>/dev/null || true)
+    if [ "$last_state" = "$expected_state" ]; then
       log_info "State reached: #${issue_number} -> ${expected_state} (after ${elapsed}s)"
       return 0
     fi
@@ -74,8 +88,7 @@ wait_for_state() {
   done
 
   log_error "Timeout waiting for #${issue_number} to reach ${expected_state} (${timeout_secs}s elapsed)"
-  log_error "Last status output:"
-  printf '%s\n' "$last_status" >&2
+  log_error "Last observed DB state: '${last_state}'"
   return 1
 }
 
@@ -146,3 +159,6 @@ sqlite_query() {
   fi
   sqlite3 "$TARGET_DIR/.cupola/cupola.db" "$sql"
 }
+
+# Export helpers so `bash -c '...'` children in narrative.sh can call them.
+export -f wait_for_state wait_for_pr sqlite_query 2>/dev/null || true

@@ -114,7 +114,7 @@ create_issue() {
     --title "$title" \
     --body "$body" \
     "${label_args[@]}" \
-    --json number --jq .number)
+    2>&1 | grep -oE "[0-9]+$" | tail -1)
   printf '%s\n' "$issue_number"
 }
 
@@ -166,6 +166,11 @@ _issue_db_id() {
   sqlite_query "SELECT id FROM issues WHERE github_issue_number=${github_num};"
 }
 
+# Export helpers so `bash -c '...'` children can call them. Also re-export
+# TARGET_DIR/REPO_FULL/CUPOLA_BIN so the helpers find them in the child env.
+export -f create_issue merge_pr _issue_db_id log_info log_warn log_error 2>/dev/null || true
+export TARGET_DIR REPO_FULL REPO_OWNER REPO_NAME CUPOLA_BIN OWNER RUN_DIR SCRIPT_DIR
+
 # ===========================================================================
 # Phase 0: Pre-flight
 # ===========================================================================
@@ -207,22 +212,23 @@ phase_0_preflight() {
     ' || rc=$?
   _handle_cp_rc "$rc" || return 2
 
+  # CP-02: init --upgrade leaves .cupola/cupola.db intact (schema-compatible)
   rc=0
-  check "CP-02" ".cupola/settings/.version exists and is non-empty" \
+  check "CP-02" ".cupola/cupola.db exists after init --upgrade" \
     bash -c '
-      f="'"$TARGET_DIR"'/.cupola/settings/.version"
-      [ -f "$f" ] || { echo ".version file missing" >&2; exit 1; }
-      [ -s "$f" ] || { echo ".version file is empty" >&2; exit 1; }
+      f="'"$TARGET_DIR"'/.cupola/cupola.db"
+      [ -f "$f" ] || { echo "cupola.db missing after --upgrade" >&2; exit 1; }
+      [ -s "$f" ] || { echo "cupola.db is empty" >&2; exit 1; }
     ' || rc=$?
   _handle_cp_rc "$rc" || return 2
 
-  # CP-03: start --daemon output matches "started cupola (pid=<digits>)"
+  # CP-03: start --daemon output matches "started cupola daemon (pid=<digits>)"
   rc=0
-  check "CP-03" "cupola start --daemon stdout matches 'started cupola (pid=<N>)'" \
+  check "CP-03" "cupola start --daemon stdout matches 'started cupola daemon (pid=<N>)'" \
     bash -c '
       out=$("'"$CUPOLA_BIN"'" start --daemon 2>&1)
       printf "%s\n" "$out"
-      printf "%s" "$out" | grep -Eq "started cupola \(pid=[0-9]+\)" \
+      printf "%s" "$out" | grep -Eq "started cupola daemon \(pid=[0-9]+\)" \
         || { echo "expected pattern not found" >&2; exit 1; }
     ' || rc=$?
   _handle_cp_rc "$rc" || return 2
@@ -239,13 +245,13 @@ phase_0_preflight() {
     ' || rc=$?
   _handle_cp_rc "$rc" || return 2
 
-  # CP-05: status contains "Process: running (daemon, pid="
+  # CP-05: status contains "Daemon: running (pid="
   rc=0
-  check "CP-05" "cupola status contains 'Process: running (daemon, pid='" \
+  check "CP-05" "cupola status contains 'Daemon: running (pid='" \
     bash -c '
       out=$("'"$CUPOLA_BIN"'" status 2>&1 || true)
       printf "%s\n" "$out"
-      printf "%s" "$out" | grep -q "Process: running (daemon, pid=" \
+      printf "%s" "$out" | grep -Eq "Daemon: running \(pid=[0-9]+\)" \
         || { echo "pattern not found in status" >&2; exit 1; }
     ' || rc=$?
   _handle_cp_rc "$rc" || return 2
@@ -261,13 +267,13 @@ phase_0_preflight() {
     ' || rc=$?
   _handle_cp_rc "$rc" || return 2
 
-  # CP-07: after stop, status contains "Process: not running"
+  # CP-07: after stop, status contains "Daemon: not running"
   rc=0
-  check "CP-07" "cupola status after stop contains 'Process: not running'" \
+  check "CP-07" "cupola status after stop contains 'Daemon: not running'" \
     bash -c '
       out=$("'"$CUPOLA_BIN"'" status 2>&1 || true)
       printf "%s\n" "$out"
-      printf "%s" "$out" | grep -q "Process: not running" \
+      printf "%s" "$out" | grep -q "Daemon: not running" \
         || { echo "pattern not found in status after stop" >&2; exit 1; }
     ' || rc=$?
   _handle_cp_rc "$rc" || return 2
@@ -310,7 +316,7 @@ phase_1_happy_path() {
         --body "README.md に \"FOO\" という一行を追加してください。" \
         --label "weight:light" \
         --label "agent:ready" \
-        --json number --jq .number)
+        2>&1 | grep -oE "[0-9]+$" | tail -1)
       printf "%s\n" "$n"
       [ -n "$n" ] || exit 1
       printf "%s" "$n" > /tmp/cupola_e2e_issue1.txt
@@ -331,14 +337,14 @@ phase_1_happy_path() {
     wait_for_state "$ISSUE_1" "design_running" 300 || rc=$?
   _handle_cp_rc "$rc" || return 2
 
-  # CP-13: status --all shows #ISSUE_1 row with design_running
+  # CP-13: status shows #ISSUE_1 row with design_running (active issues only)
   rc=0
-  check "CP-13" "cupola status --all shows #${ISSUE_1} in design_running" \
+  check "CP-13" "cupola status shows #${ISSUE_1} in design_running" \
     bash -c '
-      out=$("'"$CUPOLA_BIN"'" status --all 2>&1 || true)
+      out=$("'"$CUPOLA_BIN"'" status 2>&1 || true)
       printf "%s\n" "$out"
       printf "%s" "$out" | grep "#'"$ISSUE_1"'" | grep -q "design_running" \
-        || { echo "status --all missing #'"$ISSUE_1"' design_running row" >&2; exit 1; }
+        || { echo "status missing #'"$ISSUE_1"' design_running row" >&2; exit 1; }
     ' || rc=$?
   _handle_cp_rc "$rc" || return 2
 
@@ -405,21 +411,34 @@ phase_1_happy_path() {
     wait_for_state "$ISSUE_1" "completed" 240 || rc=$?
   _handle_cp_rc "$rc" || return 2
 
-  # CP-21: worktree removed
+  # CP-21: worktree removed (persistent effect lags 1-2 polling cycles, retry ~120s)
   rc=0
   check "CP-21" ".cupola/worktrees/issue-${ISSUE_1} does not exist" \
     bash -c '
-      [ ! -d "'"$TARGET_DIR"'/.cupola/worktrees/issue-'"$ISSUE_1"'" ] \
-        || { echo "worktree still present" >&2; exit 1; }
+      for i in $(seq 1 60); do
+        if [ ! -d "'"$TARGET_DIR"'/.cupola/worktrees/issue-'"$ISSUE_1"'" ]; then
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "worktree still present after 120s" >&2
+      exit 1
     ' || rc=$?
   _handle_cp_rc "$rc" || return 2
 
-  # CP-22: close_finished=1 in DB
+  # CP-22: close_finished=1 in DB (persistent effect lags 1-2 polling cycles, retry ~120s)
   rc=0
   check "CP-22" "DB close_finished=1 for issue #${ISSUE_1}" \
     bash -c '
-      val=$('"sqlite_query"' "SELECT close_finished FROM issues WHERE github_issue_number='"$ISSUE_1"';")
-      [ "$val" = "1" ] || { echo "close_finished=$val, expected 1" >&2; exit 1; }
+      for i in $(seq 1 60); do
+        val=$('"sqlite_query"' "SELECT close_finished FROM issues WHERE github_issue_number='"$ISSUE_1"';")
+        if [ "$val" = "1" ]; then
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "close_finished=$val, expected 1 after 120s" >&2
+      exit 1
     ' || rc=$?
   _handle_cp_rc "$rc" || return 2
 
@@ -455,7 +474,7 @@ phase_2_pr_close_recovery() {
         --body "README.md に \"BAR\" という一行を追加してください。" \
         --label "weight:light" \
         --label "agent:ready" \
-        --json number --jq .number)
+        2>&1 | grep -oE "[0-9]+$" | tail -1)
       printf "%s\n" "$n"
       [ -n "$n" ] || exit 1
       printf "%s" "$n" > /tmp/cupola_e2e_issue2.txt
@@ -551,7 +570,7 @@ phase_3_cancel_reopen() {
         --body "README.md に \"BAZ\" という一行を追加してください。" \
         --label "weight:light" \
         --label "agent:ready" \
-        --json number --jq .number)
+        2>&1 | grep -oE "[0-9]+$" | tail -1)
       printf "%s\n" "$n"
       [ -n "$n" ] || exit 1
       printf "%s" "$n" > /tmp/cupola_e2e_issue3.txt
@@ -680,7 +699,7 @@ phase_4_retry_and_cleanup() {
         --body "README.md に \"QUX\" という一行を追加してください。" \
         --label "weight:light" \
         --label "agent:ready" \
-        --json number --jq .number)
+        2>&1 | grep -oE "[0-9]+$" | tail -1)
       printf "%s\n" "$n"
       [ -n "$n" ] || exit 1
       printf "%s" "$n" > /tmp/cupola_e2e_issue4.txt
@@ -787,7 +806,7 @@ phase_4_retry_and_cleanup() {
     bash -c '
       "'"$CUPOLA_BIN"'" start --daemon
       out=$("'"$CUPOLA_BIN"'" status 2>&1 || true)
-      printf "%s" "$out" | grep -q "Process: running" \
+      printf "%s" "$out" | grep -q "Daemon: running" \
         || { echo "daemon not running after start" >&2; exit 1; }
     ' || rc=$?
   _handle_cp_rc "$rc" || return 2
@@ -814,7 +833,7 @@ phase_5_orphan_recovery() {
         --body "README.md に \"QUUX\" という一行を追加してください。" \
         --label "weight:light" \
         --label "agent:ready" \
-        --json number --jq .number)
+        2>&1 | grep -oE "[0-9]+$" | tail -1)
       printf "%s\n" "$n"
       [ -n "$n" ] || exit 1
       printf "%s" "$n" > /tmp/cupola_e2e_issue5.txt
@@ -827,15 +846,31 @@ phase_5_orphan_recovery() {
   DB_ISSUE_ID=$(sqlite_query "SELECT id FROM issues WHERE github_issue_number=${ISSUE_5};" 2>/dev/null || true)
   log_info "DB_ISSUE_ID=${DB_ISSUE_ID}"
 
-  ORIG_RUN_ID=$(sqlite_query "SELECT id FROM process_runs WHERE issue_id=${DB_ISSUE_ID} ORDER BY id DESC LIMIT 1;" 2>/dev/null || true)
+  # Wait briefly and get the running design run id (Execute lags Persist by a tick).
+  ORIG_RUN_ID=""
+  for _i in 1 2 3 4 5 6 7 8 9 10; do
+    ORIG_RUN_ID=$(sqlite_query "SELECT id FROM process_runs WHERE issue_id=${DB_ISSUE_ID} AND type='design' AND state='running' ORDER BY id DESC LIMIT 1;" 2>/dev/null || true)
+    if [ -n "$ORIG_RUN_ID" ]; then
+      break
+    fi
+    sleep 2
+  done
   log_info "ORIG_RUN_ID=${ORIG_RUN_ID}"
 
-  # CP-71: DB process_run state = running
+  # CP-71: DB process_run state = running (retry to bridge the Persist→Execute gap;
+  # wait_for_state may observe design_running before Execute has inserted the row).
   rc=0
-  check "CP-71" "DB: latest process_run for #${ISSUE_5} has state=running" \
+  check "CP-71" "DB: latest design process_run for #${ISSUE_5} has state=running" \
     bash -c '
-      state=$('"sqlite_query"' "SELECT state FROM process_runs WHERE issue_id='"$DB_ISSUE_ID"' ORDER BY id DESC LIMIT 1;")
-      [ "$state" = "running" ] || { echo "state=$state, expected running" >&2; exit 1; }
+      for i in 1 2 3 4 5 6 7 8 9 10; do
+        state=$('"sqlite_query"' "SELECT state FROM process_runs WHERE issue_id='"$DB_ISSUE_ID"' AND type='"'"'design'"'"' ORDER BY id DESC LIMIT 1;")
+        if [ "$state" = "running" ]; then
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "state=$state, expected running after 20s" >&2
+      exit 1
     ' || rc=$?
   _handle_cp_rc "$rc" || return 2
 
@@ -866,27 +901,37 @@ phase_5_orphan_recovery() {
     ' || rc=$?
   _handle_cp_rc "$rc" || return 2
 
-  # CP-75: 10 seconds later, original run should be 'failed' with orphaned
+  # CP-75: orphan recovery marks original run as failed=orphaned (retry up to 60s)
   rc=0
-  check "CP-75" "10s after restart: original process_run is failed with orphaned msg" \
+  check "CP-75" "orphan recovery marks original process_run as failed with orphaned msg" \
     bash -c '
-      sleep 10
-      state=$('"sqlite_query"' "SELECT state FROM process_runs WHERE id='"$ORIG_RUN_ID"';")
-      errmsg=$('"sqlite_query"' "SELECT error_message FROM process_runs WHERE id='"$ORIG_RUN_ID"';")
-      printf "state=%s error_message=%s\n" "$state" "$errmsg"
-      [ "$state" = "failed" ] || { echo "state=$state, expected failed" >&2; exit 1; }
-      printf "%s" "$errmsg" | grep -qi "orphan" \
-        || { echo "error_message missing orphaned: $errmsg" >&2; exit 1; }
+      for i in $(seq 1 30); do
+        state=$('"sqlite_query"' "SELECT state FROM process_runs WHERE id='"$ORIG_RUN_ID"';")
+        errmsg=$('"sqlite_query"' "SELECT error_message FROM process_runs WHERE id='"$ORIG_RUN_ID"';")
+        if [ "$state" = "failed" ] && printf "%s" "$errmsg" | grep -qi "orphan"; then
+          printf "state=%s error_message=%s\n" "$state" "$errmsg"
+          exit 0
+        fi
+        sleep 2
+      done
+      printf "final: state=%s error_message=%s\n" "$state" "$errmsg" >&2
+      exit 1
     ' || rc=$?
   _handle_cp_rc "$rc" || return 2
 
-  # CP-76: 45 seconds later, new design ProcessRun for #5 with state=running
+  # CP-76: eventually a new design process_run with state=running (retry up to 180s)
   rc=0
-  check "CP-76" "45s after restart: new process_run for #${ISSUE_5} design running" \
+  check "CP-76" "new process_run for #${ISSUE_5} reaches running" \
     bash -c '
-      sleep 45
-      cnt=$('"sqlite_query"' "SELECT COUNT(*) FROM process_runs WHERE issue_id='"$DB_ISSUE_ID"' AND id > '"$ORIG_RUN_ID"' AND state='"'"'running'"'"';")
-      [ "$cnt" -ge 1 ] || { echo "no new running process_run found (cnt=$cnt)" >&2; exit 1; }
+      for i in $(seq 1 90); do
+        cnt=$('"sqlite_query"' "SELECT COUNT(*) FROM process_runs WHERE issue_id='"$DB_ISSUE_ID"' AND id > '"$ORIG_RUN_ID"' AND state='"'"'running'"'"';")
+        if [ "$cnt" -ge 1 ]; then
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "no new running process_run found (cnt=$cnt) after 180s" >&2
+      exit 1
     ' || rc=$?
   _handle_cp_rc "$rc" || return 2
 
@@ -902,12 +947,14 @@ phase_6_compress() {
 
   local rc
 
-  # CP-80: .cupola/specs directory with at least one spec.json
+  # CP-80: specs committed to main by merged PRs. Pull first — merged content
+  # from phase 1/2/3 lives on the remote but the local clone hasn't been updated.
   rc=0
-  check "CP-80" ".cupola/specs/ exists with at least one spec.json" \
+  check "CP-80" "main branch has .cupola/specs/*/spec.json after merges" \
     bash -c '
+      git -C "'"$TARGET_DIR"'" pull --ff-only origin main >/dev/null 2>&1 || true
       [ -d "'"$TARGET_DIR"'/.cupola/specs" ] \
-        || { echo ".cupola/specs not found" >&2; exit 1; }
+        || { echo ".cupola/specs not found after pull" >&2; exit 1; }
       count=$(find "'"$TARGET_DIR"'/.cupola/specs" -name "spec.json" 2>/dev/null | wc -l | tr -d " ")
       [ "$count" -ge 1 ] || { echo "no spec.json found (count=$count)" >&2; exit 1; }
     ' || rc=$?

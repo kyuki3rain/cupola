@@ -73,14 +73,12 @@ ensure_prereqs() {
     exit 1
   fi
 
-  # 8. Build cupola binary if needed
-  if [ ! -f "$PWD/target/release/cupola" ]; then
-    log_info "cupola binary not found. Building..."
-    if [ "$has_devbox" -eq 1 ]; then
-      devbox run -- cargo build --release
-    else
-      cargo build --release
-    fi
+  # 8. Build cupola binary (cargo no-ops if already up to date)
+  log_info "Ensuring cupola release binary is up to date..."
+  if [ "$has_devbox" -eq 1 ]; then
+    devbox run -- cargo build --release >/dev/null
+  else
+    cargo build --release >/dev/null
   fi
   export CUPOLA_BIN="$PWD/target/release/cupola"
   log_info "CUPOLA_BIN: $CUPOLA_BIN"

@@ -58,6 +58,7 @@ DELETE_REPO=""
 OWNER=""
 FROM_PHASE=""
 ONLY_PHASE=""
+TO_PHASE=""
 
 # ---------------------------------------------------------------------------
 # Parse arguments
@@ -74,6 +75,8 @@ while [ $# -gt 0 ]; do
       FROM_PHASE="$2"; shift 2 ;;
     --only)
       ONLY_PHASE="$2"; shift 2 ;;
+    --to)
+      TO_PHASE="$2"; shift 2 ;;
     --reuse-repo)
       REUSE_REPO="$2"; shift 2 ;;
     --delete-repo)
@@ -113,8 +116,11 @@ fi
 if [ -n "$ONLY_PHASE" ]; then
   _validate_phase_name "$ONLY_PHASE"
 fi
+if [ -n "$TO_PHASE" ]; then
+  _validate_phase_name "$TO_PHASE"
+fi
 
-export KEEP_REPO NO_KEEP_DIR FAIL_FAST REUSE_REPO OWNER FROM_PHASE ONLY_PHASE
+export KEEP_REPO NO_KEEP_DIR FAIL_FAST REUSE_REPO OWNER FROM_PHASE ONLY_PHASE TO_PHASE
 
 # ---------------------------------------------------------------------------
 # Change to repo root and load libraries
@@ -264,12 +270,21 @@ if [ -n "${ONLY_PHASE:-}" ]; then
   }
   start_index=$idx
   end_index=$idx
-elif [ -n "${FROM_PHASE:-}" ]; then
-  idx=$(_phase_index "$FROM_PHASE") || {
-    log_error "Cannot find phase: $FROM_PHASE"
-    exit 1
-  }
-  start_index=$idx
+else
+  if [ -n "${FROM_PHASE:-}" ]; then
+    idx=$(_phase_index "$FROM_PHASE") || {
+      log_error "Cannot find phase: $FROM_PHASE"
+      exit 1
+    }
+    start_index=$idx
+  fi
+  if [ -n "${TO_PHASE:-}" ]; then
+    idx=$(_phase_index "$TO_PHASE") || {
+      log_error "Cannot find phase: $TO_PHASE"
+      exit 1
+    }
+    end_index=$idx
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -314,6 +329,18 @@ done
 # ---------------------------------------------------------------------------
 if [ "$FAILED" -ne 0 ]; then
   EXIT_CODE=1
+fi
+
+# Also fail if any CP within result.json failed, even when phase rc==0.
+if [ -f "$RUN_DIR/result.json" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    _fail_cp=$(jq '[.scenarios[] | select(.status == "fail")] | length' "$RUN_DIR/result.json" 2>/dev/null || echo 0)
+  else
+    _fail_cp=$(grep -o '"status":"fail"' "$RUN_DIR/result.json" | wc -l | tr -d ' ')
+  fi
+  if [ -n "$_fail_cp" ] && [ "$_fail_cp" -gt 0 ] 2>/dev/null; then
+    EXIT_CODE=1
+  fi
 fi
 
 exit "$EXIT_CODE"
