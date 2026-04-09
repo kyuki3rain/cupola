@@ -320,13 +320,15 @@ where
         .await?;
     let index = latest.map(|r| r.index + 1).unwrap_or(0);
 
+    // Fetch issue detail *before* inserting a ProcessRun so that a GitHub
+    // failure here does not leave an Init run stuck in `running` state.
+    // If get_issue fails, decide() will retry SpawnInit next cycle cleanly.
+    let detail = github.get_issue(issue.github_issue_number).await?;
+
     // Insert ProcessRun(init, state=running). Resolve will transition it to
     // succeeded/failed when the JoinHandle completes.
     let run = ProcessRun::new_running(issue.id, ProcessRunType::Init, index, vec![]);
     process_repo.save(&run).await?;
-
-    // Fetch issue detail so a Resolve/Collect failure here surfaces eagerly.
-    let detail = github.get_issue(issue.github_issue_number).await?;
 
     let feature_name = issue.feature_name.clone();
     let worktree_base = config
@@ -551,12 +553,22 @@ where
 
     // Spawn the process
     match claude_runner.spawn(&session_config.prompt, wt_path, schema, model) {
-        Ok(child) => {
+        Ok(mut child) => {
             // Persist the OS pid before moving child into SessionManager, so
             // process_runs.pid is populated for status / stall / recovery tooling
             // (per docs/architecture/metadata.md ProcessRun.pid rules).
             let pid = child.id();
-            process_repo.update_pid(run_id, pid).await?;
+            if let Err(e) = process_repo.update_pid(run_id, pid).await {
+                // update_pid failed: kill the already-running process (best-effort)
+                // and mark the ProcessRun as failed so recovery tooling can act on it
+                // and decide() stops treating the run as active.
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = process_repo
+                    .mark_failed(run_id, Some(format!("update_pid failed: {e}")))
+                    .await;
+                return Err(e);
+            }
             Ok((child, run_id, pid))
         }
         Err(e) => {

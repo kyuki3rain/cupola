@@ -58,12 +58,16 @@ impl InitTaskManager {
     /// Register a new JoinHandle for the given issue (consumes the claim from
     /// [`try_claim`]).
     ///
-    /// If a handle already exists for this issue, it is dropped (and the task
-    /// is cancelled by Tokio when all handles are dropped).
+    /// If a handle already exists for this issue it is explicitly aborted
+    /// before being replaced.  Note: dropping a `JoinHandle` in Tokio does
+    /// **not** cancel the task — the task becomes detached and keeps running.
+    /// `abort()` is required to actually stop it.
     pub fn register(&mut self, issue_id: i64, handle: JoinHandle<anyhow::Result<String>>) {
         // Consume the pending claim (if one was taken via try_claim).
         self.pending_ids.remove(&issue_id);
-        self.handles.insert(issue_id, handle);
+        if let Some(old_handle) = self.handles.insert(issue_id, handle) {
+            old_handle.abort();
+        }
     }
 
     /// Collect all finished init tasks and remove them from the map.
