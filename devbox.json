@@ -4,7 +4,8 @@
     "rustup@latest",
     "git@latest",
     "nodejs@latest",
-    "sqlite@latest"
+    "sqlite@latest",
+    "python3@latest"
   ],
   "shell": {
     "init_hook": [
@@ -18,7 +19,8 @@
       "clippy":    "cargo clippy",
       "fmt":       "cargo fmt",
       "fmt-check": "cargo fmt --check",
-      "cupola":    "cargo run -- $@"
+      "cupola":    "cargo run -- $@",
+      "e2e":       "python3 scripts/e2e/cupola_e2e.py $@"
     }
   }
 }
