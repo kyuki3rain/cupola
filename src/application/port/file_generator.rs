@@ -18,15 +18,14 @@ pub trait FileGenerator: Send + Sync {
         language: &str,
     ) -> Result<bool>;
 
-    /// spec ディレクトリを指定ベース配下に生成する。
+    /// spec ディレクトリを指定ベース配下に生成する（冪等）。
+    /// 既定の base_dir に依存する `generate_spec_directory` と異なり、
+    /// 呼び出し側が任意のディレクトリ（典型的には worktree ルート）を指定できる。
     fn generate_spec_directory_at(
         &self,
         base_dir: &Path,
         issue_number: u64,
         issue_body: &str,
         language: &str,
-    ) -> Result<bool> {
-        let _ = base_dir;
-        self.generate_spec_directory(issue_number, issue_body, language)
-    }
+    ) -> Result<bool>;
 }

@@ -248,6 +248,16 @@ impl FileGenerator for MockFileGenerator {
     ) -> Result<bool> {
         Ok(false)
     }
+
+    fn generate_spec_directory_at(
+        &self,
+        _base_dir: &std::path::Path,
+        _issue_number: u64,
+        _issue_body: &str,
+        _language: &str,
+    ) -> Result<bool> {
+        Ok(false)
+    }
 }
 
 // === Helpers ===

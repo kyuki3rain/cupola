@@ -542,7 +542,7 @@ async fn count_total_failures<P: ProcessRunRepository>(process_repo: &P, issue_i
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
 
     use anyhow::Result;
@@ -554,9 +554,20 @@ mod tests {
     use crate::domain::fixing_problem_kind::FixingProblemKind;
     use crate::domain::process_run::ProcessRunType;
 
-    #[derive(Default, Clone)]
+    /// Shared, ordered call log used by both `MockGitWorktree` and
+    /// `MockFileGenerator` so tests can assert the full sequence of init
+    /// side effects (git ops + spec generation) in one place.
+    type CallLog = Arc<Mutex<Vec<String>>>;
+
+    #[derive(Clone, Default)]
     struct MockGitWorktree {
-        calls: Arc<Mutex<Vec<String>>>,
+        calls: CallLog,
+    }
+
+    impl MockGitWorktree {
+        fn with_log(calls: CallLog) -> Self {
+            Self { calls }
+        }
     }
 
     impl GitWorktree for MockGitWorktree {
@@ -614,11 +625,15 @@ mod tests {
         }
     }
 
-    type SpecCall = (PathBuf, u64, String, String);
-
-    #[derive(Default, Clone)]
+    #[derive(Clone, Default)]
     struct MockFileGenerator {
-        calls: Arc<Mutex<Vec<SpecCall>>>,
+        calls: CallLog,
+    }
+
+    impl MockFileGenerator {
+        fn with_log(calls: CallLog) -> Self {
+            Self { calls }
+        }
     }
 
     impl FileGenerator for MockFileGenerator {
@@ -650,11 +665,12 @@ mod tests {
             issue_body: &str,
             language: &str,
         ) -> Result<bool> {
-            self.calls.lock().expect("lock").push((
-                base_dir.to_path_buf(),
+            self.calls.lock().expect("lock").push(format!(
+                "generate_spec_directory_at:{}:{}:{}:{}",
+                base_dir.display(),
                 issue_number,
-                issue_body.to_string(),
-                language.to_string(),
+                issue_body,
+                language,
             ));
             Ok(true)
         }
@@ -721,8 +737,9 @@ mod tests {
 
     #[test]
     fn perform_init_sync_pushes_branches_and_generates_spec_in_worktree() {
-        let worktree = MockGitWorktree::default();
-        let file_gen = MockFileGenerator::default();
+        let log: CallLog = Arc::new(Mutex::new(Vec::new()));
+        let worktree = MockGitWorktree::with_log(log.clone());
+        let file_gen = MockFileGenerator::with_log(log.clone());
         let wt_path = Path::new("/tmp/cupola-worktree");
 
         perform_init_sync(
@@ -737,8 +754,13 @@ mod tests {
         )
         .expect("perform init");
 
+        // Single shared call log pins the complete ordering of init side
+        // effects: fetch -> create main -> push main -> create design ->
+        // push design -> spec scaffold. Using one log (instead of per-mock
+        // logs) prevents a reorder between git ops and spec generation from
+        // slipping through unnoticed.
         assert_eq!(
-            worktree.calls.lock().expect("lock").clone(),
+            log.lock().expect("lock").clone(),
             vec![
                 "fetch".to_string(),
                 format!(
@@ -751,17 +773,11 @@ mod tests {
                     wt_path.display()
                 ),
                 format!("push:{}:cupola/issue-193/design", wt_path.display()),
+                format!(
+                    "generate_spec_directory_at:{}:193:Issue body:ja",
+                    wt_path.display()
+                ),
             ]
-        );
-
-        assert_eq!(
-            file_gen.calls.lock().expect("lock").clone(),
-            vec![(
-                wt_path.to_path_buf(),
-                193,
-                "Issue body".to_string(),
-                "ja".to_string()
-            )]
         );
     }
 }
