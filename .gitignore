@@ -2,6 +2,10 @@
 .local/
 .env
 
+# Python bytecode (e2e scripts)
+__pycache__/
+*.pyc
+
 # Cupola - local runtime files
 .cupola/worktrees/
 .cupola/cupola.db
