@@ -37,12 +37,24 @@ where
     let mut result = OrphanRecoveryResult::default();
 
     for run in &running {
-        // PID が有効であればシグナルを送る（ベストエフォート）
-        if let Some(pid) = run.pid
-            && alive_port.is_alive(pid)
-        {
-            alive_port.kill(pid);
-            result.killed_pids.push(pid);
+        match run.pid {
+            Some(pid) if alive_port.is_alive(pid) => {
+                alive_port.kill(pid);
+                result.killed_pids.push(pid);
+            }
+            None => {
+                // PID が NULL — プロセスは spawn されたが update_pid が呼ばれる前にデーモンがクラッシュした可能性がある。
+                // 孤児プロセスが残っている可能性があるが、PID が不明なため kill できない。
+                tracing::warn!(
+                    process_run_id = run.id,
+                    issue_id = run.issue_id,
+                    run_type = %run.type_,
+                    "orphan process has pid=NULL; daemon may have crashed before update_pid — cannot kill, marking failed"
+                );
+            }
+            Some(_) => {
+                // PID はあるが既に終了済み — kill 不要
+            }
         }
 
         // レコードを failed に更新

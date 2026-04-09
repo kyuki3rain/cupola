@@ -107,6 +107,24 @@ impl InitTaskManager {
         }
     }
 
+    /// Abort all in-flight init tasks (e.g. on graceful shutdown).
+    /// Drains the internal map and calls `abort()` on every `JoinHandle`.
+    ///
+    /// # Limitation
+    /// Init tasks spawn a `tokio::task::spawn_blocking` closure that runs
+    /// synchronous `git` commands via `std::process::Command`.  Aborting the
+    /// outer async `JoinHandle` signals the Tokio task to stop at the next
+    /// await point, but it **cannot interrupt an already-started blocking
+    /// thread**.  A `git` subprocess that is currently executing will run to
+    /// completion (or until the OS reclaims it when the process exits).
+    /// As a result, shutdown may still leave `.git/index.lock` files behind if
+    /// a git operation is in-flight at the moment of abort.
+    pub fn abort_all(&mut self) {
+        for (_issue_id, handle) in self.handles.drain() {
+            handle.abort();
+        }
+    }
+
     /// Number of active (in-flight) init tasks.
     pub fn count(&self) -> usize {
         self.handles.len()
@@ -291,5 +309,71 @@ mod tests {
         mgr.cancel(5);
         assert!(!mgr.is_active(5));
         assert_eq!(mgr.count(), 0);
+    }
+
+    /// T-3.IT.6: abort_all aborts all in-flight tasks and empties the map.
+    ///
+    /// Uses a drop-guard (`Arc<AtomicBool>`) to verify that each task is
+    /// actually cancelled, not merely detached.
+    ///
+    /// **Important:** The `DropGuard` is created *outside* the `async move` block
+    /// and captured (moved) into it.  Creating it *inside* the block would only
+    /// construct the guard when the future is first polled; a task aborted before
+    /// being polled would never run that line, so `Drop` would never fire.
+    /// Capturing from outside guarantees the guard is part of the future's initial
+    /// state and is always dropped when the future is dropped.
+    #[tokio::test]
+    async fn abort_all_drains_handles() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct DropGuard(Arc<AtomicBool>);
+        impl Drop for DropGuard {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let mut mgr = InitTaskManager::new();
+        let mut dropped_flags: Vec<Arc<AtomicBool>> = Vec::new();
+
+        for id in 1..=3i64 {
+            let flag = Arc::new(AtomicBool::new(false));
+            dropped_flags.push(flag.clone());
+            // Create guard OUTSIDE the async block so it is captured into the
+            // future's initial state — Drop fires even if never polled.
+            let guard = DropGuard(flag);
+            let handle = tokio::spawn(async move {
+                let _guard = guard;
+                tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+                Ok("/tmp/never".to_string())
+            });
+            mgr.register(id, handle);
+        }
+        assert_eq!(mgr.count(), 3);
+
+        mgr.abort_all();
+
+        // Give the runtime a chance to process the abort and drop task locals.
+        // A short sleep is more reliable than yield_now() because it allows the
+        // scheduler multiple rounds to clean up all aborted tasks.
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        assert_eq!(
+            mgr.count(),
+            0,
+            "all handles should be removed after abort_all"
+        );
+        assert!(!mgr.is_active(1));
+        assert!(!mgr.is_active(2));
+        assert!(!mgr.is_active(3));
+
+        for (i, flag) in dropped_flags.iter().enumerate() {
+            assert!(
+                flag.load(Ordering::SeqCst),
+                "task {} was not actually aborted (drop-guard not triggered)",
+                i + 1
+            );
+        }
     }
 }
