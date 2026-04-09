@@ -335,11 +335,7 @@ mod tests {
     }
 
     impl MockGithub {
-        fn with_tracker(
-            is_open: bool,
-            labels: Vec<String>,
-            tracker: Arc<AtomicBool>,
-        ) -> Self {
+        fn with_tracker(is_open: bool, labels: Vec<String>, tracker: Arc<AtomicBool>) -> Self {
             Self {
                 is_open,
                 labels,
@@ -423,8 +419,7 @@ mod tests {
     fn test_config() -> Config {
         let mut config =
             Config::default_with_repo("owner".to_string(), "repo".to_string(), "main".to_string());
-        config.trusted_associations =
-            crate::domain::author_association::TrustedAssociations::All;
+        config.trusted_associations = crate::domain::author_association::TrustedAssociations::All;
         config
     }
 
