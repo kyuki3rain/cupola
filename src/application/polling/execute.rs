@@ -3,6 +3,7 @@
 /// Effects are executed in priority order. Non-best-effort effect failures abort
 /// the chain. Best-effort failures are logged and the chain continues.
 use std::path::Path;
+use std::process::Child;
 
 use anyhow::Result;
 
@@ -270,12 +271,50 @@ where
     W: SpawnableGitWorktree,
     F: FileGenerator + Clone + 'static,
 {
-    if init_mgr.is_active(issue.id) {
-        tracing::debug!(issue_id = issue.id, "init task already active, skipping");
+    // Atomically claim the slot for this issue_id, preventing a second
+    // concurrent invocation from spawning a duplicate task (TOCTOU fix).
+    if !init_mgr.try_claim(issue.id) {
+        tracing::debug!(
+            issue_id = issue.id,
+            "init task already active or pending, skipping"
+        );
         return Ok(());
     }
 
-    // Get next index
+    // Perform all async I/O in a helper.  On failure, release the claim so
+    // that a future cycle can retry.
+    match prepare_init_handle(github, process_repo, worktree, file_gen, config, issue).await {
+        Ok(handle) => {
+            // register() consumes the pending claim.
+            init_mgr.register(issue.id, handle);
+        }
+        Err(e) => {
+            init_mgr.release_claim(issue.id);
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
+/// Performs all async I/O for an init task and returns the spawned JoinHandle.
+///
+/// Separated from `spawn_init_task` so that the claim lifecycle (try_claim /
+/// release_claim / register) stays in the caller with no scattered `?` returns.
+async fn prepare_init_handle<G, P, W, F>(
+    github: &G,
+    process_repo: &P,
+    worktree: &W,
+    file_gen: &F,
+    config: &Config,
+    issue: &Issue,
+) -> Result<tokio::task::JoinHandle<anyhow::Result<String>>>
+where
+    G: GitHubClient,
+    P: ProcessRunRepository,
+    W: SpawnableGitWorktree,
+    F: FileGenerator + Clone + 'static,
+{
+    // Get next index.
     let latest = process_repo
         .find_latest(issue.id, ProcessRunType::Init)
         .await?;
@@ -325,8 +364,7 @@ where
         .map_err(|e| anyhow::anyhow!("init blocking task panicked: {e}"))?
     });
 
-    init_mgr.register(issue.id, handle);
-    Ok(())
+    Ok(handle)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -375,17 +413,81 @@ where
     C: ClaudeCodeRunner,
     W: SpawnableGitWorktree,
 {
-    // Check session limit
-    if let Some(max) = config.max_concurrent_sessions
-        && session_mgr.count() >= max as usize
+    // Atomically reserve a session slot, preventing concurrent spawn_process
+    // calls from both passing the limit check before either registers (TOCTOU fix).
+    let reserved = if let Some(max) = config.max_concurrent_sessions {
+        if !session_mgr.try_reserve(max as usize) {
+            tracing::info!(
+                issue_number = issue.github_issue_number,
+                "concurrent session limit reached, deferring spawn"
+            );
+            return Ok(());
+        }
+        true
+    } else {
+        false
+    };
+
+    // Perform all async I/O in a helper.  On failure, release the reservation
+    // so that a future cycle can retry and a slot isn't silently consumed.
+    match prepare_process_spawn(
+        github,
+        process_repo,
+        claude_runner,
+        worktree,
+        config,
+        issue,
+        type_,
+        causes,
+    )
+    .await
     {
-        tracing::info!(
-            issue_number = issue.github_issue_number,
-            "concurrent session limit reached, deferring spawn"
-        );
-        return Ok(());
+        Ok((child, run_id, pid)) => {
+            // register() consumes the pending reservation.
+            session_mgr.register(issue.id, issue.state, child);
+            session_mgr.update_run_id(issue.id, run_id);
+            tracing::info!(
+                issue_number = issue.github_issue_number,
+                run_id,
+                pid,
+                type_ = ?type_,
+                "spawned process"
+            );
+        }
+        Err(e) => {
+            if reserved {
+                session_mgr.release_reservation();
+            }
+            return Err(e);
+        }
     }
 
+    Ok(())
+}
+
+/// Performs all async I/O for spawning a Claude Code process and returns the
+/// child handle along with DB identifiers.
+///
+/// Separated from `spawn_process` so that the reservation lifecycle
+/// (try_reserve / release_reservation / register) stays in the caller with no
+/// scattered `?` returns in between.
+#[allow(clippy::too_many_arguments)]
+async fn prepare_process_spawn<G, P, C, W>(
+    github: &G,
+    process_repo: &P,
+    claude_runner: &C,
+    worktree: &W,
+    config: &Config,
+    issue: &Issue,
+    type_: ProcessRunType,
+    causes: &[crate::domain::fixing_problem_kind::FixingProblemKind],
+) -> Result<(Child, i64, u32)>
+where
+    G: GitHubClient,
+    P: ProcessRunRepository,
+    C: ClaudeCodeRunner,
+    W: SpawnableGitWorktree,
+{
     let wt_path_str = issue
         .worktree_path
         .as_deref()
@@ -455,25 +557,14 @@ where
             // (per docs/architecture/metadata.md ProcessRun.pid rules).
             let pid = child.id();
             process_repo.update_pid(run_id, pid).await?;
-
-            session_mgr.register(issue.id, issue.state, child);
-            session_mgr.update_run_id(issue.id, run_id);
-            tracing::info!(
-                issue_number = issue.github_issue_number,
-                run_id,
-                pid,
-                type_ = ?type_,
-                "spawned process"
-            );
+            Ok((child, run_id, pid))
         }
         Err(e) => {
             // Spawn failure: mark ProcessRun as failed immediately
             let _ = process_repo.mark_failed(run_id, Some(e.to_string())).await;
-            return Err(e);
+            Err(e)
         }
     }
-
-    Ok(())
 }
 
 async fn get_pr_number_for_type<P: ProcessRunRepository>(
