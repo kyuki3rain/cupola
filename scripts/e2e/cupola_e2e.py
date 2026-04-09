@@ -723,6 +723,49 @@ def phase_1_happy_path(ctx: Context) -> None:
 
     ctx.check("CP-11", f"#{issue_n} reaches initialize_running (180s)",
               lambda: wait_for_state(ctx, issue_n, "initialize_running", 180))
+
+    # Per docs/architecture/effects.md:146 SpawnInit must push both branches
+    # and scaffold .cupola/specs/{feature}/. Assert the init side-effects
+    # directly so a future regression in perform_init_sync is caught by e2e.
+    def cp11a():
+        feature = f"issue-{issue_n}"
+        main_branch = f"cupola/{feature}/main"
+        design_branch = f"cupola/{feature}/design"
+
+        def branches_on_origin() -> bool:
+            out = sh_ok(
+                ["git", "ls-remote", "--heads", "origin",
+                 main_branch, design_branch],
+                cwd=ctx.target_dir,
+            )
+            return main_branch in out and design_branch in out
+
+        wait_until(
+            branches_on_origin,
+            timeout=180,
+            desc=f"both init branches pushed to origin for {feature}",
+        )
+
+    ctx.check("CP-11a", f"#{issue_n} init pushed both branches to origin", cp11a)
+
+    def cp11b():
+        feature = f"issue-{issue_n}"
+        spec_dir = ctx.target_dir / ".cupola" / "worktrees" / feature \
+            / ".cupola" / "specs" / feature
+        spec_json = spec_dir / "spec.json"
+        requirements = spec_dir / "requirements.md"
+
+        def scaffold_exists() -> bool:
+            return spec_json.exists() and requirements.exists()
+
+        wait_until(
+            scaffold_exists,
+            timeout=120,
+            desc=f"spec scaffold present in worktree for {feature}",
+        )
+
+    ctx.check("CP-11b", f"#{issue_n} init generated spec scaffold in worktree", cp11b)
+
     ctx.check("CP-12", f"#{issue_n} reaches design_running (300s)",
               lambda: wait_for_state(ctx, issue_n, "design_running", 300))
 
