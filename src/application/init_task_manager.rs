@@ -107,6 +107,14 @@ impl InitTaskManager {
         }
     }
 
+    /// Abort all in-flight init tasks (e.g. on graceful shutdown).
+    /// Drains the internal map so all handles are aborted.
+    pub fn abort_all(&mut self) {
+        for (_issue_id, handle) in self.handles.drain() {
+            handle.abort();
+        }
+    }
+
     /// Number of active (in-flight) init tasks.
     pub fn count(&self) -> usize {
         self.handles.len()
@@ -291,5 +299,30 @@ mod tests {
         mgr.cancel(5);
         assert!(!mgr.is_active(5));
         assert_eq!(mgr.count(), 0);
+    }
+
+    /// T-3.IT.6: abort_all aborts all in-flight tasks and empties the map
+    #[tokio::test]
+    async fn abort_all_drains_handles() {
+        let mut mgr = InitTaskManager::new();
+        for id in 1..=3i64 {
+            let handle = tokio::spawn(async {
+                tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+                Ok("/tmp/never".to_string())
+            });
+            mgr.register(id, handle);
+        }
+        assert_eq!(mgr.count(), 3);
+
+        mgr.abort_all();
+
+        assert_eq!(
+            mgr.count(),
+            0,
+            "all handles should be removed after abort_all"
+        );
+        assert!(!mgr.is_active(1));
+        assert!(!mgr.is_active(2));
+        assert!(!mgr.is_active(3));
     }
 }

@@ -308,6 +308,12 @@ where
             );
         }
 
+        // Abort pending init tasks.  Note: tasks that are already inside
+        // `spawn_blocking` (running a `git` subprocess via
+        // `std::process::Command`) cannot be interrupted by `abort()`; the
+        // blocking thread will run to completion.  Full cooperative
+        // cancellation of git subprocesses is out of scope for this fix.
+        self.init_mgr.abort_all();
         if let Some(ref pid_file) = self.pid_file {
             let _ = pid_file.delete_pid();
         }
