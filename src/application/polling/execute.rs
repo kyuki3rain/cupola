@@ -9,6 +9,7 @@ use anyhow::Result;
 use crate::application::init_task_manager::InitTaskManager;
 use crate::application::io::{clear_inputs_dir, write_issue_input, write_review_threads_input};
 use crate::application::port::claude_code_runner::ClaudeCodeRunner;
+use crate::application::port::file_generator::FileGenerator;
 use crate::application::port::git_worktree::GitWorktree;
 use crate::application::port::github_client::GitHubClient;
 use crate::application::port::issue_repository::IssueRepository;
@@ -34,12 +35,13 @@ impl<T: GitWorktree + Clone + 'static> SpawnableGitWorktree for T {}
 /// Effects are processed in priority order (already sorted by `Decision::new`).
 /// A non-best-effort failure aborts the rest. Best-effort failures are logged only.
 #[allow(clippy::too_many_arguments)]
-pub async fn execute_effects<G, I, P, C, W>(
+pub async fn execute_effects<G, I, P, C, W, F>(
     github: &G,
     issue_repo: &I,
     process_repo: &P,
     claude_runner: &C,
     worktree: &W,
+    file_gen: &F,
     session_mgr: &mut SessionManager,
     init_mgr: &mut InitTaskManager,
     config: &Config,
@@ -52,6 +54,7 @@ where
     P: ProcessRunRepository,
     C: ClaudeCodeRunner,
     W: SpawnableGitWorktree,
+    F: FileGenerator + Clone + 'static,
 {
     for effect in effects {
         let best_effort = effect.is_best_effort();
@@ -61,6 +64,7 @@ where
             process_repo,
             claude_runner,
             worktree,
+            file_gen,
             session_mgr,
             init_mgr,
             config,
@@ -95,12 +99,13 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn execute_one<G, I, P, C, W>(
+async fn execute_one<G, I, P, C, W, F>(
     github: &G,
     issue_repo: &I,
     process_repo: &P,
     claude_runner: &C,
     worktree: &W,
+    file_gen: &F,
     session_mgr: &mut SessionManager,
     init_mgr: &mut InitTaskManager,
     config: &Config,
@@ -113,6 +118,7 @@ where
     P: ProcessRunRepository,
     C: ClaudeCodeRunner,
     W: SpawnableGitWorktree,
+    F: FileGenerator + Clone + 'static,
 {
     let n = issue.github_issue_number;
     let lang = &config.language;
@@ -174,6 +180,7 @@ where
                 issue_repo,
                 process_repo,
                 worktree,
+                file_gen,
                 init_mgr,
                 config,
                 issue,
@@ -245,11 +252,13 @@ where
     Ok(())
 }
 
-async fn spawn_init_task<G, I, P, W>(
+#[allow(clippy::too_many_arguments)]
+async fn spawn_init_task<G, I, P, W, F>(
     github: &G,
     _issue_repo: &I,
     process_repo: &P,
     worktree: &W,
+    file_gen: &F,
     init_mgr: &mut InitTaskManager,
     config: &Config,
     issue: &Issue,
@@ -259,6 +268,7 @@ where
     I: IssueRepository,
     P: ProcessRunRepository,
     W: SpawnableGitWorktree,
+    F: FileGenerator + Clone + 'static,
 {
     if init_mgr.is_active(issue.id) {
         tracing::debug!(issue_id = issue.id, "init task already active, skipping");
@@ -277,7 +287,7 @@ where
     process_repo.save(&run).await?;
 
     // Fetch issue detail so a Resolve/Collect failure here surfaces eagerly.
-    let _detail = github.get_issue(issue.github_issue_number).await?;
+    let detail = github.get_issue(issue.github_issue_number).await?;
 
     let feature_name = issue.feature_name.clone();
     let worktree_base = config
@@ -287,7 +297,11 @@ where
         .join("worktrees");
     let wt_path = worktree_base.join(&feature_name);
     let default_branch = config.default_branch.clone();
+    let issue_number = issue.github_issue_number;
+    let issue_body = detail.body;
+    let language = config.language.clone();
     let worktree_clone = worktree.clone();
+    let file_gen_clone = file_gen.clone();
 
     // tokio::spawn an async task that performs the git work on a blocking thread.
     // Resolve picks up the JoinHandle next cycle and updates the DB — per
@@ -297,7 +311,11 @@ where
         tokio::task::spawn_blocking(move || {
             perform_init_sync(
                 &worktree_clone,
+                &file_gen_clone,
                 &wt_path_for_task,
+                issue_number,
+                &issue_body,
+                &language,
                 &feature_name,
                 &default_branch,
             )?;
@@ -311,9 +329,14 @@ where
     Ok(())
 }
 
-fn perform_init_sync<W: GitWorktree>(
+#[allow(clippy::too_many_arguments)]
+fn perform_init_sync<W: GitWorktree, F: FileGenerator>(
     worktree: &W,
+    file_gen: &F,
     wt_path: &Path,
+    issue_number: u64,
+    issue_body: &str,
+    language: &str,
     feature_name: &str,
     default_branch: &str,
 ) -> Result<()> {
@@ -322,9 +345,12 @@ fn perform_init_sync<W: GitWorktree>(
     let main_branch = format!("cupola/{feature_name}/main");
     let start_point = format!("origin/{default_branch}");
     worktree.create(wt_path, &main_branch, &start_point)?;
+    worktree.push(wt_path, &main_branch)?;
 
     let design_branch = format!("cupola/{feature_name}/design");
     worktree.create_branch(wt_path, &design_branch)?;
+    worktree.push(wt_path, &design_branch)?;
+    file_gen.generate_spec_directory_at(wt_path, issue_number, issue_body, language)?;
 
     Ok(())
 }
@@ -516,9 +542,123 @@ async fn count_total_failures<P: ProcessRunRepository>(process_repo: &P, issue_i
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+
+    use anyhow::Result;
+
+    use super::perform_init_sync;
+    use crate::application::port::file_generator::FileGenerator;
+    use crate::application::port::git_worktree::GitWorktree;
     use crate::domain::effect::Effect;
     use crate::domain::fixing_problem_kind::FixingProblemKind;
     use crate::domain::process_run::ProcessRunType;
+
+    #[derive(Default, Clone)]
+    struct MockGitWorktree {
+        calls: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl GitWorktree for MockGitWorktree {
+        fn fetch(&self) -> Result<()> {
+            self.calls.lock().expect("lock").push("fetch".to_string());
+            Ok(())
+        }
+
+        fn merge(&self, _p: &Path, _b: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn exists(&self, _p: &Path) -> bool {
+            false
+        }
+
+        fn create(&self, p: &Path, b: &str, s: &str) -> Result<()> {
+            self.calls
+                .lock()
+                .expect("lock")
+                .push(format!("create:{}:{}:{}", p.display(), b, s));
+            Ok(())
+        }
+
+        fn remove(&self, _p: &Path) -> Result<()> {
+            Ok(())
+        }
+
+        fn create_branch(&self, p: &Path, b: &str) -> Result<()> {
+            self.calls
+                .lock()
+                .expect("lock")
+                .push(format!("create_branch:{}:{}", p.display(), b));
+            Ok(())
+        }
+
+        fn checkout(&self, _p: &Path, _b: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn pull(&self, _p: &Path) -> Result<()> {
+            Ok(())
+        }
+
+        fn push(&self, p: &Path, b: &str) -> Result<()> {
+            self.calls
+                .lock()
+                .expect("lock")
+                .push(format!("push:{}:{}", p.display(), b));
+            Ok(())
+        }
+
+        fn delete_branch(&self, _b: &str) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    type SpecCall = (PathBuf, u64, String, String);
+
+    #[derive(Default, Clone)]
+    struct MockFileGenerator {
+        calls: Arc<Mutex<Vec<SpecCall>>>,
+    }
+
+    impl FileGenerator for MockFileGenerator {
+        fn generate_toml_template(&self) -> Result<bool> {
+            Ok(false)
+        }
+
+        fn install_claude_code_assets(&self) -> Result<bool> {
+            Ok(false)
+        }
+
+        fn append_gitignore_entries(&self) -> Result<bool> {
+            Ok(false)
+        }
+
+        fn generate_spec_directory(
+            &self,
+            _issue_number: u64,
+            _issue_body: &str,
+            _language: &str,
+        ) -> Result<bool> {
+            Ok(false)
+        }
+
+        fn generate_spec_directory_at(
+            &self,
+            base_dir: &Path,
+            issue_number: u64,
+            issue_body: &str,
+            language: &str,
+        ) -> Result<bool> {
+            self.calls.lock().expect("lock").push((
+                base_dir.to_path_buf(),
+                issue_number,
+                issue_body.to_string(),
+                language.to_string(),
+            ));
+            Ok(true)
+        }
+    }
 
     /// T-3.EX.1: effects are executed in priority order
     #[test]
@@ -577,5 +717,51 @@ mod tests {
         } else {
             panic!("expected SpawnProcess");
         }
+    }
+
+    #[test]
+    fn perform_init_sync_pushes_branches_and_generates_spec_in_worktree() {
+        let worktree = MockGitWorktree::default();
+        let file_gen = MockFileGenerator::default();
+        let wt_path = Path::new("/tmp/cupola-worktree");
+
+        perform_init_sync(
+            &worktree,
+            &file_gen,
+            wt_path,
+            193,
+            "Issue body",
+            "ja",
+            "issue-193",
+            "main",
+        )
+        .expect("perform init");
+
+        assert_eq!(
+            worktree.calls.lock().expect("lock").clone(),
+            vec![
+                "fetch".to_string(),
+                format!(
+                    "create:{}:cupola/issue-193/main:origin/main",
+                    wt_path.display()
+                ),
+                format!("push:{}:cupola/issue-193/main", wt_path.display()),
+                format!(
+                    "create_branch:{}:cupola/issue-193/design",
+                    wt_path.display()
+                ),
+                format!("push:{}:cupola/issue-193/design", wt_path.display()),
+            ]
+        );
+
+        assert_eq!(
+            file_gen.calls.lock().expect("lock").clone(),
+            vec![(
+                wt_path.to_path_buf(),
+                193,
+                "Issue body".to_string(),
+                "ja".to_string()
+            )]
+        );
     }
 }

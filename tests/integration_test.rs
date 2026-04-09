@@ -42,6 +42,7 @@ use cupola::adapter::outbound::sqlite_issue_repository::SqliteIssueRepository;
 use cupola::application::polling_use_case::PollingUseCase;
 use cupola::application::port::claude_code_runner::ClaudeCodeRunner;
 use cupola::application::port::execution_log_repository::ExecutionLogRepository;
+use cupola::application::port::file_generator::FileGenerator;
 use cupola::application::port::git_worktree::GitWorktree;
 use cupola::application::port::github_client::{
     GitHubCheckRun, GitHubClient, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails,
@@ -166,8 +167,24 @@ impl GitHubClient for MockGitHubClient {
 
 // === Mock Git Worktree ===
 
+#[derive(Default)]
+struct MockGitWorktreeState {
+    pushes: Vec<(String, String)>,
+}
+
 #[allow(dead_code)]
-struct MockGitWorktree;
+#[derive(Clone)]
+struct MockGitWorktree {
+    state: Arc<Mutex<MockGitWorktreeState>>,
+}
+
+impl Default for MockGitWorktree {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(MockGitWorktreeState::default())),
+        }
+    }
+}
 
 impl GitWorktree for MockGitWorktree {
     fn fetch(&self) -> Result<()> {
@@ -194,11 +211,42 @@ impl GitWorktree for MockGitWorktree {
     fn pull(&self, _p: &Path) -> Result<()> {
         Ok(())
     }
-    fn push(&self, _p: &Path, _b: &str) -> Result<()> {
+    fn push(&self, p: &Path, b: &str) -> Result<()> {
+        self.state
+            .lock()
+            .unwrap()
+            .pushes
+            .push((p.to_string_lossy().to_string(), b.to_string()));
         Ok(())
     }
     fn delete_branch(&self, _b: &str) -> Result<()> {
         Ok(())
+    }
+}
+
+#[derive(Clone, Default)]
+struct MockFileGenerator;
+
+impl FileGenerator for MockFileGenerator {
+    fn generate_toml_template(&self) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn install_claude_code_assets(&self) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn append_gitignore_entries(&self) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn generate_spec_directory(
+        &self,
+        _issue_number: u64,
+        _issue_body: &str,
+        _language: &str,
+    ) -> Result<bool> {
+        Ok(false)
     }
 }
 
@@ -348,6 +396,7 @@ type TestPollingUseCase = PollingUseCase<
     MockExecutionLogRepository,
     MockClaudeCodeRunner,
     MockGitWorktree,
+    MockFileGenerator,
 >;
 
 #[allow(dead_code)]
@@ -358,9 +407,18 @@ fn setup_polling(config: Config) -> TestPollingUseCase {
     let github = MockGitHubClient::new();
     let exec_log = MockExecutionLogRepository;
     let claude_runner = MockClaudeCodeRunner;
-    let worktree = MockGitWorktree;
+    let worktree = MockGitWorktree::default();
+    let file_gen = MockFileGenerator;
 
-    PollingUseCase::new(github, repo, exec_log, claude_runner, worktree, config)
+    PollingUseCase::new(
+        github,
+        repo,
+        exec_log,
+        claude_runner,
+        worktree,
+        file_gen,
+        config,
+    )
 }
 
 #[test]
