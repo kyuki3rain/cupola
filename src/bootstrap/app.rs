@@ -439,14 +439,16 @@ async fn start_foreground(
         other => anyhow::anyhow!("failed to write PID file: {other}"),
     })?;
 
-    // Initialize logging (hold guard for app lifetime)
-    let _guard = init_logging(cfg.log_level, &cfg.log_dir);
-
     // Wrap all post-write_pid work in a single async block so that any `?` propagation
     // (tracing, DB open, token resolution, client construction, polling) is captured as a
     // Result rather than causing an early function return. This ensures apply_pid_cleanup
     // is always reached regardless of where the failure occurs.
     let result: anyhow::Result<()> = async {
+        // Ensure log directory exists before initializing logging
+        std::fs::create_dir_all(&cfg.log_dir).context("create log directory")?;
+        // Initialize logging (hold guard for block lifetime)
+        let _guard = init_logging(cfg.log_level, &cfg.log_dir);
+
         tracing::info!(
             owner = %cfg.owner,
             repo = %cfg.repo,
@@ -599,14 +601,16 @@ async fn start_daemon_child(
         other => anyhow::anyhow!("failed to write PID file: {other}"),
     })?;
 
-    // Initialize logging to file
-    let _guard = init_logging(cfg.log_level, &cfg.log_dir);
-
     // Wrap all post-write_pid work in a single async block so that any `?` propagation
     // (DB open, token resolution, client construction, polling) is captured as a Result
     // rather than causing an early function return. This ensures apply_pid_cleanup is
     // always reached regardless of where the failure occurs.
     let result: anyhow::Result<()> = async {
+        // Ensure log directory exists before initializing logging
+        std::fs::create_dir_all(&cfg.log_dir).context("create log directory")?;
+        // Initialize logging to file (hold guard for block lifetime)
+        let _guard = init_logging(cfg.log_level, &cfg.log_dir);
+
         tracing::info!(
             owner = %cfg.owner,
             repo = %cfg.repo,
