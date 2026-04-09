@@ -33,6 +33,7 @@ GithubIssueSnapshot {
 
 - **観測元**: GitHub Issues API
 - `ready_label_trusted`: ラベル付与者の author_association が `trusted_associations` に含まれるかを確認。`TrustedAssociations::All` 設定時は常に `true`
+- **closed issue の場合**: `has_ready_label` の値に関わらず `ready_label_trusted = false` を返し、権限チェック（`check_label_actor` API 呼び出し）をスキップする。closed issue は状態遷移を起こさないため権限チェックは不要であり、毎ポーリングサイクルでのAPI呼び出しによるログスパムを防ぐ
 
 ### PrSnapshot
 
