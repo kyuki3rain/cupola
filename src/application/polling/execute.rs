@@ -344,6 +344,18 @@ where
     let worktree_clone = worktree.clone();
     let file_gen_clone = file_gen.clone();
 
+    // Check if the worktree already exists (Cancelled → reopen resume case).
+    let is_resume = worktree.exists(&wt_path);
+
+    // Post the appropriate comment before starting the blocking git work.
+    let lang = &config.language;
+    let comment = if is_resume {
+        rust_i18n::t!("issue_comment.resuming_design", locale = lang)
+    } else {
+        rust_i18n::t!("issue_comment.design_starting", locale = lang)
+    };
+    github.comment_on_issue(issue_number, &comment).await?;
+
     // tokio::spawn an async task that performs the git work on a blocking thread.
     // Resolve picks up the JoinHandle next cycle and updates the DB — per
     // docs/architecture/effects.md SpawnInit ("実行方法: tokio::spawn").
@@ -359,6 +371,7 @@ where
                 &language,
                 &feature_name,
                 &default_branch,
+                is_resume,
             )?;
             Ok::<String, anyhow::Error>(wt_path_for_task.to_string_lossy().into_owned())
         })
@@ -379,8 +392,17 @@ fn perform_init_sync<W: GitWorktree, F: FileGenerator>(
     language: &str,
     feature_name: &str,
     default_branch: &str,
+    is_resume: bool,
 ) -> Result<()> {
     worktree.fetch()?;
+
+    if is_resume {
+        tracing::info!(
+            path = %wt_path.display(),
+            "worktree already exists, skipping init creation (resume)"
+        );
+        return Ok(());
+    }
 
     let main_branch = format!("cupola/{feature_name}/main");
     let start_point = format!("origin/{default_branch}");
@@ -665,11 +687,22 @@ mod tests {
     #[derive(Clone, Default)]
     struct MockGitWorktree {
         calls: CallLog,
+        worktree_exists: bool,
     }
 
     impl MockGitWorktree {
         fn with_log(calls: CallLog) -> Self {
-            Self { calls }
+            Self {
+                calls,
+                worktree_exists: false,
+            }
+        }
+
+        fn with_existing_worktree(calls: CallLog) -> Self {
+            Self {
+                calls,
+                worktree_exists: true,
+            }
         }
     }
 
@@ -684,7 +717,7 @@ mod tests {
         }
 
         fn exists(&self, _p: &Path) -> bool {
-            false
+            self.worktree_exists
         }
 
         fn create(&self, p: &Path, b: &str, s: &str) -> Result<()> {
@@ -854,6 +887,7 @@ mod tests {
             "ja",
             "issue-193",
             "main",
+            false,
         )
         .expect("perform init");
 
@@ -882,5 +916,31 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    /// T-3.EX.resume: when worktree already exists (is_resume=true), only fetch
+    /// is called — no create, create_branch, push, or spec generation.
+    #[test]
+    fn perform_init_sync_resume_skips_creation() {
+        let log: CallLog = Arc::new(Mutex::new(Vec::new()));
+        let worktree = MockGitWorktree::with_log(log.clone());
+        let file_gen = MockFileGenerator::with_log(log.clone());
+        let wt_path = Path::new("/tmp/cupola-worktree");
+
+        perform_init_sync(
+            &worktree,
+            &file_gen,
+            wt_path,
+            193,
+            "Issue body",
+            "ja",
+            "issue-193",
+            "main",
+            true,
+        )
+        .expect("perform init resume");
+
+        // On resume only fetch is called; no worktree or branch creation.
+        assert_eq!(log.lock().expect("lock").clone(), vec!["fetch".to_string()]);
     }
 }
