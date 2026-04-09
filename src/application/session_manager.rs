@@ -8,6 +8,14 @@ use crate::domain::state::State;
 
 pub struct SessionManager {
     sessions: HashMap<i64, SessionEntry>,
+    /// Slots reserved via [`try_reserve`] but not yet converted to active sessions.
+    ///
+    /// This counter prevents TOCTOU races between the session-limit check and the
+    /// actual [`register`] call: concurrent `spawn_process` invocations (if the
+    /// polling loop is ever parallelised) both increment `pending` atomically, so
+    /// the combined count `sessions.len() + pending` stays within the configured
+    /// limit even while async I/O is in flight.
+    pending: usize,
 }
 
 struct SessionEntry {
@@ -37,10 +45,48 @@ impl SessionManager {
     pub fn new() -> Self {
         Self {
             sessions: HashMap::new(),
+            pending: 0,
         }
     }
 
+    /// Attempt to reserve a session slot before performing async I/O.
+    ///
+    /// Returns `true` and increments the pending counter when the combined
+    /// count of active sessions and pending reservations is below `max`.
+    /// Returns `false` (without mutating state) when the limit is already
+    /// reached.
+    ///
+    /// The caller **must** subsequently call either [`register`] (to convert
+    /// the reservation into a live session) or [`release_reservation`] (to
+    /// free the slot on any error path that prevents registration).
+    pub fn try_reserve(&mut self, max: usize) -> bool {
+        if self.sessions.len() + self.pending >= max {
+            return false;
+        }
+        self.pending += 1;
+        true
+    }
+
+    /// Release a reservation obtained via [`try_reserve`].
+    ///
+    /// Call this on every error path that prevents [`register`] from being
+    /// reached after a successful `try_reserve`.
+    pub fn release_reservation(&mut self) {
+        self.pending = self.pending.saturating_sub(1);
+    }
+
+    /// Total active sessions plus pending reservations.
+    ///
+    /// Useful for assertions and observability; the session limit is enforced
+    /// against this value by [`try_reserve`].
+    pub fn count_effective(&self) -> usize {
+        self.sessions.len() + self.pending
+    }
+
     pub fn register(&mut self, issue_id: i64, state: State, mut child: Child) {
+        // Consume the reservation that was taken via try_reserve (if any).
+        self.pending = self.pending.saturating_sub(1);
+
         if let Some(mut old_entry) = self.sessions.remove(&issue_id) {
             let _ = old_entry.child.kill();
             let _ = old_entry.child.wait();
@@ -316,6 +362,112 @@ mod tests {
         assert!(stalled.is_empty());
 
         mgr.kill_all();
+    }
+
+    // --- try_reserve / release_reservation tests ---
+
+    /// T-3.SM.R1: try_reserve returns false when the limit is already reached
+    /// by active sessions.
+    #[test]
+    fn try_reserve_returns_false_when_sessions_at_limit() {
+        let mut mgr = SessionManager::new();
+        let child = spawn_sleep(60);
+        mgr.register(1, State::DesignRunning, child);
+        assert_eq!(mgr.count(), 1);
+
+        assert!(
+            !mgr.try_reserve(1),
+            "limit already reached by active session"
+        );
+        assert_eq!(mgr.count_effective(), 1);
+
+        mgr.kill_all();
+    }
+
+    /// T-3.SM.R2: pending reservations count toward the limit so a second
+    /// try_reserve correctly sees the slot as taken.
+    #[test]
+    fn pending_counts_toward_limit() {
+        let mut mgr = SessionManager::new();
+        assert!(mgr.try_reserve(2), "first reservation should succeed");
+        assert!(mgr.try_reserve(2), "second reservation should succeed");
+        assert!(
+            !mgr.try_reserve(2),
+            "limit (2) reached by two pending slots"
+        );
+        assert_eq!(mgr.count_effective(), 2);
+
+        // Clean up.
+        mgr.release_reservation();
+        mgr.release_reservation();
+        assert_eq!(mgr.count_effective(), 0);
+    }
+
+    /// T-3.SM.R3: release_reservation frees the slot so a subsequent
+    /// try_reserve can succeed again.
+    #[test]
+    fn release_reservation_frees_slot() {
+        let mut mgr = SessionManager::new();
+        assert!(mgr.try_reserve(1));
+        assert!(!mgr.try_reserve(1), "at limit after reservation");
+
+        mgr.release_reservation();
+        assert!(mgr.try_reserve(1), "slot freed after release");
+
+        mgr.release_reservation();
+        assert_eq!(mgr.count_effective(), 0);
+    }
+
+    /// T-3.SM.R4: register() consumes the pending reservation so that a new
+    /// try_reserve can see the updated count correctly.
+    #[test]
+    fn register_consumes_reservation() {
+        let mut mgr = SessionManager::new();
+        assert!(mgr.try_reserve(1));
+        assert_eq!(mgr.count_effective(), 1);
+
+        let child = spawn_sleep(60);
+        mgr.register(1, State::DesignRunning, child);
+
+        // pending = 0, sessions.len() = 1 → count_effective = 1.
+        // A new try_reserve(1) should fail (limit is 1).
+        assert!(
+            !mgr.try_reserve(1),
+            "session is registered, limit still reached"
+        );
+        // But try_reserve(2) should succeed (1 active < 2).
+        assert!(mgr.try_reserve(2));
+
+        mgr.release_reservation();
+        mgr.kill_all();
+    }
+
+    /// T-3.SM.R5: N concurrent try_reserve calls where N > max_limit result in
+    /// at most max_limit successes (sequential stress test).
+    #[test]
+    fn session_limit_not_exceeded_under_sequential_stress() {
+        let mut mgr = SessionManager::new();
+        let max = 3usize;
+        let attempts = 8usize;
+
+        let mut successes = 0usize;
+        for _ in 0..attempts {
+            if mgr.try_reserve(max) {
+                successes += 1;
+            }
+        }
+
+        assert_eq!(
+            successes, max,
+            "exactly max_limit reservations should succeed"
+        );
+        assert_eq!(mgr.count_effective(), max);
+
+        // Release all.
+        for _ in 0..successes {
+            mgr.release_reservation();
+        }
+        assert_eq!(mgr.count_effective(), 0);
     }
 
     #[test]
