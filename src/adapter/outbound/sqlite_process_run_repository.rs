@@ -64,6 +64,27 @@ fn row_to_process_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProcessRun> {
     })
 }
 
+/// Count the consecutive-failure tail for (issue_id, type_str) using an already-acquired
+/// connection. Both `count_consecutive_failures` and `find_latest_with_consecutive_count`
+/// delegate here to keep the counting logic in a single place.
+fn count_consecutive_failures_inner(
+    conn: &rusqlite::Connection,
+    issue_id: i64,
+    type_str: &str,
+) -> Result<u32> {
+    let mut stmt = conn.prepare(
+        "SELECT state FROM process_runs
+         WHERE issue_id = ?1 AND type = ?2
+         ORDER BY id DESC",
+    )?;
+    let states: Vec<String> = stmt
+        .query_map(rusqlite::params![issue_id, type_str], |row| row.get(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let count = states.iter().take_while(|s| s.as_str() == "failed").count() as u32;
+    Ok(count)
+}
+
 impl ProcessRunRepository for SqliteProcessRunRepository {
     async fn save(&self, run: &ProcessRun) -> Result<i64> {
         let db = self.db.clone();
@@ -267,24 +288,7 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
                 .conn()
                 .lock()
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
-            let mut stmt = conn.prepare(
-                "SELECT state FROM process_runs
-                 WHERE issue_id = ?1 AND type = ?2
-                 ORDER BY id DESC",
-            )?;
-            let states: Vec<String> = stmt
-                .query_map(rusqlite::params![issue_id, type_str], |row| row.get(0))?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-
-            let mut count = 0u32;
-            for state_str in &states {
-                if state_str == "failed" {
-                    count += 1;
-                } else {
-                    break;
-                }
-            }
-            Ok(count)
+            count_consecutive_failures_inner(&conn, issue_id, &type_str)
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
@@ -328,27 +332,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
                 None => return Ok(None),
             };
 
-            // Count consecutive failures (same logic as count_consecutive_failures).
-            let count = {
-                let mut stmt = conn.prepare(
-                    "SELECT state FROM process_runs
-                     WHERE issue_id = ?1 AND type = ?2
-                     ORDER BY id DESC",
-                )?;
-                let states: Vec<String> = stmt
-                    .query_map(rusqlite::params![issue_id, type_str], |row| row.get(0))?
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
+            // Short-circuit: if the latest run is not Failed, the tail count is 0.
+            if run.state != ProcessRunState::Failed {
+                return Ok(Some((run, 0)));
+            }
 
-                let mut count = 0u32;
-                for state_str in &states {
-                    if state_str == "failed" {
-                        count += 1;
-                    } else {
-                        break;
-                    }
-                }
-                count
-            };
+            let count = count_consecutive_failures_inner(&conn, issue_id, &type_str)?;
 
             Ok(Some((run, count)))
         })

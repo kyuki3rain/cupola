@@ -60,7 +60,7 @@ pub trait ProcessRunRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<u32>> + Send;
 
     /// Return the most recent ProcessRun and the consecutive-failure tail count,
-    /// both observed in a single database lock acquisition to prevent a concurrent
+    /// both observed atomically from a consistent snapshot to prevent a concurrent
     /// ProcessRun insert from producing an inconsistent (run, count) pair.
     ///
     /// Returns `None` if there are no runs for the given issue/type.
