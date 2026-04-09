@@ -59,6 +59,17 @@ pub trait ProcessRunRepository: Send + Sync {
         type_: ProcessRunType,
     ) -> impl std::future::Future<Output = Result<u32>> + Send;
 
+    /// Return the most recent ProcessRun and the consecutive-failure tail count,
+    /// both observed atomically from a consistent snapshot to prevent a concurrent
+    /// ProcessRun insert from producing an inconsistent (run, count) pair.
+    ///
+    /// Returns `None` if there are no runs for the given issue/type.
+    fn find_latest_with_consecutive_count(
+        &self,
+        issue_id: i64,
+        type_: ProcessRunType,
+    ) -> impl std::future::Future<Output = Result<Option<(ProcessRun, u32)>>> + Send;
+
     /// Return all currently Running records (used on startup recovery).
     fn find_all_running(&self)
     -> impl std::future::Future<Output = Result<Vec<ProcessRun>>> + Send;

@@ -64,6 +64,27 @@ fn row_to_process_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProcessRun> {
     })
 }
 
+/// Count the consecutive-failure tail for (issue_id, type_str) using an already-acquired
+/// connection. Both `count_consecutive_failures` and `find_latest_with_consecutive_count`
+/// delegate here to keep the counting logic in a single place.
+fn count_consecutive_failures_inner(
+    conn: &rusqlite::Connection,
+    issue_id: i64,
+    type_str: &str,
+) -> Result<u32> {
+    let mut stmt = conn.prepare(
+        "SELECT state FROM process_runs
+         WHERE issue_id = ?1 AND type = ?2
+         ORDER BY id DESC",
+    )?;
+    let states: Vec<String> = stmt
+        .query_map(rusqlite::params![issue_id, type_str], |row| row.get(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let count = states.iter().take_while(|s| s.as_str() == "failed").count() as u32;
+    Ok(count)
+}
+
 impl ProcessRunRepository for SqliteProcessRunRepository {
     async fn save(&self, run: &ProcessRun) -> Result<i64> {
         let db = self.db.clone();
@@ -267,24 +288,58 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
                 .conn()
                 .lock()
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
-            let mut stmt = conn.prepare(
-                "SELECT state FROM process_runs
-                 WHERE issue_id = ?1 AND type = ?2
-                 ORDER BY id DESC",
-            )?;
-            let states: Vec<String> = stmt
-                .query_map(rusqlite::params![issue_id, type_str], |row| row.get(0))?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
+            count_consecutive_failures_inner(&conn, issue_id, &type_str)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+    }
 
-            let mut count = 0u32;
-            for state_str in &states {
-                if state_str == "failed" {
-                    count += 1;
+    async fn find_latest_with_consecutive_count(
+        &self,
+        issue_id: i64,
+        type_: ProcessRunType,
+    ) -> Result<Option<(ProcessRun, u32)>> {
+        let db = self.db.clone();
+        let type_str = type_.to_string();
+        tokio::task::spawn_blocking(move || {
+            let conn = db
+                .conn()
+                .lock()
+                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+
+            // Both queries run under a single mutex acquisition, preventing a concurrent
+            // ProcessRun insert from slipping between the two reads.
+
+            // Find the latest run; drop stmt/rows before the next prepare.
+            let run = {
+                let mut stmt = conn.prepare(
+                    "SELECT id, issue_id, type, idx, state, pid, pr_number, causes,
+                            started_at, finished_at, error_message
+                     FROM process_runs
+                     WHERE issue_id = ?1 AND type = ?2
+                     ORDER BY id DESC LIMIT 1",
+                )?;
+                let mut rows = stmt.query(rusqlite::params![issue_id, type_str])?;
+                if let Some(row) = rows.next()? {
+                    Some(row_to_process_run(row)?)
                 } else {
-                    break;
+                    None
                 }
+            };
+
+            let run = match run {
+                Some(r) => r,
+                None => return Ok(None),
+            };
+
+            // Short-circuit: if the latest run is not Failed, the tail count is 0.
+            if run.state != ProcessRunState::Failed {
+                return Ok(Some((run, 0)));
             }
-            Ok(count)
+
+            let count = count_consecutive_failures_inner(&conn, issue_id, &type_str)?;
+
+            Ok(Some((run, count)))
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
@@ -547,6 +602,48 @@ mod tests {
             ProcessRunState::Succeeded,
             "succeeded should stay"
         );
+    }
+
+    /// T-2.R.8b: find_latest_with_consecutive_count returns consistent (run, count) pair
+    #[tokio::test]
+    async fn find_latest_with_consecutive_count_is_consistent() {
+        let (repo, issue_repo) = setup();
+        let issue_id = issue_repo.save(&new_issue(11)).await.expect("save issue");
+
+        // No runs yet → None
+        let result = repo
+            .find_latest_with_consecutive_count(issue_id, ProcessRunType::Design)
+            .await
+            .expect("query");
+        assert!(result.is_none());
+
+        // succeeded → failed × 2  → latest=failed, consecutive=2
+        let id1 = repo
+            .save(&new_run(issue_id, ProcessRunType::Design))
+            .await
+            .expect("r1");
+        repo.mark_succeeded(id1, None).await.expect("s1");
+
+        let id2 = repo
+            .save(&new_run(issue_id, ProcessRunType::Design))
+            .await
+            .expect("r2");
+        repo.mark_failed(id2, None).await.expect("f2");
+
+        let id3 = repo
+            .save(&new_run(issue_id, ProcessRunType::Design))
+            .await
+            .expect("r3");
+        repo.mark_failed(id3, None).await.expect("f3");
+
+        let (run, count) = repo
+            .find_latest_with_consecutive_count(issue_id, ProcessRunType::Design)
+            .await
+            .expect("query")
+            .expect("should have result");
+
+        assert_eq!(run.id, id3);
+        assert_eq!(count, 2, "two consecutive failures at the tail");
     }
 
     /// T-2.R.9: find_all_running returns only running records across issues

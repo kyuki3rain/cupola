@@ -210,63 +210,62 @@ impl IssueRepository for SqliteIssueRepository {
                 .conn()
                 .lock()
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
-            // Build dynamic SQL update
+            // Build dynamic SQL update.
+            // Push each value first, then derive the ?N placeholder from param_values.len().
+            // This eliminates manual index tracking and prevents silent data corruption
+            // when fields are added, removed, or reordered.
             let mut set_clauses = vec!["updated_at = datetime('now')".to_string()];
             let mut param_values: Vec<rusqlite::types::Value> = Vec::new();
-            let mut param_idx = 1usize;
 
             if let Some(state) = updates.state {
-                set_clauses.push(format!("state = ?{param_idx}"));
                 param_values.push(rusqlite::types::Value::Text(state.to_string()));
-                param_idx += 1;
+                set_clauses.push(format!("state = ?{}", param_values.len()));
             }
             if let Some(weight) = updates.weight {
-                set_clauses.push(format!("weight = ?{param_idx}"));
                 param_values.push(rusqlite::types::Value::Text(
                     task_weight_to_str(weight).to_string(),
                 ));
-                param_idx += 1;
+                set_clauses.push(format!("weight = ?{}", param_values.len()));
             }
             if let Some(ci_fix_count) = updates.ci_fix_count {
-                set_clauses.push(format!("ci_fix_count = ?{param_idx}"));
                 param_values.push(rusqlite::types::Value::Integer(ci_fix_count as i64));
-                param_idx += 1;
+                set_clauses.push(format!("ci_fix_count = ?{}", param_values.len()));
             }
             if let Some(close_finished) = updates.close_finished {
-                set_clauses.push(format!("close_finished = ?{param_idx}"));
                 param_values.push(rusqlite::types::Value::Integer(close_finished as i64));
-                param_idx += 1;
+                set_clauses.push(format!("close_finished = ?{}", param_values.len()));
             }
             if let Some(ref feature_name) = updates.feature_name {
-                set_clauses.push(format!("feature_name = ?{param_idx}"));
                 param_values.push(rusqlite::types::Value::Text(feature_name.clone()));
-                param_idx += 1;
+                set_clauses.push(format!("feature_name = ?{}", param_values.len()));
             }
             if let Some(epoch) = updates.consecutive_failures_epoch {
-                set_clauses.push(format!("consecutive_failures_epoch = ?{param_idx}"));
                 let v = epoch
                     .map(|dt| {
                         rusqlite::types::Value::Text(dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
                     })
                     .unwrap_or(rusqlite::types::Value::Null);
                 param_values.push(v);
-                param_idx += 1;
+                set_clauses.push(format!(
+                    "consecutive_failures_epoch = ?{}",
+                    param_values.len()
+                ));
             }
             if let Some(ref worktree_path) = updates.worktree_path {
-                set_clauses.push(format!("worktree_path = ?{param_idx}"));
                 let v = worktree_path
                     .as_ref()
                     .map(|p| rusqlite::types::Value::Text(p.clone()))
                     .unwrap_or(rusqlite::types::Value::Null);
                 param_values.push(v);
-                param_idx += 1;
+                set_clauses.push(format!("worktree_path = ?{}", param_values.len()));
             }
 
-            // Add the WHERE id = ?{param_idx}
+            // WHERE id comes after all SET params; index is len+1 before pushing.
+            let where_idx = param_values.len() + 1;
             let sql = format!(
                 "UPDATE issues SET {} WHERE id = ?{}",
                 set_clauses.join(", "),
-                param_idx
+                where_idx
             );
             param_values.push(rusqlite::types::Value::Integer(issue_id));
 
@@ -634,5 +633,57 @@ mod tests {
             let displayed = s.to_string();
             assert_eq!(str_to_state(0, &displayed).unwrap(), s);
         }
+    }
+
+    /// T-2.IR.7: update_state_and_metadata updates only the target row, not adjacent rows.
+    ///
+    /// This guards against dynamic SQL binding fragility: if `?N` placeholder indices
+    /// are computed incorrectly, the WHERE clause may bind to the wrong value and
+    /// silently update a different row.
+    #[tokio::test]
+    async fn update_state_and_metadata_does_not_corrupt_adjacent_rows() {
+        let (_db, repo) = setup();
+        let id1 = repo.save(&new_issue(200)).await.expect("save 1");
+        let id2 = repo.save(&new_issue(201)).await.expect("save 2");
+        let id3 = repo.save(&new_issue(202)).await.expect("save 3");
+
+        // Update all available fields on id2 only
+        let updates = MetadataUpdates {
+            state: Some(State::DesignRunning),
+            weight: Some(TaskWeight::Heavy),
+            ci_fix_count: Some(5),
+            close_finished: Some(true),
+            feature_name: Some("updated-feature".to_string()),
+            consecutive_failures_epoch: Some(Some(
+                chrono::Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap(),
+            )),
+            worktree_path: Some(Some("/tmp/wt".to_string())),
+        };
+        repo.update_state_and_metadata(id2, &updates)
+            .await
+            .expect("update");
+
+        // id2 should be updated
+        let found2 = repo.find_by_id(id2).await.expect("find").expect("exists");
+        assert_eq!(found2.state, State::DesignRunning);
+        assert_eq!(found2.weight, TaskWeight::Heavy);
+        assert_eq!(found2.ci_fix_count, 5);
+        assert!(found2.close_finished);
+        assert_eq!(found2.feature_name, "updated-feature");
+        assert!(found2.consecutive_failures_epoch.is_some());
+        assert_eq!(found2.worktree_path.as_deref(), Some("/tmp/wt"));
+
+        // id1 and id3 must be unchanged (default values)
+        let found1 = repo.find_by_id(id1).await.expect("find").expect("exists");
+        assert_eq!(found1.state, State::Idle, "id1 state must be unchanged");
+        assert_eq!(found1.ci_fix_count, 0, "id1 ci_fix_count must be unchanged");
+        assert!(
+            !found1.close_finished,
+            "id1 close_finished must be unchanged"
+        );
+
+        let found3 = repo.find_by_id(id3).await.expect("find").expect("exists");
+        assert_eq!(found3.state, State::Idle, "id3 state must be unchanged");
+        assert_eq!(found3.ci_fix_count, 0, "id3 ci_fix_count must be unchanged");
     }
 }

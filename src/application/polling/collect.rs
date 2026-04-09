@@ -284,14 +284,15 @@ async fn observe_processes<P: ProcessRunRepository>(
         issue_id: i64,
         type_: ProcessRunType,
     ) -> Result<Option<ProcessSnapshot>> {
-        let latest = process_repo.find_latest(issue_id, type_).await?;
-        let run = match latest {
-            Some(r) => r,
-            None => return Ok(None),
+        // Use the combined method to read both the latest run and the consecutive
+        // failure count in a single database lock acquisition, preventing a concurrent
+        // ProcessRun insert from producing an inconsistent (run, count) pair.
+        let Some((run, consecutive_failures)) = process_repo
+            .find_latest_with_consecutive_count(issue_id, type_)
+            .await?
+        else {
+            return Ok(None);
         };
-        let consecutive_failures = process_repo
-            .count_consecutive_failures(issue_id, type_)
-            .await?;
         Ok(Some(ProcessSnapshot {
             state: run.state,
             index: run.index,
