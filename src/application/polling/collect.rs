@@ -144,8 +144,11 @@ async fn observe_github_issue<G: GitHubClient>(
     const READY_LABEL: &str = "agent:ready";
     let has_ready_label = detail.labels.iter().any(|l| l == READY_LABEL);
 
-    // Determine ready_label_trusted
-    let ready_label_trusted = if !has_ready_label {
+    // Determine ready_label_trusted.
+    // Closed issues skip the permission check: they cannot transition to active
+    // states, so calling check_label_actor would only generate log spam without
+    // any useful effect.
+    let ready_label_trusted = if !has_ready_label || !is_open {
         false
     } else {
         use crate::application::association_guard::{AssociationCheckResult, check_label_actor};
@@ -319,17 +322,25 @@ mod tests {
         GitHubCheckRun, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails, ReviewThread,
     };
     use anyhow::Result;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
 
-    #[allow(dead_code)]
     struct MockGithub {
         is_open: bool,
         labels: Vec<String>,
+        /// Set to true when fetch_label_actor_login is called.
+        label_actor_called: Arc<AtomicBool>,
     }
 
     impl MockGithub {
-        #[allow(dead_code)]
-        fn new(is_open: bool, labels: Vec<String>) -> Self {
-            Self { is_open, labels }
+        fn with_tracker(is_open: bool, labels: Vec<String>, tracker: Arc<AtomicBool>) -> Self {
+            Self {
+                is_open,
+                labels,
+                label_actor_called: tracker,
+            }
         }
     }
 
@@ -391,6 +402,7 @@ mod tests {
             Ok(PrStatus::Open)
         }
         async fn fetch_label_actor_login(&self, _n: u64, _label: &str) -> Result<Option<String>> {
+            self.label_actor_called.store(true, Ordering::SeqCst);
             Ok(None)
         }
         async fn fetch_user_permission(
@@ -402,6 +414,88 @@ mod tests {
         async fn remove_label(&self, _n: u64, _label: &str) -> Result<()> {
             Ok(())
         }
+    }
+
+    fn test_config() -> Config {
+        let mut config =
+            Config::default_with_repo("owner".to_string(), "repo".to_string(), "main".to_string());
+        config.trusted_associations = crate::domain::author_association::TrustedAssociations::All;
+        config
+    }
+
+    /// closed issue + ready label → ready_label_trusted == false, API 未呼び出し
+    #[tokio::test]
+    async fn closed_issue_with_ready_label_skips_permission_check() {
+        let tracker = Arc::new(AtomicBool::new(false));
+        let github = MockGithub::with_tracker(
+            false, // closed
+            vec!["agent:ready".to_string()],
+            Arc::clone(&tracker),
+        );
+        let config = test_config();
+
+        let snapshot = observe_github_issue(&github, &config, 1).await.unwrap();
+
+        assert!(
+            snapshot.has_ready_label,
+            "has_ready_label should still reflect the label"
+        );
+        assert!(
+            !snapshot.ready_label_trusted,
+            "closed issue must not be trusted"
+        );
+        assert!(
+            !tracker.load(Ordering::SeqCst),
+            "fetch_label_actor_login must NOT be called for closed issues"
+        );
+    }
+
+    /// open issue + ready label → API 呼び出しあり（既存動作の回帰）
+    #[tokio::test]
+    async fn open_issue_with_ready_label_calls_permission_api() {
+        let tracker = Arc::new(AtomicBool::new(false));
+        let github = MockGithub::with_tracker(
+            true, // open
+            vec!["agent:ready".to_string()],
+            Arc::clone(&tracker),
+        );
+        // Use Specific associations so the API is actually called.
+        let mut config = test_config();
+        config.trusted_associations =
+            crate::domain::author_association::TrustedAssociations::Specific(vec![
+                crate::domain::author_association::AuthorAssociation::Owner,
+            ]);
+
+        let snapshot = observe_github_issue(&github, &config, 1).await.unwrap();
+
+        assert!(snapshot.has_ready_label);
+        // fetch_label_actor_login returns None → no actor login → untrusted
+        assert!(!snapshot.ready_label_trusted);
+        assert!(
+            tracker.load(Ordering::SeqCst),
+            "fetch_label_actor_login MUST be called for open issues with ready label"
+        );
+    }
+
+    /// closed issue + ラベルなし → ready_label_trusted == false
+    #[tokio::test]
+    async fn closed_issue_without_ready_label_is_not_trusted() {
+        let tracker = Arc::new(AtomicBool::new(false));
+        let github = MockGithub::with_tracker(
+            false, // closed
+            vec![],
+            Arc::clone(&tracker),
+        );
+        let config = test_config();
+
+        let snapshot = observe_github_issue(&github, &config, 1).await.unwrap();
+
+        assert!(!snapshot.has_ready_label);
+        assert!(!snapshot.ready_label_trusted);
+        assert!(
+            !tracker.load(Ordering::SeqCst),
+            "fetch_label_actor_login must NOT be called when no ready label"
+        );
     }
 
     /// T-3.CO.1: derive_ci_status returns Failure on failure conclusion

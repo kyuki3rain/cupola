@@ -32,7 +32,7 @@ GithubIssueSnapshot {
 ```
 
 - **観測元**: GitHub Issues API
-- `ready_label_trusted`: ラベル付与者の author_association が `trusted_associations` に含まれるかを確認。`TrustedAssociations::All` 設定時は常に `true`
+- `ready_label_trusted`: 原則として、ラベル付与者の author_association が `trusted_associations` に含まれるかを確認する。`TrustedAssociations::All` 設定時は open issue に限り `true` とみなす。なお、closed issue の場合はこの一般則よりも closed issue 用ルールを優先し、設定値に関わらず常に `false` を返す
 
 ### PrSnapshot
 
