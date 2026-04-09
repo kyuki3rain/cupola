@@ -284,6 +284,15 @@ where
 
     async fn graceful_shutdown(&mut self) {
         self.session_mgr.kill_all();
+
+        // Bounded wait for child processes to exit
+        let timeout = std::time::Duration::from_secs(10);
+        let start = std::time::Instant::now();
+        while self.session_mgr.count() > 0 && start.elapsed() < timeout {
+            self.session_mgr.collect_exited();
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
         if let Some(ref pid_file) = self.pid_file {
             let _ = pid_file.delete_pid();
         }

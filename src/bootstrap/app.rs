@@ -439,6 +439,8 @@ async fn start_foreground(
         other => anyhow::anyhow!("failed to write PID file: {other}"),
     })?;
 
+    // Ensure log directory exists before initializing logging
+    std::fs::create_dir_all(&cfg.log_dir).context("create log directory")?;
     // Initialize logging (hold guard for app lifetime)
     let _guard = init_logging(cfg.log_level, &cfg.log_dir);
 
@@ -599,6 +601,8 @@ async fn start_daemon_child(
         other => anyhow::anyhow!("failed to write PID file: {other}"),
     })?;
 
+    // Ensure log directory exists before initializing logging
+    std::fs::create_dir_all(&cfg.log_dir).context("create log directory")?;
     // Initialize logging to file
     let _guard = init_logging(cfg.log_level, &cfg.log_dir);
 
