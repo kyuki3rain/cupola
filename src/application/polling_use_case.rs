@@ -9,6 +9,7 @@ use crate::application::init_task_manager::InitTaskManager;
 use crate::application::polling::{collect, execute, persist, resolve};
 use crate::application::port::claude_code_runner::ClaudeCodeRunner;
 use crate::application::port::execution_log_repository::ExecutionLogRepository;
+use crate::application::port::file_generator::FileGenerator;
 use crate::application::port::git_worktree::GitWorktree;
 use crate::application::port::github_client::GitHubClient;
 use crate::application::port::issue_repository::IssueRepository;
@@ -84,13 +85,14 @@ impl ProcessRunRepository for NoopProcessRunRepository {
     }
 }
 
-pub struct PollingUseCase<G, I, E, C, W, P = NoopProcessRunRepository>
+pub struct PollingUseCase<G, I, E, C, W, F, P = NoopProcessRunRepository>
 where
     G: GitHubClient,
     I: IssueRepository,
     E: ExecutionLogRepository,
     C: ClaudeCodeRunner,
     W: GitWorktree,
+    F: FileGenerator,
     P: ProcessRunRepository,
 {
     github: G,
@@ -99,6 +101,7 @@ where
     exec_log_repo: E,
     claude_runner: C,
     worktree: W,
+    file_gen: F,
     session_mgr: SessionManager,
     init_mgr: InitTaskManager,
     config: Config,
@@ -106,13 +109,14 @@ where
     process_repo: P,
 }
 
-impl<G, I, E, C, W> PollingUseCase<G, I, E, C, W, NoopProcessRunRepository>
+impl<G, I, E, C, W, F> PollingUseCase<G, I, E, C, W, F, NoopProcessRunRepository>
 where
     G: GitHubClient,
     I: IssueRepository,
     E: ExecutionLogRepository,
     C: ClaudeCodeRunner,
     W: GitWorktree,
+    F: FileGenerator,
 {
     pub fn new(
         github: G,
@@ -120,6 +124,7 @@ where
         exec_log_repo: E,
         claude_runner: C,
         worktree: W,
+        file_gen: F,
         config: Config,
     ) -> Self {
         Self {
@@ -128,6 +133,7 @@ where
             exec_log_repo,
             claude_runner,
             worktree,
+            file_gen,
             session_mgr: SessionManager::new(),
             init_mgr: InitTaskManager::new(),
             config,
@@ -137,7 +143,7 @@ where
     }
 }
 
-impl<G, I, E, C, W, P> PollingUseCase<G, I, E, C, W, P>
+impl<G, I, E, C, W, F, P> PollingUseCase<G, I, E, C, W, F, P>
 where
     G: GitHubClient,
     I: IssueRepository,
@@ -146,19 +152,21 @@ where
     // Clone + 'static is required because SpawnInit moves a worktree handle
     // into a `tokio::spawn` task per docs/architecture/effects.md.
     W: GitWorktree + Clone + 'static,
+    F: FileGenerator + Clone + 'static,
     P: ProcessRunRepository,
 {
     /// Wire a real ProcessRunRepository (used by bootstrap once Phase 5 is complete).
     pub fn with_process_repo<P2: ProcessRunRepository>(
         self,
         process_repo: P2,
-    ) -> PollingUseCase<G, I, E, C, W, P2> {
+    ) -> PollingUseCase<G, I, E, C, W, F, P2> {
         PollingUseCase {
             github: self.github,
             issue_repo: self.issue_repo,
             exec_log_repo: self.exec_log_repo,
             claude_runner: self.claude_runner,
             worktree: self.worktree,
+            file_gen: self.file_gen,
             session_mgr: self.session_mgr,
             init_mgr: self.init_mgr,
             config: self.config,
@@ -254,6 +262,7 @@ where
                 &self.process_repo,
                 &self.claude_runner,
                 &self.worktree,
+                &self.file_gen,
                 &mut self.session_mgr,
                 &mut self.init_mgr,
                 &self.config,

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -249,6 +249,7 @@ const GITIGNORE_ENTRIES: &str = r#"# cupola
 .cupola/inputs/
 "#;
 
+#[derive(Clone)]
 pub struct InitFileGenerator {
     base_dir: PathBuf,
 }
@@ -448,6 +449,20 @@ impl FileGenerator for InitFileGenerator {
         language: &str,
     ) -> Result<bool> {
         InitFileGenerator::generate_spec_directory(self, issue_number, issue_body, language)
+    }
+
+    fn generate_spec_directory_at(
+        &self,
+        base_dir: &Path,
+        issue_number: u64,
+        issue_body: &str,
+        language: &str,
+    ) -> Result<bool> {
+        InitFileGenerator::new(base_dir.to_path_buf()).generate_spec_directory(
+            issue_number,
+            issue_body,
+            language,
+        )
     }
 }
 
@@ -663,5 +678,39 @@ mod tests {
 
         let req = fs::read_to_string(spec_dir.join("requirements.md")).expect("read");
         assert!(req.contains("New feature"));
+    }
+
+    #[test]
+    fn spec_directory_at_writes_into_target_base_dir() {
+        let (tmp, generator) = setup();
+        let worktree_dir = tmp.path().join("worktree");
+        fs::create_dir_all(worktree_dir.join(".cupola")).expect("create worktree .cupola");
+        let tmpl_dir = worktree_dir
+            .join(".cupola")
+            .join("settings")
+            .join("templates")
+            .join("specs");
+        fs::create_dir_all(&tmpl_dir).expect("create template dir");
+        fs::write(
+            tmpl_dir.join("init.json"),
+            r#"{"feature_name":"{{FEATURE_NAME}}","created_at":"{{TIMESTAMP}}","updated_at":"{{TIMESTAMP}}","language":"{{LANGUAGE}}","phase":"initialized"}"#,
+        )
+        .expect("write init.json");
+
+        let result = generator
+            .generate_spec_directory_at(&worktree_dir, 193, "Issue body", "en")
+            .expect("generate");
+        assert!(result);
+
+        let spec_dir = worktree_dir.join(".cupola").join("specs").join("issue-193");
+        assert!(spec_dir.join("spec.json").exists());
+        assert!(spec_dir.join("requirements.md").exists());
+        assert!(
+            !tmp.path()
+                .join(".cupola")
+                .join("specs")
+                .join("issue-193")
+                .exists()
+        );
     }
 }

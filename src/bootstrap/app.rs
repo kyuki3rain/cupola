@@ -482,6 +482,7 @@ async fn start_foreground(
         let exec_log_repo = SqliteExecutionLogRepository::new(db);
         let claude_runner = ClaudeCodeProcess::new("claude");
         let worktree = GitWorktreeManager::new(".");
+        let file_gen = InitFileGenerator::new(std::env::current_dir()?);
 
         // Build polling use case with PID file for graceful shutdown cleanup
         let mut polling = PollingUseCase::new(
@@ -490,6 +491,7 @@ async fn start_foreground(
             exec_log_repo,
             claude_runner,
             worktree,
+            file_gen,
             cfg,
         )
         .with_process_repo(process_repo)
@@ -637,6 +639,7 @@ async fn start_daemon_child(
         let exec_log_repo = SqliteExecutionLogRepository::new(db);
         let claude_runner = ClaudeCodeProcess::new("claude");
         let worktree = GitWorktreeManager::new(".");
+        let file_gen = InitFileGenerator::new(config_dir.clone());
 
         // Build polling use case with PID file
         let mut polling = PollingUseCase::new(
@@ -645,6 +648,7 @@ async fn start_daemon_child(
             exec_log_repo,
             claude_runner,
             worktree,
+            file_gen,
             cfg,
         )
         .with_process_repo(process_repo)
