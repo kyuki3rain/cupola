@@ -112,15 +112,29 @@ impl GitWorktree for GitWorktreeManager {
     }
 
     fn create_branch(&self, worktree_path: &Path, branch: &str) -> Result<()> {
-        // Try to create the branch first; if it already exists fall back to checkout.
-        if self
-            .run_git_in_dir(worktree_path, &["checkout", "-b", branch])
-            .is_ok()
-        {
+        let output = Command::new("git")
+            .args(["checkout", "-b", branch])
+            .current_dir(worktree_path)
+            .output()
+            .with_context(|| format!("failed to execute git checkout -b {branch}"))?;
+
+        if output.status.success() {
             return Ok(());
         }
-        self.run_git_in_dir(worktree_path, &["checkout", branch])
-            .with_context(|| format!("failed to create or checkout branch {branch}"))
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr_trimmed = stderr.trim();
+        if stderr_trimmed.contains("already exists") {
+            return self
+                .run_git_in_dir(worktree_path, &["checkout", branch])
+                .with_context(|| format!("failed to checkout existing branch {branch}"));
+        }
+
+        Err(anyhow!(
+            "git checkout -b {} failed: {}",
+            branch,
+            stderr_trimmed
+        ))
     }
 
     fn checkout(&self, worktree_path: &Path, branch: &str) -> Result<()> {
