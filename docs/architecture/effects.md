@@ -173,8 +173,8 @@ cupola が GitHub Issue を**能動的にクローズする**責務（GitHub clo
 | **実行方法** | 同期実行（claude_runner.spawn） |
 | **パラメータ** | `type_: ProcessRunType`、`causes: Vec<FixingProblemKind>`、`pending_run_id: Option<i64>`。Decide は最新 ProcessSnapshot の state が `pending` の場合に `pending_run_id = Some(run_id)` をセットする |
 | **前提メタデータ** | `worktree_path`、`weight`、`causes`（Decide が WorldSnapshot から毎回決定。直前の ProcessRun の causes はあくまで監査用記録） |
-| **処理内容（新規: pending_run_id=None）** | ProcessRun INSERT（state=pending） → セッション枠チェック → 枠あり: state=running に UPDATE + input files 生成 + モデル選択 + Claude Code 起動。枠なし: pending のまま残す（次サイクルで再試行） |
-| **処理内容（再試行: pending_run_id=Some）** | セッション枠チェック → 枠あり: 既存レコードを state=running に UPDATE + input files 生成 + モデル選択 + Claude Code 起動。枠なし: pending のまま残す |
+| **処理内容（新規: pending_run_id=None）** | セッション枠チェック → 枠あり: ProcessRun INSERT（state=running） + input files 生成 + モデル選択 + Claude Code 起動。枠なし: ProcessRun INSERT（state=pending）で次サイクルに持ち越す |
+| **処理内容（再試行: pending_run_id=Some）** | セッション枠チェック → 枠あり: 既存レコードを state=running に UPDATE + input files 生成 + モデル選択 + Claude Code 起動。枠なし: pending のまま維持 |
 | **Fixing 時の追加処理** | fetch + merge `origin/{default_branch}` を実行。ローカルのマージコンフリクトは Claude Code が自力で解決する |
 | **完了検知** | SessionManager で終了検知 → Resolve が ProcessRun を更新 → 次サイクル Collect が `processes.*.state` を観測 |
 

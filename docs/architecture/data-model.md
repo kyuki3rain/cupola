@@ -68,8 +68,8 @@ origin/{default_branch}
 
 ### ProcessRun の操作者
 
-- **Execute**: spawn 決定時に state=pending で INSERT。spawn 成功時に state=running に UPDATE し pid をセット。セッション枠がない場合は pending のまま残す
-- **Execute（再試行）**: 既存の pending レコードを running に UPDATE して spawn。新規 INSERT はしない
+- **Execute（新規: pending_run_id=None）**: セッション枠あり → state=running で INSERT + spawn。枠なし → state=pending で INSERT（次サイクルに持ち越し）
+- **Execute（再試行: pending_run_id=Some）**: セッション枠あり → 既存 pending レコードを state=running に UPDATE + spawn。枠なし → pending のまま維持
 - **Resolve**: プロセス終了時に state を succeeded/failed/stale に UPDATE、pid・pr_number・error_message・finished_at を更新
 
 ## TaskWeight
