@@ -256,7 +256,7 @@ DesignFixing と対称。`T-D.if.1–10` は `T-D.df.1–10` と同形。
 - **T-CO.4** PR API 5xx → `Err` を返しその issue のサイクルのみスキップ。
 - **T-CO.5** `consecutive_failures` は `consecutive_failures_epoch` 以降のレコードに限定して集計。
 - **T-CO.6** `ci_fix_exhausted = (issue.ci_fix_count >= config.max_ci_fix_cycles)`。
-- **T-CO.7** `has_review_comments` は `trusted_associations` に合致しない author のスレッドを除外する。
+- **T-CO.7** `has_review_comments` は trust 判定（`trusted_associations` によるロール判定 OR `trusted_reviewers` によるユーザー名判定）を通過するコメントを1件も含まないスレッドを除外する。除外されたスレッドは遷移トリガーにもならず、Claude Code にも渡されない。
 - **T-CO.8** `ci_status` 集約: `failure | timed_out → Failure`、`cancelled | null → Unknown`、全 `success/neutral/skipped` で `Ok`、check runs ゼロ → `Unknown`。
 - **T-CO.9** `has_conflict` は `mergeable == Some(false)` のときのみ true（`None` は false 扱い）。
 - **T-CO.10** Collect は DB への書き込みを行わない（write を panic する mock で検証）。
@@ -369,7 +369,7 @@ DesignFixing と対称。`T-D.if.1–10` は `T-D.df.1–10` と同形。
 ## 24. Adapter — GitHub (`T-GH.*`)
 
 - **T-GH.1** `find_open_pr_by_head(branch)` は open 状態の PR 番号を返す。closed PR は返さない。
-- **T-GH.2** `list_review_threads(pr)` は `author_association ∈ trusted_associations` のスレッドのみ返す。
+- **T-GH.2** `list_review_threads(pr)` は全スレッドを返す（trust フィルタは Collect フェーズ側で適用する）。
 - **T-GH.3** `check_runs(sha)` の集約: `failure|timed_out → Failure`、`cancelled|null → Unknown`、`success|neutral|skipped` 全て → `Ok`、レコードなし → `Unknown`。
 - **T-GH.4** `comment_on_issue` の呼び出しが best-effort ラッパーで包まれる前提で、ラッパー側がエラーをログ化するだけで継続する。
 - **T-GH.5** `close_issue` は既クローズ済みの issue に対しても冪等に成功する。
