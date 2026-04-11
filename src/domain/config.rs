@@ -27,6 +27,7 @@ pub struct Config {
     pub max_concurrent_sessions: Option<u32>,
     pub models: ModelConfig,
     pub trusted_associations: TrustedAssociations,
+    pub trusted_reviewers: Vec<String>,
 }
 
 impl Config {
@@ -45,7 +46,19 @@ impl Config {
             max_concurrent_sessions: Some(3),
             models: ModelConfig::new_default("sonnet".to_string()),
             trusted_associations: TrustedAssociations::default(),
+            trusted_reviewers: vec!["copilot-pull-request-reviewer".to_string()],
         }
+    }
+
+    /// コメントの trust を統合判定する。
+    /// `trusted_associations`（ロールベース）OR `trusted_reviewers`（ユーザー名ベース）。
+    pub fn is_comment_trusted(
+        &self,
+        author_association: &crate::domain::author_association::AuthorAssociation,
+        author_login: &str,
+    ) -> bool {
+        self.trusted_associations.is_trusted(author_association)
+            || self.trusted_reviewers.iter().any(|r| r == author_login)
     }
 
     pub fn validate(&self) -> Result<(), String> {

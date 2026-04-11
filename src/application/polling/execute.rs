@@ -543,8 +543,7 @@ where
         // Write review threads
         if let Some(pr_number) = pr_number_opt {
             let threads = github.list_unresolved_threads(pr_number).await?;
-            let trusted = &config.trusted_associations;
-            write_review_threads_input(wt_path, &threads, trusted)?;
+            write_review_threads_input(wt_path, &threads, config)?;
         }
     }
 

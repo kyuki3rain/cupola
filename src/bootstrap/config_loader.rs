@@ -57,6 +57,7 @@ pub struct CupolaToml {
     models: Option<ModelsToml>,
     pub log: Option<LogToml>,
     pub trusted_associations: Option<Vec<String>>,
+    pub trusted_reviewers: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,6 +135,9 @@ impl CupolaToml {
             max_concurrent_sessions: Some(self.max_concurrent_sessions.unwrap_or(3)),
             models,
             trusted_associations,
+            trusted_reviewers: self
+                .trusted_reviewers
+                .unwrap_or_else(|| vec!["copilot-pull-request-reviewer".to_string()]),
         })
     }
 }
