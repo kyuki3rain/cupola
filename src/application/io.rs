@@ -106,7 +106,7 @@ pub fn write_review_threads_input(
     if excluded_count > 0 {
         tracing::info!(
             excluded_count,
-            "excluded review comments due to untrusted author association"
+            "excluded review comments from untrusted authors"
         );
     }
 
