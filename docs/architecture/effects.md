@@ -54,9 +54,12 @@ cupola が GitHub Issue を**能動的にクローズする**責務（GitHub clo
 | 条件 | エフェクト | 実行方法 |
 |------|-----------|---------|
 | `InitializeRunning` + `processes.init` が None または `state != running` + init 未完了 | SpawnInit | `tokio::spawn` |
-| `ImplementationRunning` + `processes.impl.state != running` | SwitchToImplBranch → SpawnProcess（順次） | 同期（fail-fast） |
-| `DesignRunning` + `processes.design.state != running` | SpawnProcess | 同期（claude_runner.spawn） |
-| Fixing 状態（`DesignFixing`、`ImplementationFixing`）+ 対応 `process.state != running` | SpawnProcess | 同期（claude_runner.spawn） |
+| `ImplementationRunning` + `processes.impl.state ∉ {running, pending}` | SwitchToImplBranch → SpawnProcess（pending_run_id=None、順次） | 同期（fail-fast） |
+| `ImplementationRunning` + `processes.impl.state == pending` | SpawnProcess（pending_run_id=Some。SwitchToImplBranch は初回で完了済みのためスキップ） | 同期（claude_runner.spawn） |
+| `DesignRunning` + `processes.design.state ∉ {running, pending}` | SpawnProcess（pending_run_id=None） | 同期（claude_runner.spawn） |
+| `DesignRunning` + `processes.design.state == pending` | SpawnProcess（pending_run_id=Some） | 同期（claude_runner.spawn） |
+| Fixing 状態 + 対応 `process.state ∉ {running, pending}` | SpawnProcess（pending_run_id=None） | 同期（claude_runner.spawn） |
+| Fixing 状態 + 対応 `process.state == pending` | SpawnProcess（pending_run_id=Some） | 同期（claude_runner.spawn） |
 | `Completed` + `worktree_path != null` | CleanupWorktree | 同期（best-effort） |
 | `Completed` または `Cancelled` + `!close_finished` | CloseIssue | 同期（best-effort） |
 
@@ -169,8 +172,10 @@ cupola が GitHub Issue を**能動的にクローズする**責務（GitHub clo
 |------|------|
 | **トリガー** | `DesignRunning`・`DesignFixing`・`ImplementationFixing` かつ対応 `process.state != running`。`ImplementationRunning` は SwitchToImplBranch チェーン内で実行されるため対象外。`ci_fix_exhausted` はチェックしない（ReviewWaiting の入口で制御済みのため） |
 | **実行方法** | 同期実行（claude_runner.spawn） |
+| **パラメータ** | `type_: ProcessRunType`、`causes: Vec<FixingProblemKind>`、`pending_run_id: Option<i64>`。Decide は最新 ProcessSnapshot の state が `pending` の場合に `pending_run_id = Some(run_id)` をセットする |
 | **前提メタデータ** | `worktree_path`、`weight`、`causes`（Decide が WorldSnapshot から毎回決定。直前の ProcessRun の causes はあくまで監査用記録） |
-| **処理内容** | ProcessRun INSERT（state=running） → input files 生成（`.cupola/inputs/`）→ モデル選択（`weight × state-key`）→ Claude Code 起動 |
+| **処理内容（新規: pending_run_id=None）** | セッション枠チェック → 枠あり: ProcessRun INSERT（state=running） + input files 生成 + モデル選択 + Claude Code 起動。枠なし: ProcessRun INSERT（state=pending）で次サイクルに持ち越す |
+| **処理内容（再試行: pending_run_id=Some）** | セッション枠チェック → 枠あり: 既存レコードを state=running に UPDATE + input files 生成 + モデル選択 + Claude Code 起動。枠なし: pending のまま維持 |
 | **Fixing 時の追加処理** | fetch + merge `origin/{default_branch}` を実行。ローカルのマージコンフリクトは Claude Code が自力で解決する |
 | **完了検知** | SessionManager で終了検知 → Resolve が ProcessRun を更新 → 次サイクル Collect が `processes.*.state` を観測 |
 

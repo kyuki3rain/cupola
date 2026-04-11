@@ -81,6 +81,7 @@ stateDiagram-v2
 | `InitializeRunning` | `processes.init.state == succeeded` | `DesignRunning` |
 | **`DesignRunning`** | `github_issue.state == closed` | `Cancelled` |
 | `DesignRunning` | `processes.design.consecutive_failures >= max_retries` | `Cancelled` |
+| `DesignRunning` | `processes.design.state == pending` | `DesignRunning` |
 | `DesignRunning` | `processes.design.state == failed` | `DesignRunning` |
 | `DesignRunning` | `processes.design.state == stale` | `DesignRunning` |
 | `DesignRunning` | `processes.design.state == succeeded` + `design_pr.state == merged` | `ImplementationRunning` |
@@ -100,11 +101,13 @@ stateDiagram-v2
 | `DesignFixing` | `design_pr.state == closed` | `DesignRunning` |
 | `DesignFixing` | `design_pr == None` | `DesignRunning` |
 | `DesignFixing` | `processes.design_fix.consecutive_failures >= max_retries` | `Cancelled` |
+| `DesignFixing` | `processes.design_fix.state == pending` | `DesignFixing` |
 | `DesignFixing` | `processes.design_fix.state == failed` | `DesignFixing` |
 | `DesignFixing` | `processes.design_fix.state == stale` | `DesignFixing` |
 | `DesignFixing` | `processes.design_fix.state == succeeded` | `DesignReviewWaiting` |
 | **`ImplementationRunning`** | `github_issue.state == closed` | `Cancelled` |
 | `ImplementationRunning` | `processes.impl.consecutive_failures >= max_retries` | `Cancelled` |
+| `ImplementationRunning` | `processes.impl.state == pending` | `ImplementationRunning` |
 | `ImplementationRunning` | `processes.impl.state == failed` | `ImplementationRunning` |
 | `ImplementationRunning` | `processes.impl.state == stale` | `ImplementationRunning` |
 | `ImplementationRunning` | `processes.impl.state == succeeded` + `impl_pr.state == merged` | `Completed` |
@@ -124,6 +127,7 @@ stateDiagram-v2
 | `ImplementationFixing` | `impl_pr.state == closed` | `ImplementationRunning` |
 | `ImplementationFixing` | `impl_pr == None` | `ImplementationRunning` |
 | `ImplementationFixing` | `processes.impl_fix.consecutive_failures >= max_retries` | `Cancelled` |
+| `ImplementationFixing` | `processes.impl_fix.state == pending` | `ImplementationFixing` |
 | `ImplementationFixing` | `processes.impl_fix.state == failed` | `ImplementationFixing` |
 | `ImplementationFixing` | `processes.impl_fix.state == stale` | `ImplementationFixing` |
 | `ImplementationFixing` | `processes.impl_fix.state == succeeded` | `ImplementationReviewWaiting` |

@@ -72,14 +72,15 @@ ProcessesSnapshot {
 
 ```
 ProcessSnapshot {
-  state:                running | succeeded | failed | stale
+  state:                pending | running | succeeded | failed | stale
   index:                u32
+  run_id:               i64    // 最新レコードの DB primary key（SpawnProcess エフェクトで pending_run_id として使用）
   consecutive_failures: u32    // 同 type の直近連続失敗数（retry_count 相当）
 }
 ```
 
 **consecutive_failures の計算**:
-同 `(issue_id, type)` の ProcessRun を `index` 降順で走査し、`state=failed` の連続件数を数える。`state=succeeded`、`state=stale`、または `state=running` に当たった時点で停止（stale は別状態文脈での終了であり現在のリトライとしてカウントしない。running はまだ完了していないためカウントしない）。
+同 `(issue_id, type)` の ProcessRun を `index` 降順で走査し、`state=failed` の連続件数を数える。`state=succeeded`、`state=stale`、`state=pending`、または `state=running` に当たった時点で停止（stale・pending は失敗ではないためカウントしない。running はまだ完了していないためカウントしない）。
 
 **init type の注意**: `init` ProcessRun は Stale Guard の対象外（SessionManager ではなく InitTaskManager/JoinHandle で管理）。そのため `init.state` は `running | succeeded | failed` のみ取り得る（`stale` には遷移しない）。
 
