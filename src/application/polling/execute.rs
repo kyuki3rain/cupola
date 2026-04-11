@@ -591,12 +591,12 @@ where
     let model = config.models.resolve(issue.weight, model_phase);
 
     // Determine run_id: reuse pending or create new running record
-    let run_id = if let Some(pid) = pending_run_id {
+    let run_id = if let Some(existing_run_id) = pending_run_id {
         // Resume pending: update state to running
         process_repo
-            .update_state(pid, ProcessRunState::Running)
+            .update_state(existing_run_id, ProcessRunState::Running)
             .await?;
-        pid
+        existing_run_id
     } else {
         // New spawn: insert as running
         let latest = process_repo.find_latest(issue.id, type_).await?;

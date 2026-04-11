@@ -1006,6 +1006,23 @@ mod tests {
         )));
     }
 
+    /// T-1.D.dr.4b: pending stays in DesignRunning with SpawnProcess(pending_run_id=Some)
+    #[test]
+    fn dr_4b_design_pending_stays_with_spawn() {
+        let issue = make_issue(State::DesignRunning);
+        let snap = snap_with_design(ProcessRunState::Pending, 0);
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::DesignRunning);
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::Design,
+                pending_run_id: Some(_),
+                ..
+            }
+        )));
+    }
+
     /// T-1.D.dr.5
     #[test]
     fn dr_5_design_succeeded_pr_merged_goes_impl_running() {
@@ -1308,6 +1325,23 @@ mod tests {
         )));
     }
 
+    /// T-1.D.df.7b: pending stays in DesignFixing with SpawnProcess(pending_run_id=Some)
+    #[test]
+    fn df_7b_design_fix_pending_stays_with_spawn() {
+        let issue = make_issue(State::DesignFixing);
+        let snap = snap_with_design_fix(ProcessRunState::Pending, 0);
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::DesignFixing);
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::DesignFix,
+                pending_run_id: Some(_),
+                ..
+            }
+        )));
+    }
+
     /// T-1.D.df.8
     #[test]
     fn df_8_design_fix_succeeded_goes_design_review_waiting() {
@@ -1388,6 +1422,29 @@ mod tests {
         let d = decide(&issue, &snap, &cfg());
         assert_eq!(d.next_state, State::ImplementationRunning);
         assert!(d.effects.contains(&Effect::SwitchToImplBranch));
+    }
+
+    /// T-1.D.ir.4b: pending stays in ImplementationRunning with SpawnProcess(pending_run_id=Some)
+    #[test]
+    fn ir_4b_impl_pending_stays_with_spawn() {
+        let issue = make_issue(State::ImplementationRunning);
+        let snap = snap_with_impl(ProcessRunState::Pending, 0);
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::ImplementationRunning);
+        // Pending skips SwitchToImplBranch (already done on first attempt)
+        assert!(
+            !d.effects
+                .iter()
+                .any(|e| matches!(e, Effect::SwitchToImplBranch))
+        );
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::Impl,
+                pending_run_id: Some(_),
+                ..
+            }
+        )));
     }
 
     /// T-1.D.ir.5 (impl.succeeded + impl_pr.merged → Completed)
@@ -1575,6 +1632,22 @@ mod tests {
         let snap = snap_with_impl_fix(ProcessRunState::Stale, 0);
         let d = decide(&issue, &snap, &cfg());
         assert_eq!(d.next_state, State::ImplementationFixing);
+    }
+
+    #[test]
+    fn if_7b_impl_fix_pending_stays_with_spawn() {
+        let issue = make_issue(State::ImplementationFixing);
+        let snap = snap_with_impl_fix(ProcessRunState::Pending, 0);
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::ImplementationFixing);
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::ImplFix,
+                pending_run_id: Some(_),
+                ..
+            }
+        )));
     }
 
     #[test]
