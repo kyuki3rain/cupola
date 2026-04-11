@@ -81,6 +81,9 @@ impl Config {
         if self.max_ci_fix_cycles == 0 {
             return Err("max_ci_fix_cycles must be greater than 0".to_string());
         }
+        if self.max_retries == 0 {
+            return Err("max_retries must be greater than 0".to_string());
+        }
         self.models.validate()?;
         Ok(())
     }
@@ -341,6 +344,31 @@ mod tests {
         let mut config =
             Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
         config.max_ci_fix_cycles = 5;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_zero_max_retries() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.max_retries = 0;
+        let err = config.validate().unwrap_err();
+        assert_eq!(err, "max_retries must be greater than 0");
+    }
+
+    #[test]
+    fn validate_accepts_positive_max_retries() {
+        let mut config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        config.max_retries = 1;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_default_max_retries() {
+        let config =
+            Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        assert_eq!(config.max_retries, 3);
         assert!(config.validate().is_ok());
     }
 }
