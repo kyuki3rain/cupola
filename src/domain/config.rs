@@ -347,7 +347,6 @@ mod tests {
         assert!(config.validate().is_ok());
     }
 
-    // Task 2.1: max_retries validation tests
     #[test]
     fn validate_rejects_zero_max_retries() {
         let mut config =
@@ -369,6 +368,7 @@ mod tests {
     fn validate_accepts_default_max_retries() {
         let config =
             Config::default_with_repo("o".to_string(), "r".to_string(), "main".to_string());
+        assert_eq!(config.max_retries, 3);
         assert!(config.validate().is_ok());
     }
 }
