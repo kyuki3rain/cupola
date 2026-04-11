@@ -40,6 +40,7 @@ pub struct PrSnapshot {
 pub struct ProcessSnapshot {
     pub state: ProcessRunState,
     pub index: u32,
+    pub run_id: i64,
     pub consecutive_failures: u32,
 }
 
@@ -101,10 +102,20 @@ pub mod fixtures {
         }
     }
 
+    pub fn pending_process(index: u32) -> ProcessSnapshot {
+        ProcessSnapshot {
+            state: ProcessRunState::Pending,
+            index,
+            run_id: 0,
+            consecutive_failures: 0,
+        }
+    }
+
     pub fn running_process(index: u32) -> ProcessSnapshot {
         ProcessSnapshot {
             state: ProcessRunState::Running,
             index,
+            run_id: 0,
             consecutive_failures: 0,
         }
     }
@@ -113,6 +124,7 @@ pub mod fixtures {
         ProcessSnapshot {
             state: ProcessRunState::Succeeded,
             index,
+            run_id: 0,
             consecutive_failures: 0,
         }
     }
@@ -121,6 +133,7 @@ pub mod fixtures {
         ProcessSnapshot {
             state: ProcessRunState::Failed,
             index,
+            run_id: 0,
             consecutive_failures,
         }
     }
@@ -129,6 +142,7 @@ pub mod fixtures {
         ProcessSnapshot {
             state: ProcessRunState::Stale,
             index,
+            run_id: 0,
             consecutive_failures: 0,
         }
     }
@@ -224,10 +238,12 @@ mod tests {
         let ps = ProcessSnapshot {
             state: ProcessRunState::Failed,
             index: 3,
+            run_id: 42,
             consecutive_failures: 2,
         };
         assert_eq!(ps.state, ProcessRunState::Failed);
         assert_eq!(ps.index, 3);
+        assert_eq!(ps.run_id, 42);
         assert_eq!(ps.consecutive_failures, 2);
     }
 
