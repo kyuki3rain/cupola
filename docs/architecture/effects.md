@@ -54,7 +54,8 @@ cupola が GitHub Issue を**能動的にクローズする**責務（GitHub clo
 | 条件 | エフェクト | 実行方法 |
 |------|-----------|---------|
 | `InitializeRunning` + `processes.init` が None または `state != running` + init 未完了 | SpawnInit | `tokio::spawn` |
-| `ImplementationRunning` + `processes.impl.state != running` | SwitchToImplBranch → SpawnProcess（順次） | 同期（fail-fast） |
+| `ImplementationRunning` + `processes.impl.state ∉ {running, pending}` | SwitchToImplBranch → SpawnProcess（pending_run_id=None、順次） | 同期（fail-fast） |
+| `ImplementationRunning` + `processes.impl.state == pending` | SpawnProcess（pending_run_id=Some。SwitchToImplBranch は初回で完了済みのためスキップ） | 同期（claude_runner.spawn） |
 | `DesignRunning` + `processes.design.state ∉ {running, pending}` | SpawnProcess（pending_run_id=None） | 同期（claude_runner.spawn） |
 | `DesignRunning` + `processes.design.state == pending` | SpawnProcess（pending_run_id=Some） | 同期（claude_runner.spawn） |
 | Fixing 状態 + 対応 `process.state ∉ {running, pending}` | SpawnProcess（pending_run_id=None） | 同期（claude_runner.spawn） |
