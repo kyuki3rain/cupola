@@ -945,6 +945,7 @@ mod tests {
     /// has no shared global state and is safe to use in parallel tests.
     struct CapturingSubscriber {
         events: Arc<Mutex<Vec<String>>>,
+        next_id: std::sync::atomic::AtomicU64,
     }
 
     impl CapturingSubscriber {
@@ -953,6 +954,7 @@ mod tests {
             (
                 Self {
                     events: events.clone(),
+                    next_id: std::sync::atomic::AtomicU64::new(1),
                 },
                 events,
             )
@@ -964,8 +966,11 @@ mod tests {
             metadata.level() <= &tracing::Level::WARN
         }
         fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-            // Span IDs must be non-zero.
-            tracing::span::Id::from_u64(1)
+            // Span IDs must be unique and non-zero.
+            let id = self
+                .next_id
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::span::Id::from_u64(id)
         }
         fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
         fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
@@ -991,9 +996,7 @@ mod tests {
             }
             let mut c = Collector(String::new());
             event.record(&mut c);
-            // Also capture the message field
-            let msg = event.metadata().name();
-            self.events.lock().unwrap().push(format!("{msg}{}", c.0));
+            self.events.lock().unwrap().push(c.0);
         }
         fn enter(&self, _span: &tracing::span::Id) {}
         fn exit(&self, _span: &tracing::span::Id) {}
