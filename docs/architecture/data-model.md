@@ -58,14 +58,18 @@ origin/{default_branch}
 
 | バリアント | 意味 |
 |-----------|------|
+| `pending` | Decide が spawn を決定済み、Execute が未実行（セッション枠待ち等）。`pid`, `pr_number`, `error_message`, `finished_at` は全て NULL。`causes` と `started_at` は INSERT 時に確定 |
 | `running` | 実行中 |
 | `succeeded` | 正常終了（後処理含む） |
 | `failed` | 失敗（非0終了・タイムアウト・後処理失敗） |
 | `stale` | 終了検知時に Issue 状態が既に進んでいた（後処理スキップ）。consecutive_failures にカウントしない |
 
+`pending` は `stale` と同様に `consecutive_failures` にカウントしない。
+
 ### ProcessRun の操作者
 
-- **Execute**: スポーン直前に state=running で INSERT
+- **Execute**: spawn 決定時に state=pending で INSERT。spawn 成功時に state=running に UPDATE し pid をセット。セッション枠がない場合は pending のまま残す
+- **Execute（再試行）**: 既存の pending レコードを running に UPDATE して spawn。新規 INSERT はしない
 - **Resolve**: プロセス終了時に state を succeeded/failed/stale に UPDATE、pid・pr_number・error_message・finished_at を更新
 
 ## TaskWeight
