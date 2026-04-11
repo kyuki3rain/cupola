@@ -8,7 +8,7 @@
 
 - [ ] 1.2 デーモン稼働中のエラー終了ロジックを実装する
   - `pid_manager.read_pid()` を呼び出し、`Ok(Some(pid))` の場合のみ生存確認に進む
-  - `pid_manager.is_process_alive(pid)` が `true` の場合、`eprintln!("Error: cupola is running (pid={pid}). Run `cupola stop` first.")` を出力する
+  - `pid_manager.is_process_alive(pid)` が `true` の場合、``eprintln!("Error: cupola is running (pid={pid}). Run `cupola stop` first.")`` を出力する
   - `Err(anyhow::anyhow!("daemon is running"))` を返して処理を中止する
   - `read_pid()` が `Ok(None)` または `Err(_)` の場合はチェックをスキップしてクリーンアップ処理に進む
   - 既存の警告 `println!("⚠️  daemon が動作中の場合は...")` を削除する
@@ -16,8 +16,9 @@
 
 - [ ] 2. デーモン稼働チェックのユニットテストを追加する
 - [ ] 2.1 (P) デーモン稼働中のエラー終了をテストする
-  - `read_pid()` が `Ok(Some(pid))` を返し `is_process_alive(pid)` が `true` を返すモックで、エラーが返ることをアサートする
-  - エラーメッセージに `"daemon is running"` が含まれることを確認する
+  - `read_pid()` が `Ok(Some(pid))` を返し `is_process_alive(pid)` が `true` を返すモックで、`stderr` をキャプチャしてエラー終了をアサートする
+  - `stderr` が ``Error: cupola is running (pid={pid}). Run `cupola stop` first.`` と正確一致することを確認する
+  - 終了ステータスが非ゼロであることを確認する
   - `CleanupUseCase` が呼び出されないことをアサートする（呼ばれた場合はパニック）
   - _Requirements: 2.1, 2.2, 2.3_
 

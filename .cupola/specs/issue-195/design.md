@@ -61,9 +61,9 @@ graph TB
 
     CLI --> Handler
     Handler --> PidPort
-    PidMgr --> |implements| PidPort
+    PidMgr -->|implements| PidPort
     PidMgr --> Nix
-    Handler --> |デーモン非稼働時のみ| UCPort
+    Handler -->|デーモン非稼働時のみ| UCPort
 ```
 
 **Architecture Integration**:
