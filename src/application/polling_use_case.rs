@@ -70,6 +70,7 @@ impl ProcessRunRepository for NoopProcessRunRepository {
         &self,
         _: i64,
         _: crate::domain::process_run::ProcessRunType,
+        _: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<u32> {
         Err(anyhow::anyhow!("NoopProcessRunRepository: not wired"))
     }
@@ -77,6 +78,7 @@ impl ProcessRunRepository for NoopProcessRunRepository {
         &self,
         _: i64,
         _: crate::domain::process_run::ProcessRunType,
+        _: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Option<(crate::domain::process_run::ProcessRun, u32)>> {
         Err(anyhow::anyhow!("NoopProcessRunRepository: not wired"))
     }

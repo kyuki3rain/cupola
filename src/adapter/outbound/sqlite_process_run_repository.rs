@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 
 use crate::application::port::process_run_repository::ProcessRunRepository;
 use crate::domain::fixing_problem_kind::FixingProblemKind;
@@ -67,18 +68,40 @@ fn row_to_process_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProcessRun> {
 /// Count the consecutive-failure tail for (issue_id, type_str) using an already-acquired
 /// connection. Both `count_consecutive_failures` and `find_latest_with_consecutive_count`
 /// delegate here to keep the counting logic in a single place.
+///
+/// When `since` is provided, only ProcessRuns with `started_at >= since` are considered.
+/// This implements the `consecutive_failures_epoch` filter defined in metadata.md:
+/// after a Cancelled → Idle restart the epoch is set to now(), so old failures are excluded.
 fn count_consecutive_failures_inner(
     conn: &rusqlite::Connection,
     issue_id: i64,
     type_str: &str,
+    since: Option<&str>,
 ) -> Result<u32> {
-    let mut stmt = conn.prepare(
-        "SELECT state FROM process_runs
-         WHERE issue_id = ?1 AND type = ?2
-         ORDER BY id DESC",
-    )?;
+    let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(since_str) = since
+    {
+        (
+            "SELECT state FROM process_runs
+             WHERE issue_id = ?1 AND type = ?2 AND started_at >= ?3
+             ORDER BY id DESC",
+            vec![
+                Box::new(issue_id),
+                Box::new(type_str.to_owned()),
+                Box::new(since_str.to_owned()),
+            ],
+        )
+    } else {
+        (
+            "SELECT state FROM process_runs
+             WHERE issue_id = ?1 AND type = ?2
+             ORDER BY id DESC",
+            vec![Box::new(issue_id), Box::new(type_str.to_owned())],
+        )
+    };
+    let mut stmt = conn.prepare(sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
     let states: Vec<String> = stmt
-        .query_map(rusqlite::params![issue_id, type_str], |row| row.get(0))?
+        .query_map(param_refs.as_slice(), |row| row.get(0))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let count = states.iter().take_while(|s| s.as_str() == "failed").count() as u32;
@@ -280,15 +303,17 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
         &self,
         issue_id: i64,
         type_: ProcessRunType,
+        since: Option<DateTime<Utc>>,
     ) -> Result<u32> {
         let db = self.db.clone();
         let type_str = type_.to_string();
+        let since_str = since.map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string());
         tokio::task::spawn_blocking(move || {
             let conn = db
                 .conn()
                 .lock()
                 .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
-            count_consecutive_failures_inner(&conn, issue_id, &type_str)
+            count_consecutive_failures_inner(&conn, issue_id, &type_str, since_str.as_deref())
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
@@ -298,9 +323,11 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
         &self,
         issue_id: i64,
         type_: ProcessRunType,
+        since: Option<DateTime<Utc>>,
     ) -> Result<Option<(ProcessRun, u32)>> {
         let db = self.db.clone();
         let type_str = type_.to_string();
+        let since_str = since.map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string());
         tokio::task::spawn_blocking(move || {
             let conn = db
                 .conn()
@@ -310,16 +337,38 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             // Both queries run under a single mutex acquisition, preventing a concurrent
             // ProcessRun insert from slipping between the two reads.
 
-            // Find the latest run; drop stmt/rows before the next prepare.
+            // Find the latest run within the same window as the count query.
+            // When `since` is set, only consider runs after the epoch so the
+            // returned (run, count) pair is always consistent.
             let run = {
-                let mut stmt = conn.prepare(
-                    "SELECT id, issue_id, type, idx, state, pid, pr_number, causes,
-                            started_at, finished_at, error_message
-                     FROM process_runs
-                     WHERE issue_id = ?1 AND type = ?2
-                     ORDER BY id DESC LIMIT 1",
-                )?;
-                let mut rows = stmt.query(rusqlite::params![issue_id, type_str])?;
+                let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) =
+                    if let Some(ref s) = since_str {
+                        (
+                            "SELECT id, issue_id, type, idx, state, pid, pr_number, causes,
+                                    started_at, finished_at, error_message
+                             FROM process_runs
+                             WHERE issue_id = ?1 AND type = ?2 AND started_at >= ?3
+                             ORDER BY id DESC LIMIT 1",
+                            vec![
+                                Box::new(issue_id),
+                                Box::new(type_str.clone()),
+                                Box::new(s.clone()),
+                            ],
+                        )
+                    } else {
+                        (
+                            "SELECT id, issue_id, type, idx, state, pid, pr_number, causes,
+                                    started_at, finished_at, error_message
+                             FROM process_runs
+                             WHERE issue_id = ?1 AND type = ?2
+                             ORDER BY id DESC LIMIT 1",
+                            vec![Box::new(issue_id), Box::new(type_str.clone())],
+                        )
+                    };
+                let mut stmt = conn.prepare(sql)?;
+                let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                    params.iter().map(|p| p.as_ref()).collect();
+                let mut rows = stmt.query(param_refs.as_slice())?;
                 if let Some(row) = rows.next()? {
                     Some(row_to_process_run(row)?)
                 } else {
@@ -337,7 +386,8 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
                 return Ok(Some((run, 0)));
             }
 
-            let count = count_consecutive_failures_inner(&conn, issue_id, &type_str)?;
+            let count =
+                count_consecutive_failures_inner(&conn, issue_id, &type_str, since_str.as_deref())?;
 
             Ok(Some((run, count)))
         })
@@ -560,7 +610,7 @@ mod tests {
         repo.mark_failed(id3, None).await.expect("f3");
 
         let count = repo
-            .count_consecutive_failures(issue_id, ProcessRunType::Design)
+            .count_consecutive_failures(issue_id, ProcessRunType::Design, None)
             .await
             .expect("count");
         assert_eq!(count, 2);
@@ -612,7 +662,7 @@ mod tests {
 
         // No runs yet → None
         let result = repo
-            .find_latest_with_consecutive_count(issue_id, ProcessRunType::Design)
+            .find_latest_with_consecutive_count(issue_id, ProcessRunType::Design, None)
             .await
             .expect("query");
         assert!(result.is_none());
@@ -637,13 +687,84 @@ mod tests {
         repo.mark_failed(id3, None).await.expect("f3");
 
         let (run, count) = repo
-            .find_latest_with_consecutive_count(issue_id, ProcessRunType::Design)
+            .find_latest_with_consecutive_count(issue_id, ProcessRunType::Design, None)
             .await
             .expect("query")
             .expect("should have result");
 
         assert_eq!(run.id, id3);
         assert_eq!(count, 2, "two consecutive failures at the tail");
+    }
+
+    /// T-2.R.8c: consecutive_failures with epoch filter excludes old failures
+    #[tokio::test]
+    async fn consecutive_failures_with_epoch_excludes_old() {
+        let (repo, issue_repo) = setup();
+        let issue_id = issue_repo.save(&new_issue(12)).await.expect("save issue");
+
+        // Create 3 old failures
+        let mut old_ids = Vec::new();
+        for _ in 0..3 {
+            let id = repo
+                .save(&new_run(issue_id, ProcessRunType::Init))
+                .await
+                .expect("save");
+            repo.mark_failed(id, None).await.expect("fail");
+            old_ids.push(id);
+        }
+
+        // Backdate old failures to 1 hour ago so epoch can sit between them and new ones.
+        {
+            let conn = repo.db.conn().lock().expect("lock");
+            for id in &old_ids {
+                conn.execute(
+                    "UPDATE process_runs SET started_at = datetime('now', '-1 hour') WHERE id = ?1",
+                    rusqlite::params![id],
+                )
+                .expect("backdate");
+            }
+        }
+
+        // Without epoch: 3 consecutive failures
+        let count = repo
+            .count_consecutive_failures(issue_id, ProcessRunType::Init, None)
+            .await
+            .expect("count");
+        assert_eq!(count, 3, "without epoch, all failures counted");
+
+        // Set epoch to now — old (backdated) failures should be excluded
+        let epoch = chrono::Utc::now();
+
+        let count = repo
+            .count_consecutive_failures(issue_id, ProcessRunType::Init, Some(epoch))
+            .await
+            .expect("count");
+        assert_eq!(count, 0, "with epoch, old failures excluded");
+
+        // Create 1 new failure after epoch
+        let id = repo
+            .save(&new_run(issue_id, ProcessRunType::Init))
+            .await
+            .expect("save");
+        repo.mark_failed(id, None).await.expect("fail");
+
+        let count = repo
+            .count_consecutive_failures(issue_id, ProcessRunType::Init, Some(epoch))
+            .await
+            .expect("count");
+        assert_eq!(count, 1, "with epoch, only new failure counted");
+
+        // find_latest_with_consecutive_count also respects epoch
+        let (run, count) = repo
+            .find_latest_with_consecutive_count(issue_id, ProcessRunType::Init, Some(epoch))
+            .await
+            .expect("query")
+            .expect("should have result");
+        assert_eq!(run.id, id);
+        assert_eq!(
+            count, 1,
+            "find_latest_with_consecutive_count respects epoch"
+        );
     }
 
     /// T-2.R.9: find_all_running returns only running records across issues

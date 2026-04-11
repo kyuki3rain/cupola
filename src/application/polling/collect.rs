@@ -2,6 +2,7 @@
 ///
 /// This phase is pure observation — no DB writes, no GitHub mutations.
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 
 use crate::application::port::github_client::{GitHubClient, PrStatus};
 use crate::application::port::issue_repository::IssueRepository;
@@ -119,7 +120,7 @@ where
     let impl_pr = observe_pr_for_type(github, process_repo, id, ProcessRunType::Impl).await?;
 
     // --- ProcessesSnapshot ---
-    let processes = observe_processes(process_repo, id).await?;
+    let processes = observe_processes(process_repo, issue).await?;
 
     // --- ci_fix_exhausted ---
     let ci_fix_exhausted = issue.ci_fix_count >= config.max_ci_fix_cycles;
@@ -277,18 +278,19 @@ fn derive_ci_status(
 
 async fn observe_processes<P: ProcessRunRepository>(
     process_repo: &P,
-    issue_id: i64,
+    issue: &Issue,
 ) -> Result<ProcessesSnapshot> {
     async fn get_process_snapshot<P: ProcessRunRepository>(
         process_repo: &P,
         issue_id: i64,
         type_: ProcessRunType,
+        since: Option<DateTime<Utc>>,
     ) -> Result<Option<ProcessSnapshot>> {
         // Use the combined method to read both the latest run and the consecutive
         // failure count in a single database lock acquisition, preventing a concurrent
         // ProcessRun insert from producing an inconsistent (run, count) pair.
         let Some((run, consecutive_failures)) = process_repo
-            .find_latest_with_consecutive_count(issue_id, type_)
+            .find_latest_with_consecutive_count(issue_id, type_, since)
             .await?
         else {
             return Ok(None);
@@ -300,12 +302,14 @@ async fn observe_processes<P: ProcessRunRepository>(
         }))
     }
 
-    let init = get_process_snapshot(process_repo, issue_id, ProcessRunType::Init).await?;
-    let design = get_process_snapshot(process_repo, issue_id, ProcessRunType::Design).await?;
+    let id = issue.id;
+    let since = issue.consecutive_failures_epoch;
+    let init = get_process_snapshot(process_repo, id, ProcessRunType::Init, since).await?;
+    let design = get_process_snapshot(process_repo, id, ProcessRunType::Design, since).await?;
     let design_fix =
-        get_process_snapshot(process_repo, issue_id, ProcessRunType::DesignFix).await?;
-    let impl_ = get_process_snapshot(process_repo, issue_id, ProcessRunType::Impl).await?;
-    let impl_fix = get_process_snapshot(process_repo, issue_id, ProcessRunType::ImplFix).await?;
+        get_process_snapshot(process_repo, id, ProcessRunType::DesignFix, since).await?;
+    let impl_ = get_process_snapshot(process_repo, id, ProcessRunType::Impl, since).await?;
+    let impl_fix = get_process_snapshot(process_repo, id, ProcessRunType::ImplFix, since).await?;
 
     Ok(ProcessesSnapshot {
         init,
