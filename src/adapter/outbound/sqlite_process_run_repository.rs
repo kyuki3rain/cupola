@@ -337,16 +337,38 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             // Both queries run under a single mutex acquisition, preventing a concurrent
             // ProcessRun insert from slipping between the two reads.
 
-            // Find the latest run; drop stmt/rows before the next prepare.
+            // Find the latest run within the same window as the count query.
+            // When `since` is set, only consider runs after the epoch so the
+            // returned (run, count) pair is always consistent.
             let run = {
-                let mut stmt = conn.prepare(
-                    "SELECT id, issue_id, type, idx, state, pid, pr_number, causes,
-                            started_at, finished_at, error_message
-                     FROM process_runs
-                     WHERE issue_id = ?1 AND type = ?2
-                     ORDER BY id DESC LIMIT 1",
-                )?;
-                let mut rows = stmt.query(rusqlite::params![issue_id, type_str])?;
+                let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) =
+                    if let Some(ref s) = since_str {
+                        (
+                            "SELECT id, issue_id, type, idx, state, pid, pr_number, causes,
+                                    started_at, finished_at, error_message
+                             FROM process_runs
+                             WHERE issue_id = ?1 AND type = ?2 AND started_at >= ?3
+                             ORDER BY id DESC LIMIT 1",
+                            vec![
+                                Box::new(issue_id),
+                                Box::new(type_str.clone()),
+                                Box::new(s.clone()),
+                            ],
+                        )
+                    } else {
+                        (
+                            "SELECT id, issue_id, type, idx, state, pid, pr_number, causes,
+                                    started_at, finished_at, error_message
+                             FROM process_runs
+                             WHERE issue_id = ?1 AND type = ?2
+                             ORDER BY id DESC LIMIT 1",
+                            vec![Box::new(issue_id), Box::new(type_str.clone())],
+                        )
+                    };
+                let mut stmt = conn.prepare(sql)?;
+                let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                    params.iter().map(|p| p.as_ref()).collect();
+                let mut rows = stmt.query(param_refs.as_slice())?;
                 if let Some(row) = rows.next()? {
                     Some(row_to_process_run(row)?)
                 } else {

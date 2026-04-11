@@ -66,8 +66,10 @@ pub trait ProcessRunRepository: Send + Sync {
     /// both observed atomically from a consistent snapshot to prevent a concurrent
     /// ProcessRun insert from producing an inconsistent (run, count) pair.
     ///
-    /// Only counts ProcessRuns created at or after `since` (if provided).
-    /// Returns `None` if there are no runs for the given issue/type.
+    /// When `since` is provided, both the latest run selection and the failure
+    /// count are restricted to ProcessRuns created at or after that timestamp,
+    /// so the returned (run, count) pair is always consistent within the same
+    /// window. Returns `None` if there are no matching runs.
     fn find_latest_with_consecutive_count(
         &self,
         issue_id: i64,
