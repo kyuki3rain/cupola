@@ -1155,6 +1155,7 @@ mod tests {
             &self,
             _: i64,
             _: ProcessRunType,
+            _: Option<chrono::DateTime<chrono::Utc>>,
         ) -> anyhow::Result<u32> {
             Ok(0)
         }
@@ -1163,6 +1164,7 @@ mod tests {
             &self,
             _: i64,
             _: ProcessRunType,
+            _: Option<chrono::DateTime<chrono::Utc>>,
         ) -> anyhow::Result<Option<(ProcessRun, u32)>> {
             Ok(None)
         }

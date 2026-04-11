@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 
 use crate::domain::process_run::{ProcessRun, ProcessRunState, ProcessRunType};
 
@@ -52,22 +53,26 @@ pub trait ProcessRunRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<Vec<ProcessRun>>> + Send;
 
     /// Count consecutive failures at the tail of the run list for a given type.
+    /// Only counts ProcessRuns created at or after `since` (if provided).
     /// Returns 0 if the latest run is not Failed.
     fn count_consecutive_failures(
         &self,
         issue_id: i64,
         type_: ProcessRunType,
+        since: Option<DateTime<Utc>>,
     ) -> impl std::future::Future<Output = Result<u32>> + Send;
 
     /// Return the most recent ProcessRun and the consecutive-failure tail count,
     /// both observed atomically from a consistent snapshot to prevent a concurrent
     /// ProcessRun insert from producing an inconsistent (run, count) pair.
     ///
+    /// Only counts ProcessRuns created at or after `since` (if provided).
     /// Returns `None` if there are no runs for the given issue/type.
     fn find_latest_with_consecutive_count(
         &self,
         issue_id: i64,
         type_: ProcessRunType,
+        since: Option<DateTime<Utc>>,
     ) -> impl std::future::Future<Output = Result<Option<(ProcessRun, u32)>>> + Send;
 
     /// Return all currently Running records (used on startup recovery).
