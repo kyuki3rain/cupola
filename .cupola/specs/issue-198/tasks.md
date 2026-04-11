@@ -6,11 +6,15 @@
   - `#[derive(Debug, Clone, Copy, PartialEq, Eq)]` を付与する
   - _Requirements: 1.1_
 
-- [ ] 1.2 PidFilePort トレイトに `write_pid_with_mode` と `read_pid_and_mode` を追加する
+- [ ] 1.2 PidFilePort トレイトに `write_pid_with_mode` を追加する
   - `write_pid_with_mode(&self, pid: u32, mode: ProcessMode) -> Result<(), PidFileError>` を追加する
+  - 既存の `write_pid` は後方互換のために残す
+  - _Requirements: 1.1, 1.2, 1.3_
+
+- [ ] 1.3 PidFilePort トレイトに `read_pid_and_mode` を追加する
   - `read_pid_and_mode(&self) -> Result<Option<(u32, Option<ProcessMode>)>, PidFileError>` を追加する
-  - 既存の `write_pid` / `read_pid` は後方互換のために残す
-  - _Requirements: 1.1, 1.2, 1.3, 1.4_
+  - 既存の `read_pid` は後方互換のために残す
+  - _Requirements: 1.1, 1.4_
 
 - [ ] 2. PidFileManager に新しいトレイトメソッドを実装する
 - [ ] 2.1 `write_pid_with_mode` を実装する（2行フォーマット書き込み）
@@ -48,23 +52,26 @@
 - [ ] 4.2 セッション数ラベルを `Claude sessions:` に修正する
   - `"Running: {running_count}/{max}"` → `"Claude sessions: {running_count}/{max}"` に変更する
   - `"Running: {running_count}"` → `"Claude sessions: {running_count}"` に変更する
-  - _Requirements: 3.1, 3.2_
+  - _Requirements: 3.1_
 
 - [ ] 5. 新機能のテストを追加する
-- [ ] 5.1 (P) PidFileManager の新しいメソッドのユニットテストを追加する
+- [ ] 5.1 (P) `write_pid_with_mode` の書き込み系ユニットテストを追加する
   - `test_write_and_read_pid_with_mode_foreground` — foreground 書き込み・読み取りの往復テスト
   - `test_write_and_read_pid_with_mode_daemon` — daemon 書き込み・読み取りの往復テスト
+  - `test_write_pid_with_mode_already_exists` — ファイル既存時に `AlreadyExists` を返すことを確認
+  - _Requirements: 1.2, 1.3_
+
+- [ ] 5.2 (P) `read_pid_and_mode` の読み取り・後方互換ユニットテストを追加する
   - `test_read_pid_and_mode_legacy_single_line` — 1行ファイルを `(pid, None)` として読み取ることを確認
   - `test_read_pid_and_mode_returns_none_when_absent` — ファイル不在時に `Ok(None)` を返すことを確認
   - `test_read_pid_and_mode_invalid_pid` — 不正PID（0・範囲外）を `InvalidContent` エラーとして返すことを確認
-  - `test_write_pid_with_mode_already_exists` — ファイル既存時に `AlreadyExists` を返すことを確認
-  - _Requirements: 1.2, 1.3, 1.4, 1.5, 1.6, 1.7_
+  - _Requirements: 1.4, 1.5, 1.6, 1.7_
 
-- [ ] 5.2 (P) `handle_status` の出力に関するユニットテストを追加する
+- [ ] 5.3 (P) `handle_status` の出力に関するユニットテストを追加する
   - `test_status_output_foreground_mode` — foreground モード起動中に正しいプレフィックスとモードが表示されることを確認
   - `test_status_output_daemon_mode` — daemon モード起動中に正しい出力が表示されることを確認
   - `test_status_output_unknown_mode` — レガシーPIDファイルの場合に `(unknown, pid=...)` が表示されることを確認
   - `test_status_output_not_running` — PIDファイル不在時に `Process: not running` が表示されることを確認
   - `test_status_output_session_label_with_max` — `Claude sessions: {alive}/{max}` が正しく表示されることを確認
   - `test_status_output_session_label_no_max` — `Claude sessions: {alive}` が正しく表示されることを確認
-  - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 3.1, 3.2_
+  - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 3.1_

@@ -39,5 +39,4 @@
 
 #### 受け入れ基準
 
-1. Where `max_concurrent_sessions` is configured, the status output system shall display the session count as `Claude sessions: {alive}/{max}`.
-2. Where `max_concurrent_sessions` is not configured, the status output system shall display the session count as `Claude sessions: {alive}`.
+1. The status output system shall display the session count as `Claude sessions: {alive}/{max}` when `max_concurrent_sessions` is configured, and as `Claude sessions: {alive}` when it is not configured.
