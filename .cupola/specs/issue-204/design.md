@@ -87,13 +87,13 @@ sequenceDiagram
     alt None
         collect-->>collect: return Ok(None)
     else Some(run)
-        collect->>github: get_pr_status(run.pr_number)
+        collect->>github: get_pr_status(pr_number: u64)
         github-->>collect: PrStatus
         collect-->>collect: return Ok(Some(PrSnapshot))
     end
 ```
 
-フロー上のキー決定: `find_latest_with_pr_number` が `None` を返す場合は、Rustレベルの追加チェックなしに即座に `Ok(None)` を返す。`Some(run)` の場合は `run.pr_number` が型レベルで `Some(u64)` であることが SQLクエリで保証されているため、安全に `.unwrap()` せずに使用できる（実装では `.expect()` は使わず直接フィールドアクセス）。
+フロー上のキー決定: `find_latest_with_pr_number` が `None` を返す場合は、Rustレベルの追加チェックなしに即座に `Ok(None)` を返す。`Some(run)` の場合でも、ドメインモデル上の `run.pr_number` の型は引き続き `Option<u64>` のままであり、`u64` へは Rust側で明示的に取り出す。SQLクエリの `pr_number IS NOT NULL` は永続化層の不変条件として扱い、実装では `run.pr_number.ok_or_else(...)` などで `u64` に変換する。万一ここで `None` が観測された場合は、SQLが保証するはずの不変条件に反するため、内部エラーとして扱って処理を失敗させる。これにより、通常系では後処理フィルタを不要にしつつ、異常系では不整合を黙殺せず明示的に検出できる。
 
 ## Requirements Traceability
 
@@ -208,7 +208,7 @@ SELECT id, issue_id, type, idx, state, pid, pr_number, causes,
 **Implementation Notes**
 - 変更前: `process_repo.find_latest(...).await?` → `.and_then(|r| r.pr_number)`
 - 変更後: `process_repo.find_latest_with_pr_number(...).await?` → `match` on `Option<ProcessRun>`
-- `run.pr_number` は `Some(_)` が保証されているため、`.expect()` なしで直接使用可能（`unwrap_used = "deny"` に準拠するため `run.pr_number.expect(...)` も避け、クエリの保証を信頼したコードとする）
+- `run.pr_number` はドメインモデル上 `Option<u64>` のままだが、`find_latest_with_pr_number` の不変条件（SQL で `pr_number IS NOT NULL` を強制）に基づき、`run.pr_number.ok_or_else(|| anyhow::anyhow!("invariant violation: pr_number is None"))` などで `u64` に変換する。万一 `None` が観測された場合は内部エラーとして伝播させ、不整合を黙殺しない
 
 ## Data Models
 

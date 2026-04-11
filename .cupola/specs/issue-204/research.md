@@ -24,7 +24,7 @@
   - `find_latest(issue_id, type_)` が既に存在し、新メソッドは同シグネチャで `pr_number IS NOT NULL` を追加するだけ
   - `find_latest_with_consecutive_count` のように複合クエリのパターンも存在する
   - 全ての非同期メソッドは `impl std::future::Future<Output = Result<...>> + Send` を返す（Rust 2024 Edition 対応）
-- **Implications**: `find_latest_with_pr_number` も同パターンで定義すればよく、破壊的変更は不要
+- **Implications**: `find_latest_with_pr_number` は同パターンで定義でき、呼び出し側の挙動は大きく変えずに導入できる。ただし `ProcessRunRepository` トレイトに追加する場合、`SqliteProcessRunRepository` やテスト用モックなど既存のトレイト実装は更新が必要になる
 
 ### SQLite クエリパターン分析
 
@@ -44,7 +44,7 @@
   - 仕様は `design_pr` を「`type=design` かつ `pr_number IS NOT NULL` の最新レコード」と定義
   - 現実装はこの条件をRust側でフィルタしており仕様違反
   - 新実装はSQLで強制することで仕様に完全準拠
-- **Implications**: 本修正は機能追加ではなく仕様違反の修正であり、既存のAPIと動作は変わらない
+- **Implications**: 本修正は機能追加ではなく仕様違反の修正であり、外部から期待される振る舞いは維持される。ただし、`ProcessRunRepository` には新メソッド追加が必要なため、トレイト実装者やモックには追随修正が発生する
 
 ## Architecture Pattern Evaluation
 

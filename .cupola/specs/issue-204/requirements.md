@@ -91,8 +91,6 @@ This ensures:
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
-## Requirements
-
 ## はじめに
 
 本ドキュメントは、`observe_pr_for_type` 関数が PR を特定する際のロジックを SQLレベルで正確に実装するための要件を定義する。現状では `pr_number IS NOT NULL` フィルタがRustコード側で後処理として行われており、アーキテクチャ仕様に反する脆弱な実装となっている。本修正により、SQLクエリが真実の源となり、Rustコードが簡潔化され、将来の回帰リスクが排除される。
