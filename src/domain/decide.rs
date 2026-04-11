@@ -253,10 +253,19 @@ fn decide_design_running(
         if design.consecutive_failures >= cfg.max_retries {
             return go_cancelled_retry_exhausted(effects);
         }
+        if design.state == ProcessRunState::Pending {
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::Design,
+                causes: vec![],
+                pending_run_id: Some(design.run_id),
+            });
+            return State::DesignRunning;
+        }
         if design.state == ProcessRunState::Failed {
             effects.push(Effect::SpawnProcess {
                 type_: ProcessRunType::Design,
                 causes: vec![],
+                pending_run_id: None,
             });
             return State::DesignRunning;
         }
@@ -264,6 +273,7 @@ fn decide_design_running(
             effects.push(Effect::SpawnProcess {
                 type_: ProcessRunType::Design,
                 causes: vec![],
+                pending_run_id: None,
             });
             return State::DesignRunning;
         }
@@ -279,6 +289,7 @@ fn decide_design_running(
                 effects.push(Effect::SpawnProcess {
                     type_: ProcessRunType::Design,
                     causes: vec![],
+                    pending_run_id: None,
                 });
                 return State::DesignRunning;
             }
@@ -286,13 +297,14 @@ fn decide_design_running(
                 return State::DesignReviewWaiting;
             }
         }
-        // Running or Stale-like without explicit pattern: no spawn
+        // Running or other: no spawn
         State::DesignRunning
     } else {
         // No design process: spawn
         effects.push(Effect::SpawnProcess {
             type_: ProcessRunType::Design,
             causes: vec![],
+            pending_run_id: None,
         });
         State::DesignRunning
     }
@@ -387,11 +399,21 @@ fn decide_design_fixing(
         if design_fix.consecutive_failures >= cfg.max_retries {
             return go_cancelled_retry_exhausted(effects);
         }
+        if design_fix.state == ProcessRunState::Pending {
+            let causes = derive_fixing_causes(design_pr);
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::DesignFix,
+                causes,
+                pending_run_id: Some(design_fix.run_id),
+            });
+            return State::DesignFixing;
+        }
         if design_fix.state == ProcessRunState::Failed {
             let causes = derive_fixing_causes(design_pr);
             effects.push(Effect::SpawnProcess {
                 type_: ProcessRunType::DesignFix,
                 causes,
+                pending_run_id: None,
             });
             return State::DesignFixing;
         }
@@ -400,6 +422,7 @@ fn decide_design_fixing(
             effects.push(Effect::SpawnProcess {
                 type_: ProcessRunType::DesignFix,
                 causes,
+                pending_run_id: None,
             });
             return State::DesignFixing;
         }
@@ -414,6 +437,7 @@ fn decide_design_fixing(
         effects.push(Effect::SpawnProcess {
             type_: ProcessRunType::DesignFix,
             causes,
+            pending_run_id: None,
         });
         State::DesignFixing
     }
@@ -453,11 +477,21 @@ fn decide_implementation_running(
         if impl_proc.consecutive_failures >= cfg.max_retries {
             return go_cancelled_retry_exhausted(effects);
         }
+        if impl_proc.state == ProcessRunState::Pending {
+            // SwitchToImplBranch already done on first attempt
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::Impl,
+                causes: vec![],
+                pending_run_id: Some(impl_proc.run_id),
+            });
+            return State::ImplementationRunning;
+        }
         if impl_proc.state == ProcessRunState::Failed {
             effects.push(Effect::SwitchToImplBranch);
             effects.push(Effect::SpawnProcess {
                 type_: ProcessRunType::Impl,
                 causes: vec![],
+                pending_run_id: None,
             });
             return State::ImplementationRunning;
         }
@@ -466,6 +500,7 @@ fn decide_implementation_running(
             effects.push(Effect::SpawnProcess {
                 type_: ProcessRunType::Impl,
                 causes: vec![],
+                pending_run_id: None,
             });
             return State::ImplementationRunning;
         }
@@ -485,6 +520,7 @@ fn decide_implementation_running(
                 effects.push(Effect::SpawnProcess {
                     type_: ProcessRunType::Impl,
                     causes: vec![],
+                    pending_run_id: None,
                 });
                 return State::ImplementationRunning;
             }
@@ -499,6 +535,7 @@ fn decide_implementation_running(
         effects.push(Effect::SpawnProcess {
             type_: ProcessRunType::Impl,
             causes: vec![],
+            pending_run_id: None,
         });
         State::ImplementationRunning
     }
@@ -601,11 +638,21 @@ fn decide_implementation_fixing(
         if impl_fix.consecutive_failures >= cfg.max_retries {
             return go_cancelled_retry_exhausted(effects);
         }
+        if impl_fix.state == ProcessRunState::Pending {
+            let causes = derive_fixing_causes(impl_pr);
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::ImplFix,
+                causes,
+                pending_run_id: Some(impl_fix.run_id),
+            });
+            return State::ImplementationFixing;
+        }
         if impl_fix.state == ProcessRunState::Failed {
             let causes = derive_fixing_causes(impl_pr);
             effects.push(Effect::SpawnProcess {
                 type_: ProcessRunType::ImplFix,
                 causes,
+                pending_run_id: None,
             });
             return State::ImplementationFixing;
         }
@@ -614,6 +661,7 @@ fn decide_implementation_fixing(
             effects.push(Effect::SpawnProcess {
                 type_: ProcessRunType::ImplFix,
                 causes,
+                pending_run_id: None,
             });
             return State::ImplementationFixing;
         }
@@ -626,6 +674,7 @@ fn decide_implementation_fixing(
         effects.push(Effect::SpawnProcess {
             type_: ProcessRunType::ImplFix,
             causes,
+            pending_run_id: None,
         });
         State::ImplementationFixing
     }
@@ -711,6 +760,7 @@ mod tests {
         snap.processes.init = Some(ProcessSnapshot {
             state,
             index: 0,
+            run_id: 0,
             consecutive_failures,
         });
         snap
@@ -721,6 +771,7 @@ mod tests {
         snap.processes.design = Some(ProcessSnapshot {
             state,
             index: 0,
+            run_id: 0,
             consecutive_failures,
         });
         snap
@@ -732,6 +783,7 @@ mod tests {
         snap.processes.design_fix = Some(ProcessSnapshot {
             state,
             index: 0,
+            run_id: 0,
             consecutive_failures,
         });
         snap
@@ -742,6 +794,7 @@ mod tests {
         snap.processes.impl_ = Some(ProcessSnapshot {
             state,
             index: 0,
+            run_id: 0,
             consecutive_failures,
         });
         snap
@@ -753,6 +806,7 @@ mod tests {
         snap.processes.impl_fix = Some(ProcessSnapshot {
             state,
             index: 0,
+            run_id: 0,
             consecutive_failures,
         });
         snap

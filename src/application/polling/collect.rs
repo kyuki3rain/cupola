@@ -306,6 +306,7 @@ async fn observe_processes<P: ProcessRunRepository>(
         Ok(Some(ProcessSnapshot {
             state: run.state,
             index: run.index,
+            run_id: run.id,
             consecutive_failures,
         }))
     }
