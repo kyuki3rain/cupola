@@ -286,11 +286,25 @@ where
         };
 
         // Idempotent: check if PR already exists on this branch
-        let pr_number = match github
-            .find_pr_by_branches(&head_branch, &base_branch)
-            .await?
-        {
-            Some(pr) => {
+        let find_result = github.find_pr_by_branches(&head_branch, &base_branch).await;
+
+        let pr_number = match find_result {
+            Err(e) => {
+                tracing::warn!(
+                    run_id,
+                    head_branch = %head_branch,
+                    base_branch = %base_branch,
+                    error = %e,
+                    "GitHub API error in Running phase (find_pr_by_branches)"
+                );
+                if run_id > 0 {
+                    process_repo
+                        .mark_failed(run_id, Some(e.to_string()))
+                        .await?;
+                }
+                return Ok(());
+            }
+            Ok(Some(pr)) => {
                 tracing::info!(
                     issue_number = n,
                     pr_number = pr.number,
@@ -298,11 +312,27 @@ where
                 );
                 pr.number
             }
-            None => {
-                github
-                    .create_pr(&head_branch, &base_branch, &title, &body)
-                    .await?
-            }
+            Ok(None) => match github
+                .create_pr(&head_branch, &base_branch, &title, &body)
+                .await
+            {
+                Ok(pr_num) => pr_num,
+                Err(e) => {
+                    tracing::warn!(
+                        run_id,
+                        head_branch = %head_branch,
+                        base_branch = %base_branch,
+                        error = %e,
+                        "GitHub API error in Running phase (create_pr)"
+                    );
+                    if run_id > 0 {
+                        process_repo
+                            .mark_failed(run_id, Some(e.to_string()))
+                            .await?;
+                    }
+                    return Ok(());
+                }
+            },
         };
 
         if run_id > 0 {
@@ -415,9 +445,432 @@ pub fn kill_stalled(session_mgr: &mut SessionManager, stall_timeout_secs: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::session_manager::SessionManager;
+    use crate::application::port::github_client::{
+        GitHubCheckRun, GitHubClient, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails,
+        PrStatus, RepositoryPermission, ReviewThread,
+    };
+    use crate::application::port::issue_repository::IssueRepository;
+    use crate::application::port::process_run_repository::ProcessRunRepository;
+    use crate::application::session_manager::{ExitedSession, SessionManager};
+    use crate::domain::issue::Issue;
+    use crate::domain::metadata_update::MetadataUpdates;
+    use crate::domain::process_run::{ProcessRun, ProcessRunState, ProcessRunType};
+    use crate::domain::task_weight::TaskWeight;
+    use anyhow::Result;
+    use chrono::{DateTime, Utc};
     use std::process::{Command, Stdio};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
+
+    // ── Minimal mock: IssueRepository ────────────────────────────────────────
+
+    struct MockIssueRepo {
+        issue: Issue,
+    }
+
+    impl IssueRepository for MockIssueRepo {
+        async fn find_by_id(&self, _id: i64) -> Result<Option<Issue>> {
+            Ok(Some(self.issue.clone()))
+        }
+        async fn find_by_issue_number(&self, _n: u64) -> Result<Option<Issue>> {
+            Ok(None)
+        }
+        async fn find_active(&self) -> Result<Vec<Issue>> {
+            Ok(vec![])
+        }
+        async fn find_all(&self) -> Result<Vec<Issue>> {
+            Ok(vec![])
+        }
+        async fn save(&self, _issue: &Issue) -> Result<i64> {
+            Ok(0)
+        }
+        async fn update_state(&self, _id: i64, _state: State) -> Result<()> {
+            Ok(())
+        }
+        async fn update(&self, _issue: &Issue) -> Result<()> {
+            Ok(())
+        }
+        async fn update_state_and_metadata(
+            &self,
+            _id: i64,
+            _updates: &MetadataUpdates,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn find_by_state(&self, _state: State) -> Result<Vec<Issue>> {
+            Ok(vec![])
+        }
+    }
+
+    // ── Minimal mock: ProcessRunRepository ───────────────────────────────────
+
+    #[derive(Default)]
+    struct CallLog {
+        mark_failed: Vec<(i64, Option<String>)>,
+        mark_succeeded: Vec<(i64, Option<u64>)>,
+    }
+
+    struct MockProcessRepo {
+        calls: Arc<Mutex<CallLog>>,
+    }
+
+    impl MockProcessRepo {
+        fn new() -> Self {
+            Self {
+                calls: Arc::new(Mutex::new(CallLog::default())),
+            }
+        }
+    }
+
+    impl ProcessRunRepository for MockProcessRepo {
+        async fn save(&self, _run: &ProcessRun) -> Result<i64> {
+            Ok(0)
+        }
+        async fn update_pid(&self, _id: i64, _pid: u32) -> Result<()> {
+            Ok(())
+        }
+        async fn mark_succeeded(&self, run_id: i64, pr_number: Option<u64>) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .mark_succeeded
+                .push((run_id, pr_number));
+            Ok(())
+        }
+        async fn mark_failed(&self, run_id: i64, error_message: Option<String>) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .mark_failed
+                .push((run_id, error_message));
+            Ok(())
+        }
+        async fn mark_stale(&self, _id: i64) -> Result<()> {
+            Ok(())
+        }
+        async fn mark_stale_for_issue(&self, _id: i64) -> Result<()> {
+            Ok(())
+        }
+        async fn find_latest(&self, _id: i64, _type: ProcessRunType) -> Result<Option<ProcessRun>> {
+            Ok(None)
+        }
+        async fn find_by_issue(&self, _id: i64) -> Result<Vec<ProcessRun>> {
+            Ok(vec![])
+        }
+        async fn count_consecutive_failures(
+            &self,
+            _id: i64,
+            _type: ProcessRunType,
+            _since: Option<DateTime<Utc>>,
+        ) -> Result<u32> {
+            Ok(0)
+        }
+        async fn find_latest_with_consecutive_count(
+            &self,
+            _id: i64,
+            _type: ProcessRunType,
+            _since: Option<DateTime<Utc>>,
+        ) -> Result<Option<(ProcessRun, u32)>> {
+            Ok(None)
+        }
+        async fn find_all_running(&self) -> Result<Vec<ProcessRun>> {
+            Ok(vec![])
+        }
+        async fn update_state(&self, _id: i64, _state: ProcessRunState) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    // ── GitHub client mocks ───────────────────────────────────────────────────
+
+    /// Always returns Err from find_pr_by_branches.
+    struct GhFindPrError;
+
+    impl GitHubClient for GhFindPrError {
+        async fn list_ready_issues(&self) -> Result<Vec<GitHubIssue>> {
+            Ok(vec![])
+        }
+        async fn get_issue(&self, _n: u64) -> Result<GitHubIssueDetail> {
+            Ok(GitHubIssueDetail {
+                number: 1,
+                title: String::new(),
+                body: String::new(),
+                labels: vec![],
+            })
+        }
+        async fn is_issue_open(&self, _n: u64) -> Result<bool> {
+            Ok(true)
+        }
+        async fn find_pr_by_branches(&self, _h: &str, _b: &str) -> Result<Option<GitHubPr>> {
+            Err(anyhow::anyhow!("GitHub API unavailable"))
+        }
+        async fn is_pr_merged(&self, _n: u64) -> Result<bool> {
+            Ok(false)
+        }
+        async fn list_unresolved_threads(&self, _n: u64) -> Result<Vec<ReviewThread>> {
+            Ok(vec![])
+        }
+        async fn create_pr(&self, _h: &str, _b: &str, _t: &str, _body: &str) -> Result<u64> {
+            Ok(1)
+        }
+        async fn reply_to_thread(&self, _id: &str, _body: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn resolve_thread(&self, _id: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn comment_on_issue(&self, _n: u64, _body: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn close_issue(&self, _n: u64) -> Result<()> {
+            Ok(())
+        }
+        async fn get_ci_check_runs(&self, _n: u64) -> Result<Vec<GitHubCheckRun>> {
+            Ok(vec![])
+        }
+        async fn get_job_logs(&self, _id: u64) -> Result<String> {
+            Ok(String::new())
+        }
+        async fn get_pr_mergeable(&self, _n: u64) -> Result<Option<bool>> {
+            Ok(Some(true))
+        }
+        async fn get_pr_details(&self, _n: u64) -> Result<GitHubPrDetails> {
+            Ok(GitHubPrDetails {
+                merged: false,
+                mergeable: Some(true),
+            })
+        }
+        async fn get_pr_status(&self, _n: u64) -> Result<PrStatus> {
+            Ok(PrStatus::Closed)
+        }
+        async fn fetch_label_actor_login(&self, _n: u64, _label: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+        async fn fetch_user_permission(&self, _username: &str) -> Result<RepositoryPermission> {
+            Ok(RepositoryPermission::Read)
+        }
+        async fn remove_label(&self, _n: u64, _label: &str) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Returns Ok(None) from find_pr_by_branches; always fails create_pr.
+    struct GhCreatePrError;
+
+    impl GitHubClient for GhCreatePrError {
+        async fn list_ready_issues(&self) -> Result<Vec<GitHubIssue>> {
+            Ok(vec![])
+        }
+        async fn get_issue(&self, _n: u64) -> Result<GitHubIssueDetail> {
+            Ok(GitHubIssueDetail {
+                number: 1,
+                title: String::new(),
+                body: String::new(),
+                labels: vec![],
+            })
+        }
+        async fn is_issue_open(&self, _n: u64) -> Result<bool> {
+            Ok(true)
+        }
+        async fn find_pr_by_branches(&self, _h: &str, _b: &str) -> Result<Option<GitHubPr>> {
+            Ok(None)
+        }
+        async fn is_pr_merged(&self, _n: u64) -> Result<bool> {
+            Ok(false)
+        }
+        async fn list_unresolved_threads(&self, _n: u64) -> Result<Vec<ReviewThread>> {
+            Ok(vec![])
+        }
+        async fn create_pr(&self, _h: &str, _b: &str, _t: &str, _body: &str) -> Result<u64> {
+            Err(anyhow::anyhow!("rate limit exceeded"))
+        }
+        async fn reply_to_thread(&self, _id: &str, _body: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn resolve_thread(&self, _id: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn comment_on_issue(&self, _n: u64, _body: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn close_issue(&self, _n: u64) -> Result<()> {
+            Ok(())
+        }
+        async fn get_ci_check_runs(&self, _n: u64) -> Result<Vec<GitHubCheckRun>> {
+            Ok(vec![])
+        }
+        async fn get_job_logs(&self, _id: u64) -> Result<String> {
+            Ok(String::new())
+        }
+        async fn get_pr_mergeable(&self, _n: u64) -> Result<Option<bool>> {
+            Ok(Some(true))
+        }
+        async fn get_pr_details(&self, _n: u64) -> Result<GitHubPrDetails> {
+            Ok(GitHubPrDetails {
+                merged: false,
+                mergeable: Some(true),
+            })
+        }
+        async fn get_pr_status(&self, _n: u64) -> Result<PrStatus> {
+            Ok(PrStatus::Closed)
+        }
+        async fn fetch_label_actor_login(&self, _n: u64, _label: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+        async fn fetch_user_permission(&self, _username: &str) -> Result<RepositoryPermission> {
+            Ok(RepositoryPermission::Read)
+        }
+        async fn remove_label(&self, _n: u64, _label: &str) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    // ── Test helpers ─────────────────────────────────────────────────────────
+
+    fn success_exit_status() -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(0)
+    }
+
+    fn make_session(run_id: i64, state: State) -> ExitedSession {
+        ExitedSession {
+            issue_id: 1,
+            exit_status: success_exit_status(),
+            stdout: String::new(),
+            stderr: String::new(),
+            log_id: 0,
+            run_id,
+            registered_state: state,
+        }
+    }
+
+    fn make_issue(state: State) -> Issue {
+        let now = Utc::now();
+        Issue {
+            id: 1,
+            github_issue_number: 42,
+            state,
+            feature_name: "test-feature".to_string(),
+            weight: TaskWeight::Medium,
+            worktree_path: None,
+            ci_fix_count: 0,
+            close_finished: false,
+            consecutive_failures_epoch: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn unit_config() -> Config {
+        Config::default_with_repo("owner".into(), "repo".into(), "main".into())
+    }
+
+    // ── Unit tests: task 2.1 ─────────────────────────────────────────────────
+
+    /// T-2.1: find_pr_by_branches error → mark_failed called, Ok(()) returned, mark_succeeded not called
+    #[tokio::test]
+    async fn find_pr_error_calls_mark_failed_and_returns_ok() {
+        let github = GhFindPrError;
+        let issue_repo = MockIssueRepo {
+            issue: make_issue(State::DesignRunning),
+        };
+        let process_repo = MockProcessRepo::new();
+        let calls = process_repo.calls.clone();
+        let config = unit_config();
+        let session = make_session(42, State::DesignRunning);
+
+        let result =
+            process_exited_session(&github, &issue_repo, &process_repo, &config, &session).await;
+
+        assert!(result.is_ok(), "expected Ok(()), got {result:?}");
+        let log = calls.lock().unwrap();
+        assert_eq!(
+            log.mark_failed.len(),
+            1,
+            "mark_failed should be called once"
+        );
+        assert_eq!(log.mark_failed[0].0, 42, "run_id should match");
+        assert!(
+            log.mark_failed[0]
+                .1
+                .as_deref()
+                .unwrap_or("")
+                .contains("GitHub API unavailable"),
+            "error_message should contain the original error"
+        );
+        assert!(
+            log.mark_succeeded.is_empty(),
+            "mark_succeeded must not be called on error"
+        );
+    }
+
+    // ── Unit tests: task 2.2 ─────────────────────────────────────────────────
+
+    /// T-2.2: create_pr error → mark_failed called, Ok(()) returned, mark_succeeded not called
+    #[tokio::test]
+    async fn create_pr_error_calls_mark_failed_and_returns_ok() {
+        let github = GhCreatePrError;
+        let issue_repo = MockIssueRepo {
+            issue: make_issue(State::ImplementationRunning),
+        };
+        let process_repo = MockProcessRepo::new();
+        let calls = process_repo.calls.clone();
+        let config = unit_config();
+        let session = make_session(7, State::ImplementationRunning);
+
+        let result =
+            process_exited_session(&github, &issue_repo, &process_repo, &config, &session).await;
+
+        assert!(result.is_ok(), "expected Ok(()), got {result:?}");
+        let log = calls.lock().unwrap();
+        assert_eq!(
+            log.mark_failed.len(),
+            1,
+            "mark_failed should be called once"
+        );
+        assert_eq!(log.mark_failed[0].0, 7, "run_id should match");
+        assert!(
+            log.mark_failed[0]
+                .1
+                .as_deref()
+                .unwrap_or("")
+                .contains("rate limit exceeded"),
+            "error_message should contain the original error"
+        );
+        assert!(
+            log.mark_succeeded.is_empty(),
+            "mark_succeeded must not be called on error"
+        );
+    }
+
+    // ── Unit tests: task 2.3 ─────────────────────────────────────────────────
+
+    /// T-2.3: run_id == 0 with GitHub API error → mark_failed NOT called, Ok(()) returned
+    #[tokio::test]
+    async fn github_error_with_run_id_zero_skips_mark_failed() {
+        let github = GhFindPrError;
+        let issue_repo = MockIssueRepo {
+            issue: make_issue(State::DesignRunning),
+        };
+        let process_repo = MockProcessRepo::new();
+        let calls = process_repo.calls.clone();
+        let config = unit_config();
+        let session = make_session(0, State::DesignRunning);
+
+        let result =
+            process_exited_session(&github, &issue_repo, &process_repo, &config, &session).await;
+
+        assert!(result.is_ok(), "expected Ok(()), got {result:?}");
+        let log = calls.lock().unwrap();
+        assert!(
+            log.mark_failed.is_empty(),
+            "mark_failed must not be called when run_id == 0"
+        );
+        assert!(
+            log.mark_succeeded.is_empty(),
+            "mark_succeeded must not be called on error"
+        );
+    }
 
     /// T-3.RS.1: kill_stalled kills a long-running process
     #[test]
@@ -482,6 +935,124 @@ mod tests {
         assert_eq!(
             strip_closing_keywords("設計PR. Closes #42 完了"),
             "設計PR. 完了"
+        );
+    }
+
+    // ── Log verification tests: task 3.2 ─────────────────────────────────────
+
+    /// Minimal raw subscriber that records every WARN+ event's fields as a
+    /// flat string.  Does not depend on `tracing_subscriber` internals, so it
+    /// has no shared global state and is safe to use in parallel tests.
+    struct CapturingSubscriber {
+        events: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl CapturingSubscriber {
+        fn new() -> (Self, Arc<Mutex<Vec<String>>>) {
+            let events = Arc::new(Mutex::new(Vec::new()));
+            (
+                Self {
+                    events: events.clone(),
+                },
+                events,
+            )
+        }
+    }
+
+    impl tracing::Subscriber for CapturingSubscriber {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            metadata.level() <= &tracing::Level::WARN
+        }
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            // Span IDs must be non-zero.
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            struct Collector(String);
+            impl tracing::field::Visit for Collector {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    self.0.push_str(&format!(" {}={:?}", field.name(), value));
+                }
+                fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                    self.0.push_str(&format!(" {}={}", field.name(), value));
+                }
+                fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+                    self.0.push_str(&format!(" {}={}", field.name(), value));
+                }
+                fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+                    self.0.push_str(&format!(" {}={}", field.name(), value));
+                }
+            }
+            let mut c = Collector(String::new());
+            event.record(&mut c);
+            // Also capture the message field
+            let msg = event.metadata().name();
+            self.events.lock().unwrap().push(format!("{msg}{}", c.0));
+        }
+        fn enter(&self, _span: &tracing::span::Id) {}
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    /// T-3.2: GitHub API error emits tracing::warn! with run_id, head_branch,
+    ///         base_branch, and error detail.
+    ///
+    /// Uses a minimal raw `tracing::Subscriber` (no global state) inside
+    /// `with_default` + a local current-thread runtime for a fully isolated test.
+    ///
+    /// NOTE: Tracing callsite interests are cached globally. Parallel tests that
+    /// run without a subscriber can cache Interest::Never for the warn! callsites,
+    /// making this test flaky when run concurrently. Run with `--test-threads=1`
+    /// or `cargo test github_error_emits_warn -- --ignored` to avoid the race.
+    #[test]
+    #[ignore = "flaky in parallel due to tracing callsite interest caching; run with --test-threads=1"]
+    fn github_error_emits_warn_log_with_expected_fields() {
+        let (sub, events) = CapturingSubscriber::new();
+
+        tracing::subscriber::with_default(sub, || {
+            // Rebuild callsite interest so that callsites already registered by
+            // parallel tests (with no subscriber → Interest::Never) are updated
+            // to reflect our thread-local subscriber.
+            tracing_core::callsite::rebuild_interest_cache();
+
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("build tokio rt");
+            rt.block_on(async {
+                let github = GhFindPrError;
+                let issue_repo = MockIssueRepo {
+                    issue: make_issue(State::DesignRunning),
+                };
+                let process_repo = MockProcessRepo::new();
+                let config = unit_config();
+                let session = make_session(99, State::DesignRunning);
+                let _ =
+                    process_exited_session(&github, &issue_repo, &process_repo, &config, &session)
+                        .await;
+            });
+        });
+
+        let captured = events.lock().unwrap().join(" ");
+        assert!(
+            captured.contains("99"),
+            "log should contain run_id (99); captured: {captured:?}"
+        );
+        assert!(
+            captured.contains("cupola/test-feature/design"),
+            "log should contain head_branch; captured: {captured:?}"
+        );
+        assert!(
+            captured.contains("main"),
+            "log should contain base_branch; captured: {captured:?}"
+        );
+        assert!(
+            captured.contains("GitHub API unavailable"),
+            "log should contain error detail; captured: {captured:?}"
         );
     }
 

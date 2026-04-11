@@ -39,6 +39,8 @@ use anyhow::Result;
 
 use cupola::adapter::outbound::sqlite_connection::SqliteConnection;
 use cupola::adapter::outbound::sqlite_issue_repository::SqliteIssueRepository;
+use cupola::adapter::outbound::sqlite_process_run_repository::SqliteProcessRunRepository;
+use cupola::application::polling::resolve::resolve_exited_sessions;
 use cupola::application::polling_use_case::PollingUseCase;
 use cupola::application::port::claude_code_runner::ClaudeCodeRunner;
 use cupola::application::port::execution_log_repository::ExecutionLogRepository;
@@ -48,10 +50,15 @@ use cupola::application::port::github_client::{
     GitHubCheckRun, GitHubClient, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails,
     PrStatus, RepositoryPermission, ReviewThread,
 };
+use cupola::application::port::issue_repository::IssueRepository;
+use cupola::application::port::process_run_repository::ProcessRunRepository;
+use cupola::application::session_manager::SessionManager;
 use cupola::domain::config::Config;
 use cupola::domain::execution_log::ExecutionLog;
 use cupola::domain::issue::Issue;
+use cupola::domain::process_run::{ProcessRun, ProcessRunState, ProcessRunType};
 use cupola::domain::state::State;
+use cupola::domain::task_weight::TaskWeight;
 
 // === Mock GitHub Client ===
 
@@ -531,5 +538,212 @@ fn version_short_flag_exits_with_zero_and_matches_long() {
     assert_eq!(
         short_out.stdout, long_out.stdout,
         "-V and --version should produce identical stdout"
+    );
+}
+
+// === Task 3.1: Two-session concurrent GitHub API failure isolation ===
+
+/// A GitHub client where `find_pr_by_branches` fails for a specific head branch
+/// and succeeds (returns None → create_pr Ok(200)) for all others.
+struct SelectiveFailGitHub {
+    fail_head_branch: String,
+}
+
+impl GitHubClient for SelectiveFailGitHub {
+    async fn list_ready_issues(&self) -> Result<Vec<GitHubIssue>> {
+        Ok(vec![])
+    }
+    async fn get_issue(&self, _n: u64) -> Result<GitHubIssueDetail> {
+        Ok(GitHubIssueDetail {
+            number: 1,
+            title: String::new(),
+            body: String::new(),
+            labels: vec![],
+        })
+    }
+    async fn is_issue_open(&self, _n: u64) -> Result<bool> {
+        Ok(true)
+    }
+    async fn find_pr_by_branches(&self, head: &str, _base: &str) -> Result<Option<GitHubPr>> {
+        if head == self.fail_head_branch {
+            Err(anyhow::anyhow!("selective GitHub failure"))
+        } else {
+            Ok(None)
+        }
+    }
+    async fn is_pr_merged(&self, _n: u64) -> Result<bool> {
+        Ok(false)
+    }
+    async fn list_unresolved_threads(&self, _n: u64) -> Result<Vec<ReviewThread>> {
+        Ok(vec![])
+    }
+    async fn create_pr(&self, _h: &str, _b: &str, _t: &str, _body: &str) -> Result<u64> {
+        Ok(200)
+    }
+    async fn reply_to_thread(&self, _id: &str, _body: &str) -> Result<()> {
+        Ok(())
+    }
+    async fn resolve_thread(&self, _id: &str) -> Result<()> {
+        Ok(())
+    }
+    async fn comment_on_issue(&self, _n: u64, _body: &str) -> Result<()> {
+        Ok(())
+    }
+    async fn close_issue(&self, _n: u64) -> Result<()> {
+        Ok(())
+    }
+    async fn get_ci_check_runs(&self, _n: u64) -> Result<Vec<GitHubCheckRun>> {
+        Ok(vec![])
+    }
+    async fn get_job_logs(&self, _id: u64) -> Result<String> {
+        Ok(String::new())
+    }
+    async fn get_pr_mergeable(&self, _n: u64) -> Result<Option<bool>> {
+        Ok(Some(true))
+    }
+    async fn get_pr_details(&self, _n: u64) -> Result<GitHubPrDetails> {
+        Ok(GitHubPrDetails {
+            merged: false,
+            mergeable: Some(true),
+        })
+    }
+    async fn get_pr_status(&self, _n: u64) -> Result<PrStatus> {
+        Ok(PrStatus::Closed)
+    }
+    async fn fetch_label_actor_login(&self, _n: u64, _label: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+    async fn fetch_user_permission(&self, _username: &str) -> Result<RepositoryPermission> {
+        Ok(RepositoryPermission::Read)
+    }
+    async fn remove_label(&self, _n: u64, _label: &str) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// T-3.1: Two sessions complete in the same polling cycle.
+/// Session A's GitHub API call fails → ProcessRun.state=failed with error_message.
+/// Session B's GitHub API call succeeds → ProcessRun.state=succeeded.
+/// Both processed in the same resolve cycle without interruption.
+#[tokio::test]
+async fn two_concurrent_sessions_github_error_isolated_per_session() {
+    // --- Setup DB ---
+    let db = SqliteConnection::open_in_memory().expect("open db");
+    db.init_schema().expect("init schema");
+    let issue_repo = SqliteIssueRepository::new(db.clone());
+    let process_repo = SqliteProcessRunRepository::new(db);
+
+    // --- Create issues ---
+    let mut issue_a = Issue {
+        id: 0,
+        github_issue_number: 10,
+        state: State::DesignRunning,
+        feature_name: "feat-a".to_string(),
+        weight: TaskWeight::Medium,
+        worktree_path: None,
+        ci_fix_count: 0,
+        close_finished: false,
+        consecutive_failures_epoch: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    let id_a = issue_repo.save(&issue_a).await.expect("save issue_a");
+    issue_a.id = id_a;
+
+    let mut issue_b = Issue {
+        id: 0,
+        github_issue_number: 20,
+        state: State::DesignRunning,
+        feature_name: "feat-b".to_string(),
+        weight: TaskWeight::Medium,
+        worktree_path: None,
+        ci_fix_count: 0,
+        close_finished: false,
+        consecutive_failures_epoch: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    let id_b = issue_repo.save(&issue_b).await.expect("save issue_b");
+    issue_b.id = id_b;
+
+    // --- Create ProcessRun entries (Running state) ---
+    let run_a = ProcessRun::new_running(id_a, ProcessRunType::Design, 1, vec![]);
+    let run_id_a = process_repo.save(&run_a).await.expect("save run_a");
+
+    let run_b = ProcessRun::new_running(id_b, ProcessRunType::Design, 1, vec![]);
+    let run_id_b = process_repo.save(&run_b).await.expect("save run_b");
+
+    // --- Build session manager with two succeeded ExitedSessions ---
+    let mut session_mgr = SessionManager::new();
+    // Use echo "" for instant successful exit.
+    use std::process::{Command, Stdio};
+    let child_a = Command::new("echo")
+        .arg("")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn child_a");
+    session_mgr.register(id_a, State::DesignRunning, child_a);
+    session_mgr.update_run_id(id_a, run_id_a);
+
+    let child_b = Command::new("echo")
+        .arg("")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn child_b");
+    session_mgr.register(id_b, State::DesignRunning, child_b);
+    session_mgr.update_run_id(id_b, run_id_b);
+
+    // Wait for both processes to finish
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    // GitHub client: fails for feat-a's design branch, succeeds for feat-b
+    let github = SelectiveFailGitHub {
+        fail_head_branch: "cupola/feat-a/design".to_string(),
+    };
+    let config = test_config();
+
+    // --- Run resolve ---
+    resolve_exited_sessions(
+        &github,
+        &issue_repo,
+        &process_repo,
+        &config,
+        &mut session_mgr,
+    )
+    .await
+    .expect("resolve_exited_sessions should not propagate errors");
+
+    // --- Verify session A: failed ---
+    let run_a_final = process_repo
+        .find_latest(id_a, ProcessRunType::Design)
+        .await
+        .expect("find run_a")
+        .expect("run_a should exist");
+    assert_eq!(
+        run_a_final.state,
+        ProcessRunState::Failed,
+        "session A's ProcessRun should be failed"
+    );
+    assert!(
+        run_a_final
+            .error_message
+            .as_deref()
+            .unwrap_or("")
+            .contains("selective GitHub failure"),
+        "error_message should contain the GitHub error detail"
+    );
+
+    // --- Verify session B: succeeded ---
+    let run_b_final = process_repo
+        .find_latest(id_b, ProcessRunType::Design)
+        .await
+        .expect("find run_b")
+        .expect("run_b should exist");
+    assert_eq!(
+        run_b_final.state,
+        ProcessRunState::Succeeded,
+        "session B's ProcessRun should be succeeded"
     );
 }
