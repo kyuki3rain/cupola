@@ -158,6 +158,7 @@ stall_timeout_secs = 1200
 max_concurrent_sessions = 1
 
 trusted_associations = ["Owner", "Member", "Collaborator"]
+trusted_reviewers = ["copilot-pull-request-reviewer"]
 
 [log]
 level = "debug"
