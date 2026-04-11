@@ -681,12 +681,26 @@ mod tests {
         let issue_id = issue_repo.save(&new_issue(12)).await.expect("save issue");
 
         // Create 3 old failures
+        let mut old_ids = Vec::new();
         for _ in 0..3 {
             let id = repo
                 .save(&new_run(issue_id, ProcessRunType::Init))
                 .await
                 .expect("save");
             repo.mark_failed(id, None).await.expect("fail");
+            old_ids.push(id);
+        }
+
+        // Backdate old failures to 1 hour ago so epoch can sit between them and new ones.
+        {
+            let conn = repo.db.conn().lock().expect("lock");
+            for id in &old_ids {
+                conn.execute(
+                    "UPDATE process_runs SET started_at = datetime('now', '-1 hour') WHERE id = ?1",
+                    rusqlite::params![id],
+                )
+                .expect("backdate");
+            }
         }
 
         // Without epoch: 3 consecutive failures
@@ -696,11 +710,7 @@ mod tests {
             .expect("count");
         assert_eq!(count, 3, "without epoch, all failures counted");
 
-        // Wait for the next second so epoch is strictly after old failures.
-        // SQLite datetime('now') has 1-second resolution.
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-        // Set epoch to now — old failures should be excluded
+        // Set epoch to now — old (backdated) failures should be excluded
         let epoch = chrono::Utc::now();
 
         let count = repo
@@ -709,7 +719,7 @@ mod tests {
             .expect("count");
         assert_eq!(count, 0, "with epoch, old failures excluded");
 
-        // Create 1 new failure after epoch (same second or later is fine with >=)
+        // Create 1 new failure after epoch
         let id = repo
             .save(&new_run(issue_id, ProcessRunType::Init))
             .await
