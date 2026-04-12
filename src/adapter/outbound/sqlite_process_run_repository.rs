@@ -277,6 +277,36 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
         .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
     }
 
+    async fn find_latest_with_pr_number(
+        &self,
+        issue_id: i64,
+        type_: ProcessRunType,
+    ) -> Result<Option<ProcessRun>> {
+        let db = self.db.clone();
+        let type_str = type_.to_string();
+        tokio::task::spawn_blocking(move || {
+            let conn = db
+                .conn()
+                .lock()
+                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let mut stmt = conn.prepare(
+                "SELECT id, issue_id, type, idx, state, pid, pr_number, causes,
+                        started_at, finished_at, error_message
+                 FROM process_runs
+                 WHERE issue_id = ?1 AND type = ?2 AND pr_number IS NOT NULL
+                 ORDER BY id DESC LIMIT 1",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![issue_id, type_str])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(row_to_process_run(row)?))
+            } else {
+                Ok(None)
+            }
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+    }
+
     async fn find_by_issue(&self, issue_id: i64) -> Result<Vec<ProcessRun>> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
@@ -788,5 +818,80 @@ mod tests {
         let running = repo.find_all_running().await.expect("find");
         assert_eq!(running.len(), 1);
         assert_eq!(running[0].id, id1);
+    }
+
+    /// T-2.R.10: find_latest_with_pr_number は pr_number IS NOT NULL のレコードのみ返す
+    #[tokio::test]
+    async fn find_latest_with_pr_number_skips_null_rows() {
+        let (repo, issue_repo) = setup();
+        let issue_id = issue_repo.save(&new_issue(20)).await.expect("save issue");
+
+        // run1: pr_number = NULL (running state, no PR yet)
+        let id1 = repo
+            .save(&new_run(issue_id, ProcessRunType::Design))
+            .await
+            .expect("r1");
+
+        // run2: pr_number = Some(42) (succeeded with PR)
+        let id2 = repo
+            .save(&new_run(issue_id, ProcessRunType::Design))
+            .await
+            .expect("r2");
+        repo.mark_succeeded(id2, Some(42)).await.expect("s2");
+
+        // run3: pr_number = NULL (later failed run, no PR)
+        let id3 = repo
+            .save(&new_run(issue_id, ProcessRunType::Design))
+            .await
+            .expect("r3");
+        repo.mark_failed(id3, Some("oops".to_string()))
+            .await
+            .expect("f3");
+
+        // find_latest_with_pr_number should skip id3 (NULL) and return id2
+        let result = repo
+            .find_latest_with_pr_number(issue_id, ProcessRunType::Design)
+            .await
+            .expect("find_latest_with_pr_number");
+
+        assert!(
+            result.is_some(),
+            "expected Some when a non-NULL pr_number run exists"
+        );
+        let run = result.unwrap();
+        assert_eq!(
+            run.id, id2,
+            "should return the latest run with non-NULL pr_number"
+        );
+        assert_eq!(run.pr_number, Some(42));
+    }
+
+    /// T-2.R.11: 全レコードの pr_number が NULL の場合、find_latest_with_pr_number は Ok(None) を返す
+    #[tokio::test]
+    async fn find_latest_with_pr_number_returns_none_when_all_null() {
+        let (repo, issue_repo) = setup();
+        let issue_id = issue_repo.save(&new_issue(21)).await.expect("save issue");
+
+        // Two runs, both with pr_number = NULL
+        let id1 = repo
+            .save(&new_run(issue_id, ProcessRunType::Design))
+            .await
+            .expect("r1");
+        repo.mark_failed(id1, None).await.expect("f1");
+        let id2 = repo
+            .save(&new_run(issue_id, ProcessRunType::Design))
+            .await
+            .expect("r2");
+        repo.mark_failed(id2, None).await.expect("f2");
+
+        let result = repo
+            .find_latest_with_pr_number(issue_id, ProcessRunType::Design)
+            .await
+            .expect("find_latest_with_pr_number");
+
+        assert!(
+            result.is_none(),
+            "expected None when all pr_number values are NULL"
+        );
     }
 }

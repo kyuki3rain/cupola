@@ -199,12 +199,19 @@ where
     G: GitHubClient,
     P: ProcessRunRepository,
 {
-    // Find latest process run with a pr_number
-    let latest = process_repo.find_latest(issue_id, type_).await?;
-    let pr_number = match latest.and_then(|r| r.pr_number) {
-        Some(n) => n,
+    // Find latest process run with a pr_number (SQL-level filter ensures non-NULL)
+    let run = match process_repo
+        .find_latest_with_pr_number(issue_id, type_)
+        .await?
+    {
+        Some(r) => r,
         None => return Ok(None),
     };
+    let pr_number = run.pr_number.ok_or_else(|| {
+        anyhow::anyhow!(
+            "invariant violation: find_latest_with_pr_number returned a run with pr_number=None"
+        )
+    })?;
 
     // Observe the PR
     let status = match github.get_pr_status(pr_number).await {
@@ -589,5 +596,331 @@ mod tests {
             },
         ];
         assert_eq!(derive_ci_status(&runs), CiStatus::Unknown);
+    }
+
+    // ── observe_pr_for_type unit tests ──────────────────────────────────────
+
+    use crate::domain::process_run::{ProcessRun, ProcessRunState, ProcessRunType};
+    use std::sync::Mutex;
+
+    struct MockProcessRunRepository {
+        /// Result returned by find_latest_with_pr_number.
+        find_latest_with_pr_number_result: Option<ProcessRun>,
+    }
+
+    impl MockProcessRunRepository {
+        fn returning_none() -> Self {
+            Self {
+                find_latest_with_pr_number_result: None,
+            }
+        }
+
+        fn returning_run(run: ProcessRun) -> Self {
+            Self {
+                find_latest_with_pr_number_result: Some(run),
+            }
+        }
+    }
+
+    impl crate::application::port::process_run_repository::ProcessRunRepository
+        for MockProcessRunRepository
+    {
+        async fn save(&self, _: &ProcessRun) -> Result<i64> {
+            Ok(0)
+        }
+        async fn update_pid(&self, _: i64, _: u32) -> Result<()> {
+            Ok(())
+        }
+        async fn mark_succeeded(&self, _: i64, _: Option<u64>) -> Result<()> {
+            Ok(())
+        }
+        async fn mark_failed(&self, _: i64, _: Option<String>) -> Result<()> {
+            Ok(())
+        }
+        async fn mark_stale(&self, _: i64) -> Result<()> {
+            Ok(())
+        }
+        async fn mark_stale_for_issue(&self, _: i64) -> Result<()> {
+            Ok(())
+        }
+        async fn find_latest(&self, _: i64, _: ProcessRunType) -> Result<Option<ProcessRun>> {
+            Ok(None)
+        }
+        async fn find_latest_with_pr_number(
+            &self,
+            _: i64,
+            _: ProcessRunType,
+        ) -> Result<Option<ProcessRun>> {
+            Ok(self.find_latest_with_pr_number_result.clone())
+        }
+        async fn find_by_issue(&self, _: i64) -> Result<Vec<ProcessRun>> {
+            Ok(vec![])
+        }
+        async fn count_consecutive_failures(
+            &self,
+            _: i64,
+            _: ProcessRunType,
+            _: Option<chrono::DateTime<chrono::Utc>>,
+        ) -> Result<u32> {
+            Ok(0)
+        }
+        async fn find_latest_with_consecutive_count(
+            &self,
+            _: i64,
+            _: ProcessRunType,
+            _: Option<chrono::DateTime<chrono::Utc>>,
+        ) -> Result<Option<(ProcessRun, u32)>> {
+            Ok(None)
+        }
+        async fn find_all_running(&self) -> Result<Vec<ProcessRun>> {
+            Ok(vec![])
+        }
+        async fn update_state(&self, _: i64, _: ProcessRunState) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn make_run_with_pr_number(pr_number: u64) -> ProcessRun {
+        let mut run = ProcessRun::new_running(1, ProcessRunType::Design, 0, vec![]);
+        run.pr_number = Some(pr_number);
+        run
+    }
+
+    /// T-4.CO.1: find_latest_with_pr_number が None を返す場合、
+    /// observe_pr_for_type は Ok(None) を返す
+    #[tokio::test]
+    async fn observe_pr_for_type_returns_none_when_no_pr_run() {
+        let tracker = Arc::new(AtomicBool::new(false));
+        let github = MockGithub::with_tracker(true, vec![], Arc::clone(&tracker));
+        let repo = MockProcessRunRepository::returning_none();
+
+        let result = observe_pr_for_type(&github, &repo, 1, ProcessRunType::Design)
+            .await
+            .expect("should not error");
+
+        assert!(
+            result.is_none(),
+            "expected None when no pr_number run exists"
+        );
+    }
+
+    /// T-4.CO.2: find_latest_with_pr_number が Some(run) (pr_number=42) を返す場合、
+    /// github.get_pr_status(42) が呼ばれる
+    #[tokio::test]
+    async fn observe_pr_for_type_calls_get_pr_status_with_pr_number() {
+        let pr_status_calls = Arc::new(Mutex::new(vec![]));
+        let run = make_run_with_pr_number(42);
+
+        let github = MockGithubWithPrTracking::new(Arc::clone(&pr_status_calls));
+        let repo = MockProcessRunRepository::returning_run(run);
+
+        let result = observe_pr_for_type(&github, &repo, 1, ProcessRunType::Design)
+            .await
+            .expect("should not error");
+
+        assert!(
+            result.is_some(),
+            "expected Some(PrSnapshot) for pr_number=42"
+        );
+        let calls = pr_status_calls.lock().unwrap();
+        assert_eq!(
+            calls.as_slice(),
+            &[42u64],
+            "get_pr_status should be called with 42"
+        );
+    }
+
+    /// T-4.CO.3: github.get_pr_status が 404 エラーを返す場合、
+    /// observe_pr_for_type は Ok(None) を返す（404ハンドリングの回帰確認）
+    #[tokio::test]
+    async fn observe_pr_for_type_returns_none_on_404() {
+        let pr_status_calls = Arc::new(Mutex::new(vec![]));
+        let run = make_run_with_pr_number(99);
+
+        let github = MockGithubWith404::new(Arc::clone(&pr_status_calls));
+        let repo = MockProcessRunRepository::returning_run(run);
+
+        let result = observe_pr_for_type(&github, &repo, 1, ProcessRunType::Design)
+            .await
+            .expect("should not error on 404");
+
+        assert!(
+            result.is_none(),
+            "expected None when get_pr_status returns 404"
+        );
+    }
+
+    /// MockGithub that records get_pr_status calls and returns PrStatus::Open
+    struct MockGithubWithPrTracking {
+        pr_status_calls: Arc<Mutex<Vec<u64>>>,
+    }
+
+    impl MockGithubWithPrTracking {
+        fn new(calls: Arc<Mutex<Vec<u64>>>) -> Self {
+            Self {
+                pr_status_calls: calls,
+            }
+        }
+    }
+
+    impl GitHubClient for MockGithubWithPrTracking {
+        async fn list_ready_issues(
+            &self,
+        ) -> Result<Vec<crate::application::port::github_client::GitHubIssue>> {
+            Ok(vec![])
+        }
+        async fn get_issue(&self, n: u64) -> Result<GitHubIssueDetail> {
+            Ok(GitHubIssueDetail {
+                number: n,
+                title: String::new(),
+                body: String::new(),
+                labels: vec![],
+            })
+        }
+        async fn is_issue_open(&self, _n: u64) -> Result<bool> {
+            Ok(true)
+        }
+        async fn find_pr_by_branches(&self, _h: &str, _b: &str) -> Result<Option<GitHubPr>> {
+            Ok(None)
+        }
+        async fn is_pr_merged(&self, _n: u64) -> Result<bool> {
+            Ok(false)
+        }
+        async fn list_unresolved_threads(&self, _n: u64) -> Result<Vec<ReviewThread>> {
+            Ok(vec![])
+        }
+        async fn create_pr(&self, _h: &str, _b: &str, _t: &str, _body: &str) -> Result<u64> {
+            Ok(0)
+        }
+        async fn reply_to_thread(&self, _id: &str, _body: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn resolve_thread(&self, _id: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn comment_on_issue(&self, _n: u64, _body: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn close_issue(&self, _n: u64) -> Result<()> {
+            Ok(())
+        }
+        async fn get_ci_check_runs(&self, _n: u64) -> Result<Vec<GitHubCheckRun>> {
+            Ok(vec![])
+        }
+        async fn get_job_logs(&self, _id: u64) -> Result<String> {
+            Ok(String::new())
+        }
+        async fn get_pr_mergeable(&self, _n: u64) -> Result<Option<bool>> {
+            Ok(Some(true))
+        }
+        async fn get_pr_details(&self, _n: u64) -> Result<GitHubPrDetails> {
+            Ok(GitHubPrDetails {
+                merged: false,
+                mergeable: Some(true),
+            })
+        }
+        async fn get_pr_status(&self, n: u64) -> Result<PrStatus> {
+            self.pr_status_calls.lock().unwrap().push(n);
+            Ok(PrStatus::Open)
+        }
+        async fn fetch_label_actor_login(&self, _n: u64, _label: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+        async fn fetch_user_permission(
+            &self,
+            _user: &str,
+        ) -> Result<crate::application::port::github_client::RepositoryPermission> {
+            Ok(crate::application::port::github_client::RepositoryPermission::Admin)
+        }
+        async fn remove_label(&self, _n: u64, _label: &str) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// MockGithub that returns a 404 error from get_pr_status
+    struct MockGithubWith404 {
+        pr_status_calls: Arc<Mutex<Vec<u64>>>,
+    }
+
+    impl MockGithubWith404 {
+        fn new(calls: Arc<Mutex<Vec<u64>>>) -> Self {
+            Self {
+                pr_status_calls: calls,
+            }
+        }
+    }
+
+    impl GitHubClient for MockGithubWith404 {
+        async fn list_ready_issues(
+            &self,
+        ) -> Result<Vec<crate::application::port::github_client::GitHubIssue>> {
+            Ok(vec![])
+        }
+        async fn get_issue(&self, n: u64) -> Result<GitHubIssueDetail> {
+            Ok(GitHubIssueDetail {
+                number: n,
+                title: String::new(),
+                body: String::new(),
+                labels: vec![],
+            })
+        }
+        async fn is_issue_open(&self, _n: u64) -> Result<bool> {
+            Ok(true)
+        }
+        async fn find_pr_by_branches(&self, _h: &str, _b: &str) -> Result<Option<GitHubPr>> {
+            Ok(None)
+        }
+        async fn is_pr_merged(&self, _n: u64) -> Result<bool> {
+            Ok(false)
+        }
+        async fn list_unresolved_threads(&self, _n: u64) -> Result<Vec<ReviewThread>> {
+            Ok(vec![])
+        }
+        async fn create_pr(&self, _h: &str, _b: &str, _t: &str, _body: &str) -> Result<u64> {
+            Ok(0)
+        }
+        async fn reply_to_thread(&self, _id: &str, _body: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn resolve_thread(&self, _id: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn comment_on_issue(&self, _n: u64, _body: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn close_issue(&self, _n: u64) -> Result<()> {
+            Ok(())
+        }
+        async fn get_ci_check_runs(&self, _n: u64) -> Result<Vec<GitHubCheckRun>> {
+            Ok(vec![])
+        }
+        async fn get_job_logs(&self, _id: u64) -> Result<String> {
+            Ok(String::new())
+        }
+        async fn get_pr_mergeable(&self, _n: u64) -> Result<Option<bool>> {
+            Ok(Some(true))
+        }
+        async fn get_pr_details(&self, _n: u64) -> Result<GitHubPrDetails> {
+            Ok(GitHubPrDetails {
+                merged: false,
+                mergeable: Some(true),
+            })
+        }
+        async fn get_pr_status(&self, n: u64) -> Result<PrStatus> {
+            self.pr_status_calls.lock().unwrap().push(n);
+            Err(anyhow::anyhow!("404: Not Found"))
+        }
+        async fn fetch_label_actor_login(&self, _n: u64, _label: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+        async fn fetch_user_permission(
+            &self,
+            _user: &str,
+        ) -> Result<crate::application::port::github_client::RepositoryPermission> {
+            Ok(crate::application::port::github_client::RepositoryPermission::Admin)
+        }
+        async fn remove_label(&self, _n: u64, _label: &str) -> Result<()> {
+            Ok(())
+        }
     }
 }
