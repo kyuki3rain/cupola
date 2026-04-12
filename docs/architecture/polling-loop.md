@@ -102,11 +102,8 @@ for each issue:
   1. WorldSnapshot と遷移テーブルを照合（優先度順）
   2. next_state を決定
   3. metadata_updates（weight / ci_fix_count / feature_name 等）を決定
-  4. 一回性エフェクト: prev_state → next_state の遷移を検出して発行
-  5. イベント時・持続性エフェクト: next_state と WorldSnapshot を見て毎サイクル発行判断
-     （遷移サイクルでも next_state 基準で評価するため、遷移と同一サイクルで発火しうる。
-      prev_state ではなく next_state を使うことで、遷移によって条件が成立しなくなるケースを正しく除外できる）
-  6. (next_state, metadata_updates, effects) を返す
+  4. エフェクトを決定（prev / next / snap を参照。条件の詳細は effects.md を参照）
+  5. (next_state, metadata_updates, effects) を返す
 ```
 
 ### Decide の入出力
@@ -124,18 +121,9 @@ Output:
 
 エフェクトの詳細は [effects.md](./effects.md) を参照。メタデータ更新ルールの詳細は [metadata.md](./metadata.md) を参照。
 
-### 持続性エフェクトを next_state 基準で評価する
+### エフェクト条件の参照モデル
 
-[effects.md](./effects.md) の「持続性エフェクト」表は **next_state を基準に**条件が定義されている（例: 「`ImplementationRunning` + `processes.impl.state != running` → SwitchToImplBranch → SpawnProcess」）。Decide はこの不変条件を、遷移サイクルでも維持しなければならない。
-
-実装上は2段階で評価する：
-
-1. **第一段**: `prev.state` で `decide_X` を dispatch して `next_state` と一回性エフェクト（`Post*Comment` / `RejectUntrustedReadyIssue` / `PostCiFixLimitComment` 等）を確定する。
-2. **第二段**: `next_state != prev.state` かつ `next_state` が spawn 系の持続性エフェクトを持つ state（`InitializeRunning` / `DesignRunning` / `ImplementationRunning` / `DesignFixing` / `ImplementationFixing`）の場合、`state=next_state` の合成 Issue で同じ `decide_X` を再 dispatch し、その結果から **spawn 系持続性エフェクト（`SpawnInit` / `SwitchToImplBranch` / `SpawnProcess`）のみ** を抽出して append する。
-
-これにより、effect chain の知識（例: 「`ImplementationRunning` には `SwitchToImplBranch → SpawnProcess` のチェーンが要る」）は **`decide_X` 関数の中に1箇所だけ存在する**。遷移エッジ用の重複した emit ロジックを書かないで済むため、将来チェーンが伸びても1箇所を直せば transition cycle と stable cycle 双方に反映される。
-
-第二段で次 state の transition 判断や transition-edge エフェクトを採用しないのは、第一段が transition の単一の真実であり続けるため。第二段は **「next_state に居るとき必要な spawn の有無」だけを尋ねる** 副次評価である。
+[effects.md](./effects.md) の全エフェクトは、条件式で `prev` / `next` / `snap` のどれを参照するかが明記されている。`next` を参照するエフェクト（持続性エフェクト等）は state 解決後の値で評価されるため、遷移サイクルでも遷移先の状態で即座に発火する。
 
 ## Persist
 

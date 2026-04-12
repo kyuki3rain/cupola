@@ -49,9 +49,12 @@ pub fn decide(prev: &Issue, snap: &WorldSnapshot, cfg: &Config) -> Decision {
             state: next_state,
             ..prev.clone()
         };
+        // Clear stale process snapshots so the Fixing dispatch sees "no process"
+        // and emits SpawnProcess instead of bouncing back on a previous Succeeded.
+        let snap_for_second_pass = clear_stale_process_for_spawn(snap, next_state);
         let _ = dispatch_state(
             &synthetic,
-            snap,
+            &snap_for_second_pass,
             cfg,
             &mut secondary_effects,
             &mut secondary_meta,
@@ -91,6 +94,50 @@ fn is_persistent_spawn_effect(effect: &Effect) -> bool {
         effect,
         Effect::SpawnInit | Effect::SwitchToImplBranch | Effect::SpawnProcess { .. }
     )
+}
+
+/// Clear process snapshots that would cause the second-pass dispatch to see a
+/// stale Succeeded state and skip SpawnProcess emission.
+///
+/// When transitioning into a Fixing (or Running) state, the latest process_run
+/// of the corresponding type may be Succeeded from the *previous* round. The
+/// second-pass re-dispatch must treat this as "no active process" so that it
+/// falls into the spawn branch. Running and Pending processes are left intact
+/// because they represent genuinely in-flight work.
+fn clear_stale_process_for_spawn(snap: &WorldSnapshot, next_state: State) -> WorldSnapshot {
+    use crate::domain::world_snapshot::ProcessSnapshot;
+
+    let mut snap = snap.clone();
+    let should_clear = |ps: &Option<ProcessSnapshot>| -> bool {
+        ps.as_ref().is_some_and(|p| {
+            !matches!(p.state, ProcessRunState::Running | ProcessRunState::Pending)
+        })
+    };
+
+    match next_state {
+        State::DesignRunning => {
+            if should_clear(&snap.processes.design) {
+                snap.processes.design = None;
+            }
+        }
+        State::DesignFixing => {
+            if should_clear(&snap.processes.design_fix) {
+                snap.processes.design_fix = None;
+            }
+        }
+        State::ImplementationRunning => {
+            if should_clear(&snap.processes.impl_) {
+                snap.processes.impl_ = None;
+            }
+        }
+        State::ImplementationFixing => {
+            if should_clear(&snap.processes.impl_fix) {
+                snap.processes.impl_fix = None;
+            }
+        }
+        _ => {}
+    }
+    snap
 }
 
 /// Internal dispatch helper used by both the primary pass and the second-pass
@@ -1829,6 +1876,64 @@ mod tests {
         assert_eq!(
             d.metadata_updates.ci_fix_count,
             Some(cfg.max_ci_fix_cycles + 1)
+        );
+    }
+
+    /// Second-pass: ReviewWaiting → Fixing transition with stale Succeeded
+    /// must emit SpawnProcess via the second-pass dispatch.
+    #[test]
+    fn drw_to_df_with_stale_succeeded_emits_spawn_process() {
+        let issue = make_issue(State::DesignReviewWaiting);
+        let mut snap = fixtures::idle();
+        let mut pr = fixtures::open_pr();
+        pr.has_review_comments = true;
+        snap.design_pr = Some(pr);
+        // Previous design_fix succeeded — this is the stale record
+        snap.processes.design_fix = Some(ProcessSnapshot {
+            state: ProcessRunState::Succeeded,
+            index: 0,
+            run_id: 23,
+            consecutive_failures: 0,
+        });
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::DesignFixing);
+        assert!(
+            d.effects.iter().any(|e| matches!(
+                e,
+                Effect::SpawnProcess {
+                    type_: ProcessRunType::DesignFix,
+                    ..
+                }
+            )),
+            "second-pass must emit SpawnProcess when transitioning to DesignFixing with stale Succeeded"
+        );
+    }
+
+    /// Second-pass: ImplementationReviewWaiting → ImplementationFixing with stale Succeeded
+    #[test]
+    fn irw_to_if_with_stale_succeeded_emits_spawn_process() {
+        let issue = make_issue(State::ImplementationReviewWaiting);
+        let mut snap = fixtures::idle();
+        let mut pr = fixtures::open_pr();
+        pr.has_review_comments = true;
+        snap.impl_pr = Some(pr);
+        snap.processes.impl_fix = Some(ProcessSnapshot {
+            state: ProcessRunState::Succeeded,
+            index: 0,
+            run_id: 30,
+            consecutive_failures: 0,
+        });
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::ImplementationFixing);
+        assert!(
+            d.effects.iter().any(|e| matches!(
+                e,
+                Effect::SpawnProcess {
+                    type_: ProcessRunType::ImplFix,
+                    ..
+                }
+            )),
+            "second-pass must emit SpawnProcess when transitioning to ImplementationFixing with stale Succeeded"
         );
     }
 }
