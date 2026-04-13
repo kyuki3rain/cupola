@@ -210,11 +210,16 @@ pub async fn run(cli: Cli) -> Result<()> {
                 println!("No database found. Run `cupola init` first.");
                 return Ok(());
             }
+            let pid_path = config
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("cupola.pid");
+            let pid_file_manager = PidFileManager::new(pid_path);
+            check_daemon_not_running(&pid_file_manager)?;
             let db = SqliteConnection::open(&db_path)?;
             let issue_repo = SqliteIssueRepository::new(db);
             let worktree = GitWorktreeManager::new(".");
             let uc = CleanupUseCase::new(issue_repo, worktree);
-            println!("⚠️  daemon が動作中の場合は停止してから cleanup を実行してください");
             let result = uc.execute().await?;
             if result.cleaned.is_empty() {
                 println!("対象の Cancelled Issue が見つかりませんでした");
@@ -752,6 +757,21 @@ fn check_and_clean_pid_file(pid_file_manager: &PidFileManager) -> Result<()> {
         Ok(None) => Ok(()),
         Err(e) => Err(anyhow::anyhow!("failed to read PID file: {e}")),
     }
+}
+
+/// Returns an error if a daemon process is currently running according to the PID file.
+///
+/// Cleanup must not proceed while the daemon is active to avoid data corruption.
+fn check_daemon_not_running(
+    pid_mgr: &impl crate::application::port::pid_file::PidFilePort,
+) -> Result<()> {
+    if let Ok(Some(pid)) = pid_mgr.read_pid()
+        && pid_mgr.is_process_alive(pid)
+    {
+        eprintln!("Error: cupola is running (pid={pid}). Run `cupola stop` first.");
+        return Err(anyhow::anyhow!("daemon is running"));
+    }
+    Ok(())
 }
 
 /// Deletes the PID file at `pid_path` as a best-effort fallback, then returns `result`
@@ -1390,6 +1410,38 @@ mod tests {
         assert!(
             output.contains("#55"),
             "should contain issue number; output: {output}"
+        );
+    }
+
+    // --- check_daemon_not_running tests ---
+
+    #[test]
+    fn cleanup_aborts_when_daemon_is_running() {
+        let pid_mgr = MockPidFilePort::new().with_pid(1234).with_alive_pid(1234);
+        let result = super::check_daemon_not_running(&pid_mgr);
+        assert!(result.is_err(), "should error when daemon is alive");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("daemon is running"),
+            "error should mention daemon; got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn cleanup_proceeds_when_no_pid_file() {
+        let pid_mgr = MockPidFilePort::new();
+        let result = super::check_daemon_not_running(&pid_mgr);
+        assert!(result.is_ok(), "should succeed when no PID file exists");
+    }
+
+    #[test]
+    fn cleanup_proceeds_when_pid_file_stale() {
+        // PID file exists but process is not alive (stale)
+        let pid_mgr = MockPidFilePort::new().with_pid(5678);
+        let result = super::check_daemon_not_running(&pid_mgr);
+        assert!(
+            result.is_ok(),
+            "should succeed when PID file is stale (process not alive)"
         );
     }
 }
