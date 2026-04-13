@@ -567,75 +567,83 @@ where
         process_repo.save(&run).await?
     };
 
-    // For fixing phases: merge latest default branch and write review threads
-    let pr_number_opt = get_pr_number_for_type(process_repo, issue.id, type_).await?;
-    let has_merge_conflict = if matches!(type_, ProcessRunType::DesignFix | ProcessRunType::ImplFix)
-    {
-        // Merge latest default branch; distinguish conflict from fatal errors
-        let conflict = match worktree.merge(wt_path, &format!("origin/{}", config.default_branch)) {
-            Ok(()) => false,
-            Err(e) if e.is::<MergeConflictError>() => {
-                // Intentional merge conflict — Claude Code will resolve it during the session
-                tracing::info!("merge conflict detected before fixing spawn; Claude will resolve");
-                true
-            }
-            Err(e) => {
-                // Fatal merge error (network failure, permission error, etc.) — abort spawn
-                tracing::error!(error = %e, "merge failed before fixing spawn");
-                let _ = process_repo.mark_failed(run_id, Some(e.to_string())).await;
-                return Err(e);
-            }
+    // Wrap all remaining fallible work in an async block so that any `?` early-return
+    // is caught by a single mark_failed call before propagating the error.
+    let result: Result<(Child, i64, u32)> = async {
+        // For fixing phases: merge latest default branch and write review threads
+        let pr_number_opt = get_pr_number_for_type(process_repo, issue.id, type_).await?;
+        let has_merge_conflict =
+            if matches!(type_, ProcessRunType::DesignFix | ProcessRunType::ImplFix) {
+                // Merge latest default branch; distinguish conflict from fatal errors
+                let conflict = match worktree.merge(wt_path, &config.default_branch) {
+                    Ok(()) => false,
+                    Err(e) if e.is::<MergeConflictError>() => {
+                        // Intentional merge conflict — Claude Code will resolve it during the session
+                        tracing::info!(
+                            "merge conflict detected before fixing spawn; Claude will resolve"
+                        );
+                        true
+                    }
+                    Err(e) => {
+                        // Fatal merge error (network failure, permission error, etc.) — abort spawn
+                        tracing::error!(error = %e, "merge failed before fixing spawn");
+                        return Err(e);
+                    }
+                };
+
+                // Write review threads
+                if let Some(pr_number) = pr_number_opt {
+                    let threads = github.list_unresolved_threads(pr_number).await?;
+                    write_review_threads_input(wt_path, &threads, config)?;
+                }
+
+                conflict
+            } else {
+                false
+            };
+
+        // Build session config
+        let state = crate::domain::phase::Phase::from_state(issue.state)
+            .map(|p| state_from_phase(p, type_))
+            .unwrap_or(issue.state);
+
+        let session_config = build_session_config(
+            state,
+            issue.github_issue_number,
+            config,
+            pr_number_opt,
+            &issue.feature_name,
+            causes,
+            has_merge_conflict,
+        )?;
+
+        let schema = match session_config.output_schema {
+            OutputSchemaKind::PrCreation => Some(PR_CREATION_SCHEMA),
+            OutputSchemaKind::Fixing => Some(FIXING_SCHEMA),
         };
 
-        // Write review threads
-        if let Some(pr_number) = pr_number_opt {
-            let threads = github.list_unresolved_threads(pr_number).await?;
-            write_review_threads_input(wt_path, &threads, config)?;
-        }
+        // Select model
+        let model_phase = phase_for_type(type_);
+        let model = config.models.resolve(issue.weight, model_phase);
 
-        conflict
-    } else {
-        false
-    };
-
-    // Build session config
-    let state = crate::domain::phase::Phase::from_state(issue.state)
-        .map(|p| state_from_phase(p, type_))
-        .unwrap_or(issue.state);
-
-    let session_config = build_session_config(
-        state,
-        issue.github_issue_number,
-        config,
-        pr_number_opt,
-        &issue.feature_name,
-        causes,
-        has_merge_conflict,
-    )?;
-
-    let schema = match session_config.output_schema {
-        OutputSchemaKind::PrCreation => Some(PR_CREATION_SCHEMA),
-        OutputSchemaKind::Fixing => Some(FIXING_SCHEMA),
-    };
-
-    // Select model
-    let model_phase = phase_for_type(type_);
-    let model = config.models.resolve(issue.weight, model_phase);
-
-    // Spawn the process
-    match claude_runner.spawn(&session_config.prompt, wt_path, schema, model) {
-        Ok(mut child) => {
-            let pid = child.id();
-            if let Err(e) = process_repo.update_pid(run_id, pid).await {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = process_repo
-                    .mark_failed(run_id, Some(format!("update_pid failed: {e}")))
-                    .await;
-                return Err(e);
+        // Spawn the process
+        match claude_runner.spawn(&session_config.prompt, wt_path, schema, model) {
+            Ok(mut child) => {
+                let pid = child.id();
+                if let Err(e) = process_repo.update_pid(run_id, pid).await {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(e);
+                }
+                Ok((child, run_id, pid))
             }
-            Ok((child, run_id, pid))
+            Err(e) => Err(e),
         }
+    }
+    .await;
+
+    match result {
+        Ok(val) => Ok(val),
         Err(e) => {
             let _ = process_repo.mark_failed(run_id, Some(e.to_string())).await;
             Err(e)
