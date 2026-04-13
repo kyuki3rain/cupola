@@ -12,12 +12,12 @@
 - `status` コマンド出力を `Process:` プレフィックスと起動モード表示に修正する
 - `Claude sessions:` ラベルを使用してセッション数を表示する
 - レガシーPIDファイル（1行フォーマット）を後方互換的に処理する
+- `handle_status` の `running_count` ハードコード（`TODO(phase 6)`）を解消し、`process_runs` テーブルの `state = 'running'` レコード数を実カウントで表示する
 
 ### Non-Goals
 
 - `write_pid` / `read_pid` メソッドの削除（後方互換性のため残存）
 - 既存PIDファイルの強制的な移行・削除
-- `status` コマンドのセッション数実カウント実装（既存の TODO スコープ外）
 
 ## 要件トレーサビリティ
 
@@ -38,6 +38,7 @@
 | 2.6 | Process: not running (cleanup failed) | handle_status | delete_pid | Status Flow |
 | 3.1 | Claude sessions: alive/max | handle_status | — | — |
 | 3.2 | Claude sessions: alive | handle_status | — | — |
+| 3.3 | running_count を process_runs テーブルから取得 | handle_status | find_all_running | — |
 
 ## アーキテクチャ
 
@@ -85,8 +86,9 @@ sequenceDiagram
     participant CLI as CLI(status)
     participant App as handle_status
     participant Port as PidFilePort
+    participant RunRepo as ProcessRunRepository
 
-    CLI->>App: handle_status(out, pid_mgr, repo, max_sessions)
+    CLI->>App: handle_status(out, pid_mgr, process_run_repo, repo, max_sessions)
     App->>Port: read_pid_and_mode()
     alt Ok(Some((pid, mode)))
         Port-->>App: (pid, Some(Foreground|Daemon)) or (pid, None)
@@ -107,9 +109,12 @@ sequenceDiagram
     else Err
         App-->>CLI: Process: not running (warn log)
     end
+    App->>RunRepo: find_all_running()
+    RunRepo-->>App: Vec<ProcessRun>
+    App-->>CLI: Claude sessions: {count}[/{max}]
 ```
 
-> `read_pid_and_mode()` を使用してステータス確認を行い、取得したモード情報を出力フォーマットに組み込む。stale判定時のTOCTOU対策として2回目の読み取りも `read_pid_and_mode()` を使用する。
+> `read_pid_and_mode()` を使用してステータス確認を行い、取得したモード情報を出力フォーマットに組み込む。stale判定時のTOCTOU対策として2回目の読み取りも `read_pid_and_mode()` を使用する。`running_count` は `ProcessRunRepository::find_all_running()` の件数で取得する。`SessionManager` はデーモンプロセス内のインメモリ状態であり `status` サブコマンドからはアクセスできないため、DB を正規ソースとして使用する。
 
 ## コンポーネントとインターフェース
 
@@ -120,7 +125,7 @@ sequenceDiagram
 | ProcessMode | application/port | 起動モードの値型 | 1.1 | — | State |
 | PidFilePort (拡張) | application/port | モード付きPIDファイル操作のトレイト | 1.1–1.7 | — | Service |
 | PidFileManager (拡張) | adapter/outbound | トレイトの具体実装 | 1.2–1.7 | std::fs | Service |
-| handle_status (修正) | bootstrap | status出力ロジック | 2.1–2.6, 3.1–3.2 | PidFilePort | Service |
+| handle_status (修正) | bootstrap | status出力ロジック | 2.1–2.6, 3.1–3.3 | PidFilePort, ProcessRunRepository | Service |
 
 ### Application/Port 層
 
@@ -197,18 +202,21 @@ pub trait PidFilePort: Send + Sync {
 
 | フィールド | 詳細 |
 |----------|------|
-| Intent | `read_pid_and_mode` を使用した正確なプロセス状態・モード表示と、`Claude sessions:` ラベルへの修正 |
-| Requirements | 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 3.1, 3.2 |
+| Intent | `read_pid_and_mode` を使用した正確なプロセス状態・モード表示、`Claude sessions:` ラベルへの修正、および `running_count` 実カウント実装 |
+| Requirements | 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 3.1, 3.2, 3.3 |
 
 **責務と制約**
 - `read_pid()` の代わりに `read_pid_and_mode()` を使用してステータスを取得する
 - モード文字列のマッピング: `Some(Foreground)` → `"foreground"`, `Some(Daemon)` → `"daemon"`, `None` → `"unknown"`
 - stale判定時のTOCTOU対策の `read_pid()` 呼び出しも `read_pid_and_mode()` に変更する
 - `Running:` ラベルを `Claude sessions:` に変更する
+- `running_count` を `ProcessRunRepository::find_all_running()` の結果の件数で置き換える
+- `handle_status` のシグネチャに `process_run_repo: &impl ProcessRunRepository` パラメータを追加する
 
 **実装ノート**
 - stale判定の等価比較は PID のみを比較する（モードは不要）: `pid_mgr.read_pid_and_mode().ok().flatten().map(|(p, _)| p) == Some(pid)`
 - `write_pid` → `write_pid_with_mode` への変更は foreground 呼び出しサイト（app.rs ~434）と daemon child 呼び出しサイト（app.rs ~595）の2箇所
+- `SessionManager` はデーモンプロセス内のインメモリ状態であるため、`status` コマンドからはアクセス不可。`ProcessRunRepository` は SQLite DB 経由でアクセスできるため、`find_all_running()` で Running レコード数を取得する
 
 ## データモデル
 
@@ -265,3 +273,5 @@ PIDファイル (2行フォーマット)
 - `test_status_output_not_running` — PIDファイル不在時に `Process: not running` が表示されることを確認
 - `test_status_output_session_label_with_max` — `Claude sessions: {alive}/{max}` が正しく表示されることを確認
 - `test_status_output_session_label_no_max` — `Claude sessions: {alive}` が正しく表示されることを確認
+- `test_status_running_count_from_process_runs` — `process_runs` テーブルに Running レコードが存在する場合、`Claude sessions:` に実カウントが反映されることを確認
+- `test_status_running_count_zero_when_no_running_records` — Running レコードが存在しない場合、カウントが 0 であることを確認
