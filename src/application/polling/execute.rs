@@ -11,7 +11,7 @@ use crate::application::init_task_manager::InitTaskManager;
 use crate::application::io::{clear_inputs_dir, write_issue_input, write_review_threads_input};
 use crate::application::port::claude_code_runner::ClaudeCodeRunner;
 use crate::application::port::file_generator::FileGenerator;
-use crate::application::port::git_worktree::GitWorktree;
+use crate::application::port::git_worktree::{GitWorktree, MergeConflictError};
 use crate::application::port::github_client::GitHubClient;
 use crate::application::port::issue_repository::IssueRepository;
 use crate::application::port::process_run_repository::ProcessRunRepository;
@@ -551,20 +551,52 @@ where
     clear_inputs_dir(wt_path)?;
     write_issue_input(wt_path, &detail)?;
 
-    // For fixing phases: fetch + merge, write review threads
+    // Create or resume ProcessRun before merge so run_id is available for mark_failed on fatal
+    // merge error.
+    let run_id = if let Some(existing_run_id) = pending_run_id {
+        // Resume pending run: transition state to running
+        process_repo
+            .update_state(existing_run_id, ProcessRunState::Running)
+            .await?;
+        existing_run_id
+    } else {
+        // New spawn: insert a new running ProcessRun
+        let latest = process_repo.find_latest(issue.id, type_).await?;
+        let index = latest.map(|r| r.index + 1).unwrap_or(0);
+        let run = ProcessRun::new_running(issue.id, type_, index, causes.to_vec());
+        process_repo.save(&run).await?
+    };
+
+    // For fixing phases: merge latest default branch and write review threads
     let pr_number_opt = get_pr_number_for_type(process_repo, issue.id, type_).await?;
-    if matches!(type_, ProcessRunType::DesignFix | ProcessRunType::ImplFix) {
-        // Merge latest default branch
-        if let Err(e) = worktree.merge(wt_path, &format!("origin/{}", config.default_branch)) {
-            tracing::warn!(error = %e, "merge failed before fixing spawn, proceeding anyway");
-        }
+    let has_merge_conflict = if matches!(type_, ProcessRunType::DesignFix | ProcessRunType::ImplFix)
+    {
+        // Merge latest default branch; distinguish conflict from fatal errors
+        let conflict = match worktree.merge(wt_path, &format!("origin/{}", config.default_branch)) {
+            Ok(()) => false,
+            Err(e) if e.is::<MergeConflictError>() => {
+                // Intentional merge conflict — Claude Code will resolve it during the session
+                tracing::info!("merge conflict detected before fixing spawn; Claude will resolve");
+                true
+            }
+            Err(e) => {
+                // Fatal merge error (network failure, permission error, etc.) — abort spawn
+                tracing::error!(error = %e, "merge failed before fixing spawn");
+                let _ = process_repo.mark_failed(run_id, Some(e.to_string())).await;
+                return Err(e);
+            }
+        };
 
         // Write review threads
         if let Some(pr_number) = pr_number_opt {
             let threads = github.list_unresolved_threads(pr_number).await?;
             write_review_threads_input(wt_path, &threads, config)?;
         }
-    }
+
+        conflict
+    } else {
+        false
+    };
 
     // Build session config
     let state = crate::domain::phase::Phase::from_state(issue.state)
@@ -578,7 +610,7 @@ where
         pr_number_opt,
         &issue.feature_name,
         causes,
-        false, // has_merge_conflict: TODO detect from ProcessRun
+        has_merge_conflict,
     )?;
 
     let schema = match session_config.output_schema {
@@ -589,21 +621,6 @@ where
     // Select model
     let model_phase = phase_for_type(type_);
     let model = config.models.resolve(issue.weight, model_phase);
-
-    // Determine run_id: reuse pending or create new running record
-    let run_id = if let Some(existing_run_id) = pending_run_id {
-        // Resume pending: update state to running
-        process_repo
-            .update_state(existing_run_id, ProcessRunState::Running)
-            .await?;
-        existing_run_id
-    } else {
-        // New spawn: insert as running
-        let latest = process_repo.find_latest(issue.id, type_).await?;
-        let index = latest.map(|r| r.index + 1).unwrap_or(0);
-        let run = ProcessRun::new_running(issue.id, type_, index, causes.to_vec());
-        process_repo.save(&run).await?
-    };
 
     // Spawn the process
     match claude_runner.spawn(&session_config.prompt, wt_path, schema, model) {
@@ -1298,6 +1315,315 @@ mod tests {
                 .unwrap_or("")
                 .contains("comment API error"),
             "error message should be propagated"
+        );
+    }
+
+    // ── Mocks and helpers for prepare_process_spawn merge-error tests ────────
+
+    enum MergeBehavior {
+        Ok,
+        Conflict,
+        FatalError(String),
+    }
+
+    struct MockMergeWorktree {
+        behavior: MergeBehavior,
+        spawn_calls: Arc<Mutex<u32>>,
+    }
+
+    impl Clone for MockMergeWorktree {
+        fn clone(&self) -> Self {
+            Self {
+                behavior: match &self.behavior {
+                    MergeBehavior::Ok => MergeBehavior::Ok,
+                    MergeBehavior::Conflict => MergeBehavior::Conflict,
+                    MergeBehavior::FatalError(msg) => MergeBehavior::FatalError(msg.clone()),
+                },
+                spawn_calls: self.spawn_calls.clone(),
+            }
+        }
+    }
+
+    impl GitWorktree for MockMergeWorktree {
+        fn fetch(&self) -> Result<()> {
+            Ok(())
+        }
+
+        fn merge(&self, _p: &Path, _b: &str) -> Result<()> {
+            match &self.behavior {
+                MergeBehavior::Ok => Ok(()),
+                MergeBehavior::Conflict => Err(anyhow::Error::from(
+                    crate::application::port::git_worktree::MergeConflictError,
+                )),
+                MergeBehavior::FatalError(msg) => Err(anyhow::anyhow!("{}", msg)),
+            }
+        }
+
+        fn exists(&self, _p: &Path) -> bool {
+            false
+        }
+
+        fn create(&self, _p: &Path, _b: &str, _s: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn remove(&self, _p: &Path) -> Result<()> {
+            Ok(())
+        }
+
+        fn create_branch(&self, _p: &Path, _b: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn checkout(&self, _p: &Path, _b: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn pull(&self, _p: &Path) -> Result<()> {
+            Ok(())
+        }
+
+        fn push(&self, _p: &Path, _b: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn delete_branch(&self, _b: &str) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct MockClaudeRunner {
+        spawn_calls: Arc<Mutex<u32>>,
+    }
+
+    impl MockClaudeRunner {
+        fn spawn_call_count(&self) -> u32 {
+            *self.spawn_calls.lock().expect("lock")
+        }
+    }
+
+    impl crate::application::port::claude_code_runner::ClaudeCodeRunner for MockClaudeRunner {
+        fn spawn(
+            &self,
+            _prompt: &str,
+            _working_dir: &Path,
+            _json_schema: Option<&str>,
+            _model: &str,
+        ) -> Result<std::process::Child> {
+            *self.spawn_calls.lock().expect("lock") += 1;
+            // Always fail the spawn itself — the tests only care whether spawn
+            // was *attempted*, not whether the child process succeeded.
+            Err(anyhow::anyhow!("mock spawn failure"))
+        }
+    }
+
+    /// A process-run repository that returns a stub Design run with a PR number
+    /// so that `get_pr_number_for_type` can supply a PR to `build_session_config`.
+    #[derive(Clone)]
+    struct MockProcRepoWithPr {
+        mark_failed_calls: FailedRunLog,
+    }
+
+    impl MockProcRepoWithPr {
+        fn new() -> Self {
+            Self {
+                mark_failed_calls: Arc::new(Mutex::new(vec![])),
+            }
+        }
+
+        fn failed_runs(&self) -> Vec<(i64, Option<String>)> {
+            self.mark_failed_calls.lock().expect("lock").clone()
+        }
+    }
+
+    impl ProcessRunRepository for MockProcRepoWithPr {
+        async fn save(&self, _: &ProcessRun) -> anyhow::Result<i64> {
+            Ok(42)
+        }
+
+        async fn find_latest(
+            &self,
+            _: i64,
+            _: ProcessRunType,
+        ) -> anyhow::Result<Option<ProcessRun>> {
+            // Return a Design run with pr_number set so DesignFix can look it up
+            let mut run = ProcessRun::new_running(1, ProcessRunType::Design, 0, vec![]);
+            run.pr_number = Some(99);
+            Ok(Some(run))
+        }
+
+        async fn mark_failed(&self, run_id: i64, msg: Option<String>) -> anyhow::Result<()> {
+            self.mark_failed_calls
+                .lock()
+                .expect("lock")
+                .push((run_id, msg));
+            Ok(())
+        }
+
+        async fn update_pid(&self, _: i64, _: u32) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn mark_succeeded(&self, _: i64, _: Option<u64>) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn mark_stale(&self, _: i64) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn mark_stale_for_issue(&self, _: i64) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn find_by_issue(&self, _: i64) -> anyhow::Result<Vec<ProcessRun>> {
+            Ok(vec![])
+        }
+
+        async fn count_consecutive_failures(
+            &self,
+            _: i64,
+            _: ProcessRunType,
+            _: Option<chrono::DateTime<chrono::Utc>>,
+        ) -> anyhow::Result<u32> {
+            Ok(0)
+        }
+
+        async fn find_latest_with_consecutive_count(
+            &self,
+            _: i64,
+            _: ProcessRunType,
+            _: Option<chrono::DateTime<chrono::Utc>>,
+        ) -> anyhow::Result<Option<(ProcessRun, u32)>> {
+            Ok(None)
+        }
+
+        async fn find_all_running(&self) -> anyhow::Result<Vec<ProcessRun>> {
+            Ok(vec![])
+        }
+
+        async fn update_state(
+            &self,
+            _: i64,
+            _: crate::domain::process_run::ProcessRunState,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn make_test_issue_with_worktree(feature_name: &str, worktree_path: &str) -> Issue {
+        let mut issue = Issue::new(1, feature_name.to_string());
+        issue.id = 1;
+        issue.worktree_path = Some(worktree_path.to_string());
+        // DesignFixing state so build_session_config accepts the DesignFix run type
+        issue.state = crate::domain::state::State::DesignFixing;
+        issue
+    }
+
+    /// T-3.EX.merge.1: when merge returns MergeConflictError, spawn is attempted
+    /// and mark_failed is NOT called for the merge error.
+    #[tokio::test]
+    async fn prepare_process_spawn_conflict_continues_spawn_without_mark_failed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wt_path = dir.path().to_str().expect("valid utf8").to_string();
+
+        let spawn_calls: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
+        let worktree = MockMergeWorktree {
+            behavior: MergeBehavior::Conflict,
+            spawn_calls: spawn_calls.clone(),
+        };
+        let runner = MockClaudeRunner {
+            spawn_calls: spawn_calls.clone(),
+        };
+        let proc_repo = MockProcRepoWithPr::new();
+        let github = MockGitHubForInit::new();
+        let config = make_test_config(dir.path());
+        let issue = make_test_issue_with_worktree("issue-1", &wt_path);
+
+        let result = super::prepare_process_spawn(
+            &github,
+            &proc_repo,
+            &runner,
+            &worktree,
+            &config,
+            &issue,
+            ProcessRunType::DesignFix,
+            &[],
+            None,
+        )
+        .await;
+
+        // The merge conflict is intentional; spawn should be attempted (and fail
+        // with mock error), but mark_failed should NOT be called for the merge.
+        assert!(result.is_err(), "mock spawn always fails");
+        assert_eq!(
+            runner.spawn_call_count(),
+            1,
+            "spawn should have been attempted despite merge conflict"
+        );
+        // mark_failed may be called by the spawn-failure path, but NOT by the
+        // merge-conflict path — the spawn failure is a separate concern.
+        // Verify that no mark_failed was triggered *before* spawn (i.e., the
+        // failed_runs count reflects only spawn-failure, not a merge abort).
+        let failed = proc_repo.failed_runs();
+        // Spawn failed → mark_failed called once (by the spawn-failure handler)
+        // but NOT a second time for the merge conflict.
+        assert_eq!(
+            failed.len(),
+            1,
+            "mark_failed should be called exactly once (for spawn failure, not merge conflict)"
+        );
+    }
+
+    /// T-3.EX.merge.2: when merge returns a non-conflict error, spawn is NOT
+    /// attempted and mark_failed IS called with the merge error message.
+    #[tokio::test]
+    async fn prepare_process_spawn_fatal_merge_error_marks_failed_and_aborts_spawn() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wt_path = dir.path().to_str().expect("valid utf8").to_string();
+
+        let spawn_calls: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
+        let worktree = MockMergeWorktree {
+            behavior: MergeBehavior::FatalError("network timeout".to_string()),
+            spawn_calls: spawn_calls.clone(),
+        };
+        let runner = MockClaudeRunner {
+            spawn_calls: spawn_calls.clone(),
+        };
+        let proc_repo = MockProcRepoWithPr::new();
+        let github = MockGitHubForInit::new();
+        let config = make_test_config(dir.path());
+        let issue = make_test_issue_with_worktree("issue-1", &wt_path);
+
+        let result = super::prepare_process_spawn(
+            &github,
+            &proc_repo,
+            &runner,
+            &worktree,
+            &config,
+            &issue,
+            ProcessRunType::DesignFix,
+            &[],
+            None,
+        )
+        .await;
+
+        assert!(result.is_err(), "fatal merge error should propagate");
+        assert_eq!(
+            runner.spawn_call_count(),
+            0,
+            "spawn should NOT be attempted after a fatal merge error"
+        );
+        let failed = proc_repo.failed_runs();
+        assert_eq!(failed.len(), 1, "mark_failed should be called once");
+        assert!(
+            failed[0]
+                .1
+                .as_deref()
+                .unwrap_or("")
+                .contains("network timeout"),
+            "mark_failed message should contain the merge error"
         );
     }
 }
