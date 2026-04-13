@@ -79,8 +79,9 @@ impl<I: IssueRepository, W: GitWorktree> CleanupUseCase<I, W> {
         }
 
         // 2. ブランチの削除
-        let main_branch = format!("cupola/{n}/main");
-        let design_branch = format!("cupola/{n}/design");
+        let feature_name = &issue.feature_name;
+        let main_branch = format!("cupola/{feature_name}/main");
+        let design_branch = format!("cupola/{feature_name}/design");
         for branch in [&main_branch, &design_branch] {
             match self.worktree.delete_branch(branch) {
                 Ok(()) => {
@@ -307,8 +308,8 @@ mod tests {
 
         // Branches should be deleted
         let branches = deleted.lock().unwrap();
-        assert!(branches.contains(&"cupola/42/main".to_string()));
-        assert!(branches.contains(&"cupola/42/design".to_string()));
+        assert!(branches.contains(&"cupola/issue-10/main".to_string()));
+        assert!(branches.contains(&"cupola/issue-10/design".to_string()));
 
         // DB should be updated with NULL worktree_path
         let updates = updated.lock().unwrap();
@@ -401,8 +402,8 @@ mod tests {
         assert!(result.cleaned[0].worktree_removed);
         assert!(removed.lock().unwrap().contains(&wt_path));
         let branches = deleted.lock().unwrap();
-        assert!(branches.contains(&"cupola/55/main".to_string()));
-        assert!(branches.contains(&"cupola/55/design".to_string()));
+        assert!(branches.contains(&"cupola/issue-10/main".to_string()));
+        assert!(branches.contains(&"cupola/issue-10/design".to_string()));
         let updates = updated.lock().unwrap();
         assert_eq!(updates.len(), 1);
         assert!(updates[0].worktree_path.is_none());
