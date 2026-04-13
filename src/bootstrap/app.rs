@@ -210,11 +210,16 @@ pub async fn run(cli: Cli) -> Result<()> {
                 println!("No database found. Run `cupola init` first.");
                 return Ok(());
             }
+            let pid_path = config
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("cupola.pid");
+            let pid_file_manager = PidFileManager::new(pid_path);
+            check_daemon_not_running(&pid_file_manager)?;
             let db = SqliteConnection::open(&db_path)?;
             let issue_repo = SqliteIssueRepository::new(db);
             let worktree = GitWorktreeManager::new(".");
             let uc = CleanupUseCase::new(issue_repo, worktree);
-            println!("⚠️  daemon が動作中の場合は停止してから cleanup を実行してください");
             let result = uc.execute().await?;
             if result.cleaned.is_empty() {
                 println!("対象の Cancelled Issue が見つかりませんでした");
@@ -754,6 +759,21 @@ fn check_and_clean_pid_file(pid_file_manager: &PidFileManager) -> Result<()> {
     }
 }
 
+/// Returns an error if a daemon process is currently running according to the PID file.
+///
+/// Cleanup must not proceed while the daemon is active to avoid data corruption.
+fn check_daemon_not_running(
+    pid_mgr: &impl crate::application::port::pid_file::PidFilePort,
+) -> Result<()> {
+    match pid_mgr.read_pid() {
+        Ok(Some(pid)) if pid_mgr.is_process_alive(pid) => Err(anyhow::anyhow!(
+            "cupola is running (pid={pid}). Run `cupola stop` first."
+        )),
+        Ok(_) => Ok(()),
+        Err(e) => Err(anyhow::anyhow!(e).context("failed to read PID file")),
+    }
+}
+
 /// Deletes the PID file at `pid_path` as a best-effort fallback, then returns `result`
 /// unchanged. Deletion errors are silently ignored so they never mask the original outcome.
 fn apply_pid_cleanup(
@@ -785,6 +805,7 @@ mod tests {
         pid: Option<u32>,
         alive_pids: HashSet<u32>,
         deleted: std::sync::Mutex<bool>,
+        read_pid_error: Option<String>,
     }
 
     impl MockPidFilePort {
@@ -793,6 +814,7 @@ mod tests {
                 pid: None,
                 alive_pids: HashSet::new(),
                 deleted: std::sync::Mutex::new(false),
+                read_pid_error: None,
             }
         }
 
@@ -803,6 +825,11 @@ mod tests {
 
         fn with_alive_pid(mut self, pid: u32) -> Self {
             self.alive_pids.insert(pid);
+            self
+        }
+
+        fn with_read_error(mut self, msg: impl Into<String>) -> Self {
+            self.read_pid_error = Some(msg.into());
             self
         }
 
@@ -817,6 +844,9 @@ mod tests {
         }
 
         fn read_pid(&self) -> Result<Option<u32>, PidFileError> {
+            if let Some(ref msg) = self.read_pid_error {
+                return Err(PidFileError::Read(msg.clone()));
+            }
             Ok(self.pid)
         }
 
@@ -1390,6 +1420,50 @@ mod tests {
         assert!(
             output.contains("#55"),
             "should contain issue number; output: {output}"
+        );
+    }
+
+    // --- check_daemon_not_running tests ---
+
+    #[test]
+    fn cleanup_aborts_when_daemon_is_running() {
+        let pid_mgr = MockPidFilePort::new().with_pid(1234).with_alive_pid(1234);
+        let result = super::check_daemon_not_running(&pid_mgr);
+        assert!(result.is_err(), "should error when daemon is alive");
+        let err_msg = result.unwrap_err().to_string();
+        assert_eq!(
+            err_msg, "cupola is running (pid=1234). Run `cupola stop` first.",
+            "error message should match expected format"
+        );
+    }
+
+    #[test]
+    fn cleanup_aborts_when_pid_file_unreadable() {
+        let pid_mgr = MockPidFilePort::new().with_read_error("permission denied");
+        let result = super::check_daemon_not_running(&pid_mgr);
+        assert!(result.is_err(), "should error when PID file cannot be read");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("failed to read PID file"),
+            "error should mention PID file read failure; got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn cleanup_proceeds_when_no_pid_file() {
+        let pid_mgr = MockPidFilePort::new();
+        let result = super::check_daemon_not_running(&pid_mgr);
+        assert!(result.is_ok(), "should succeed when no PID file exists");
+    }
+
+    #[test]
+    fn cleanup_proceeds_when_pid_file_stale() {
+        // PID file exists but process is not alive (stale)
+        let pid_mgr = MockPidFilePort::new().with_pid(5678);
+        let result = super::check_daemon_not_running(&pid_mgr);
+        assert!(
+            result.is_ok(),
+            "should succeed when PID file is stale (process not alive)"
         );
     }
 }
