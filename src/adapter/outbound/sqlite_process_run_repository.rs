@@ -833,7 +833,7 @@ mod tests {
         let issue_id = issue_repo.save(&new_issue(20)).await.expect("save issue");
 
         // run1: pr_number = NULL (running state, no PR yet)
-        let id1 = repo
+        let _id1 = repo
             .save(&new_run(issue_id, ProcessRunType::Design))
             .await
             .expect("r1");
