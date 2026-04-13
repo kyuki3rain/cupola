@@ -553,10 +553,12 @@ where
 
     // For fixing phases: fetch + merge, write review threads
     let pr_number_opt = get_pr_number_for_type(process_repo, issue.id, type_).await?;
+    let mut has_merge_conflict = false;
     if matches!(type_, ProcessRunType::DesignFix | ProcessRunType::ImplFix) {
         // Merge latest default branch
         if let Err(e) = worktree.merge(wt_path, &format!("origin/{}", config.default_branch)) {
             tracing::warn!(error = %e, "merge failed before fixing spawn, proceeding anyway");
+            has_merge_conflict = true;
         }
 
         // Write review threads
@@ -578,7 +580,7 @@ where
         pr_number_opt,
         &issue.feature_name,
         causes,
-        false, // has_merge_conflict: TODO detect from ProcessRun
+        has_merge_conflict,
     )?;
 
     let schema = match session_config.output_schema {
