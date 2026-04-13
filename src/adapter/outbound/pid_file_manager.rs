@@ -39,8 +39,8 @@ impl PidFilePort for PidFileManager {
         }
         let content = std::fs::read_to_string(&self.pid_file_path)
             .map_err(|e| PidFileError::Read(e.to_string()))?;
-        let pid = content
-            .trim()
+        let pid_str = content.lines().next().unwrap_or("").trim();
+        let pid = pid_str
             .parse::<u32>()
             .map_err(|e| PidFileError::InvalidContent(e.to_string()))?;
         // PID 0 signals the process group; PIDs > i32::MAX wrap to negative values
@@ -247,6 +247,20 @@ mod tests {
             matches!(err, PidFileError::AlreadyExists),
             "expected AlreadyExists, got {err:?}"
         );
+    }
+
+    #[test]
+    fn read_pid_succeeds_on_two_line_pid_file() {
+        // Regression test: read_pid() must parse only the first line of a 2-line PID file
+        // written by write_pid_with_mode(). Previously, content.trim().parse() would fail
+        // because "1234\nforeground" is not a valid u32.
+        let tmp = NamedTempFile::new().expect("temp file");
+        std::fs::write(tmp.path(), "12345\nforeground\n").expect("write");
+        let mgr = manager_from_tempfile(&tmp);
+        let result = mgr
+            .read_pid()
+            .expect("read_pid should succeed on 2-line file");
+        assert_eq!(result, Some(12345));
     }
 
     #[test]

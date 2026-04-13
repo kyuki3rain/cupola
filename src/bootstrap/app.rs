@@ -365,6 +365,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 return Ok(());
             }
             let db = SqliteConnection::open(db_path)?;
+            db.init_schema()?;
             let repo = SqliteIssueRepository::new(db.clone());
             let process_run_repo = SqliteProcessRunRepository::new(db);
 
@@ -732,7 +733,13 @@ async fn handle_status<W: std::io::Write>(
         writeln!(out, "No active issues.")?;
     } else {
         let running_records = process_run_repo.find_all_running().await?;
-        let running_count = running_records.len();
+        // Count only alive Claude sessions: exclude Init (worktree-creation tasks) and
+        // rows with no pid or a stale pid (process no longer alive).
+        let running_count = running_records
+            .iter()
+            .filter(|r| r.type_ != crate::domain::process_run::ProcessRunType::Init)
+            .filter(|r| r.pid.is_some_and(|pid| pid_mgr.is_process_alive(pid)))
+            .count();
 
         match max_sessions {
             Some(max) => writeln!(out, "Claude sessions: {running_count}/{max}")?,
@@ -852,6 +859,11 @@ mod tests {
 
         fn with_read_error(mut self, msg: impl Into<String>) -> Self {
             self.read_pid_error = Some(msg.into());
+            self
+        }
+
+        fn with_alive_pids(mut self, pids: impl IntoIterator<Item = u32>) -> Self {
+            self.alive_pids.extend(pids);
             self
         }
 
@@ -982,6 +994,8 @@ mod tests {
             &self,
         ) -> anyhow::Result<Vec<crate::domain::process_run::ProcessRun>> {
             use crate::domain::process_run::{ProcessRun, ProcessRunState, ProcessRunType};
+            // Assign sequential PIDs starting at 1000 so callers can configure
+            // them as alive in MockPidFilePort::with_alive_pids(1000..1000+count).
             let runs = (0..self.running_count)
                 .map(|i| ProcessRun {
                     id: i as i64,
@@ -989,7 +1003,7 @@ mod tests {
                     type_: ProcessRunType::Design,
                     index: 0,
                     state: ProcessRunState::Running,
-                    pid: None,
+                    pid: Some(1000 + i as u32),
                     pr_number: None,
                     causes: Vec::new(),
                     error_message: None,
@@ -1819,7 +1833,8 @@ mod tests {
         repo.save(&make_issue(77, State::DesignRunning, None))
             .await
             .expect("save");
-        let pid_mgr = MockPidFilePort::new();
+        // PIDs 1000..1002 match MockProcessRunRepository::with_running_count(2)
+        let pid_mgr = MockPidFilePort::new().with_alive_pids(1000..1002);
 
         let mut out = Vec::new();
         super::handle_status(
@@ -1844,7 +1859,8 @@ mod tests {
         repo.save(&make_issue(78, State::DesignRunning, None))
             .await
             .expect("save");
-        let pid_mgr = MockPidFilePort::new();
+        // PIDs 1000..1003 match MockProcessRunRepository::with_running_count(3)
+        let pid_mgr = MockPidFilePort::new().with_alive_pids(1000..1003);
 
         let mut out = Vec::new();
         super::handle_status(
@@ -1873,7 +1889,8 @@ mod tests {
         repo.save(&make_issue(79, State::DesignRunning, None))
             .await
             .expect("save");
-        let pid_mgr = MockPidFilePort::new();
+        // PIDs 1000..1004 match MockProcessRunRepository::with_running_count(4)
+        let pid_mgr = MockPidFilePort::new().with_alive_pids(1000..1004);
 
         let mut out = Vec::new();
         super::handle_status(
