@@ -32,10 +32,11 @@
 - **Context**: 非対称性を確認するため CLI クリーンアップのコードを調査
 - **Sources Consulted**: `src/application/cleanup_use_case.rs` lines 70–94
 - **Findings**:
-  - ワークツリー削除後に `cupola/{n}/main` と `cupola/{n}/design` の両ブランチを削除する
+  - ワークツリー削除後に `cupola/{n}/main` と `cupola/{n}/design` の両ブランチを削除する（`n` は `github_issue_number`、すなわち整数値）
   - ブランチ削除はベストエフォートで、失敗時は `warn` ログを出して継続する
   - `worktree_removed` フラグで DB クリーンアップの条件を制御している
-- **Implications**: ポーリング側も同じパターンを踏襲する必要がある
+  - **注意**: ブランチ作成側（`polling/execute.rs:410-416`）は `feature_name`（例: `issue-190`）を使って `cupola/{feature_name}/main|design` を生成しており、整数値の `n` と異なる。今回の実装では作成側と一致する `feature_name` ベースの命名規則を採用する
+- **Implications**: ポーリング側のブランチ削除は、ブランチ作成側の命名規則に合わせて `feature_name` ベースで実装する必要がある
 
 ### delete_branch の冪等性
 

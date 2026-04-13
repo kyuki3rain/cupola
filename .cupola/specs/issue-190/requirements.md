@@ -1,6 +1,9 @@
 # Requirements Document
 
 ## Project Description (Input)
+
+Polling-triggered `CleanupWorktree` should delete the same issue branches as the CLI cleanup flow so completed issues are fully cleaned up consistently.
+
 ## Summary
 
 The polling `CleanupWorktree` effect (src/application/polling/execute.rs ~lines 211-228) removes the worktree directory but DOES NOT delete the `cupola/{issue}/main` and `cupola/{issue}/design` branches. However, the CLI cleanup command (`src/application/cleanup_use_case.rs` ~lines 81-94) DOES delete both branches. This creates an asymmetry in cleanup behavior between polling-triggered completion and explicit CLI cleanup.
@@ -10,8 +13,8 @@ The polling `CleanupWorktree` effect (src/application/polling/execute.rs ~lines 
 | Behavior | Polling CleanupWorktree | CLI cleanup |
 |----------|------------------------|------------|
 | Removes worktree directory | ✓ Yes | ✓ Yes |
-| Deletes `cupola/{n}/main` branch | ✗ No | ✓ Yes (both local & remote) |
-| Deletes `cupola/{n}/design` branch | ✗ No | ✓ Yes (both local & remote) |
+| Deletes `cupola/{feature_name}/main` branch | ✗ No | ✓ Yes (both local & remote) |
+| Deletes `cupola/{feature_name}/design` branch | ✗ No | ✓ Yes (both local & remote) |
 | Clears `worktree_path` metadata | ✓ Yes | ✓ Yes (if worktree removed) |
 
 ## Design Spec Evidence
@@ -62,8 +65,8 @@ The polling `CleanupWorktree` effect should also delete both branches on success
 
 ## Test Plan
 
-- [ ] Unit test: Verify `CleanupWorktree` calls `worktree.delete_branch()` for both `cupola/{n}/main` and `cupola/{n}/design`
-- [ ] Unit test: Verify both branches are deleted even if worktree removal fails (best-effort)
+- [ ] Unit test: Verify `CleanupWorktree` calls `worktree.delete_branch()` for both `cupola/{feature_name}/main` and `cupola/{feature_name}/design` after successful worktree removal
+- [ ] Unit test: Verify branch deletion is skipped when worktree removal fails (effect retries next cycle)
 - [ ] Integration test: Polling completion on a merged PR also removes local branches
 - [ ] Regression test: Ensure `Cancelled` still preserves branches (no change to Cancelled behavior)
 - [ ] E2E test: Full issue lifecycle including Completed branch cleanup
@@ -88,7 +91,7 @@ Modify `src/application/polling/execute.rs` `Effect::CleanupWorktree` block (lin
 
 #### Acceptance Criteria
 
-1.1. When `Effect::CleanupWorktree` が実行されワークツリーパスが存在する場合, the polling executor shall `cupola/{n}/main` および `cupola/{n}/design` ブランチの削除を試みる
+1.1. When `Effect::CleanupWorktree` が実行されワークツリーパスが存在しワークツリー削除に成功した場合, the polling executor shall `cupola/{feature_name}/main` および `cupola/{feature_name}/design` ブランチの削除を試みる（`feature_name` は `Issue.feature_name` フィールドの値）
 
 1.2. When `delete_branch` が成功した場合, the polling executor shall 削除されたブランチ名とイシュー番号をログに記録する
 
@@ -114,7 +117,7 @@ Modify `src/application/polling/execute.rs` `Effect::CleanupWorktree` block (lin
 
 #### Acceptance Criteria
 
-3.1. The test suite shall `CleanupWorktree` エフェクト実行時に `delete_branch` が `cupola/{n}/main` と `cupola/{n}/design` の両方に対して呼び出されることを検証する
+3.1. The test suite shall `CleanupWorktree` エフェクト実行時にワークツリー削除成功後に `delete_branch` が `cupola/{feature_name}/main` と `cupola/{feature_name}/design` の両方に対して呼び出されることを検証する
 
 3.2. The test suite shall `delete_branch` がエラーを返してもエフェクト全体が失敗しないことを検証する
 

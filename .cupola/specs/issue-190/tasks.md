@@ -3,7 +3,7 @@
 - [ ] 1. CleanupWorktree エフェクトにブランチ削除を追加する
 - [ ] 1.1 ポーリングエグゼキュータの CleanupWorktree ブロックにブランチ削除ロジックを追加する
   - `src/application/polling/execute.rs` の `Effect::CleanupWorktree` ブロックを修正する
-  - ワークツリー削除後に `format!("cupola/{n}/main")` と `format!("cupola/{n}/design")` のブランチ名を生成する
+  - ワークツリー削除後に `format!("cupola/{}/main", issue.feature_name)` と `format!("cupola/{}/design", issue.feature_name)` のブランチ名を生成する
   - 各ブランチに対して `worktree.delete_branch(branch)` をベストエフォートで呼び出す
   - 成功時は `tracing::info!`、失敗時は `tracing::warn!` でログを記録する
   - `worktree_path` のメタデータクリアはブランチ削除の結果に関わらず継続する
@@ -12,7 +12,7 @@
 - [ ] 2. CleanupWorktree のブランチ削除動作をユニットテストで検証する
 - [ ] 2.1 (P) 正常系テスト: 両ブランチへの delete_branch 呼び出しを検証する
   - `MockGitWorktree` に `delete_branch` の呼び出し記録機能を追加する（既存モックを活用）
-  - `CleanupWorktree` エフェクト実行後に `cupola/{n}/main` と `cupola/{n}/design` の両方が削除されたことを確認する
+  - `CleanupWorktree` エフェクト実行後に `cupola/{feature_name}/main` と `cupola/{feature_name}/design` の両方が削除されたことを確認する
   - _Requirements: 3.1_
 
 - [ ] 2.2 (P) エラー系テスト: delete_branch の失敗がエフェクト全体に影響しないことを検証する

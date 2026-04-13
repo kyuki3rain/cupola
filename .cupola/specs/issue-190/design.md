@@ -76,9 +76,9 @@ sequenceDiagram
     EX->>EX: worktree_path 存在確認
     alt worktree_path あり
         EX->>GW: remove(path)
-        EX->>GW: delete_branch("cupola/{n}/main")
+        EX->>GW: delete_branch("cupola/{feature_name}/main")
         GW-->>EX: Ok(()) or Err (warn & continue)
-        EX->>GW: delete_branch("cupola/{n}/design")
+        EX->>GW: delete_branch("cupola/{feature_name}/design")
         GW-->>EX: Ok(()) or Err (warn & continue)
         EX->>IR: update worktree_path = None
     else worktree_path なし
@@ -123,7 +123,7 @@ sequenceDiagram
 **Responsibilities & Constraints**
 - `issue.worktree_path` が `Some(path)` の場合のみブランチ削除を実行する
 - ブランチ削除の成否に関わらず `worktree_path` のメタデータクリアを継続する
-- ブランチ名は `format!("cupola/{n}/main")` および `format!("cupola/{n}/design")` で生成する
+- ブランチ名は `format!("cupola/{feature_name}/main")` および `format!("cupola/{feature_name}/design")` で生成する（`feature_name` は `issue.feature_name` フィールドの値、例: `issue-190`）
 - ブランチ削除失敗時は `tracing::warn!` でログ記録して継続する（ベストエフォート）
 
 **Dependencies**
