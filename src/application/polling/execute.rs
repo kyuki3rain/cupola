@@ -228,6 +228,32 @@ where
                     worktree.remove(path)?;
                 }
 
+                // Delete branches (best-effort, idempotent)
+                let feature_name = &issue.feature_name;
+                let n = issue.github_issue_number;
+                for branch in [
+                    format!("cupola/{feature_name}/main"),
+                    format!("cupola/{feature_name}/design"),
+                ] {
+                    match worktree.delete_branch(&branch) {
+                        Ok(()) => {
+                            tracing::info!(
+                                issue_number = n,
+                                branch = %branch,
+                                "branch deleted"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                issue_number = n,
+                                branch = %branch,
+                                error = %e,
+                                "failed to delete branch, skipping"
+                            );
+                        }
+                    }
+                }
+
                 // Clear worktree_path in DB
                 let updates = MetadataUpdates {
                     worktree_path: Some(None),
@@ -1298,6 +1324,310 @@ mod tests {
                 .unwrap_or("")
                 .contains("comment API error"),
             "error message should be propagated"
+        );
+    }
+
+    // ── Mocks for CleanupWorktree tests ──────────────────────────────────────
+
+    #[derive(Clone)]
+    struct MockGitWorktreeForCleanup {
+        deleted_branches: Arc<Mutex<Vec<String>>>,
+        fail_delete_branch: bool,
+    }
+
+    impl MockGitWorktreeForCleanup {
+        fn new() -> (Self, Arc<Mutex<Vec<String>>>) {
+            let deleted = Arc::new(Mutex::new(vec![]));
+            (
+                Self {
+                    deleted_branches: deleted.clone(),
+                    fail_delete_branch: false,
+                },
+                deleted,
+            )
+        }
+
+        fn with_failing_delete(mut self) -> Self {
+            self.fail_delete_branch = true;
+            self
+        }
+    }
+
+    impl GitWorktree for MockGitWorktreeForCleanup {
+        fn fetch(&self) -> Result<()> {
+            Ok(())
+        }
+        fn merge(&self, _: &Path, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn exists(&self, _: &Path) -> bool {
+            false
+        }
+        fn create(&self, _: &Path, _: &str, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn remove(&self, _: &Path) -> Result<()> {
+            Ok(())
+        }
+        fn create_branch(&self, _: &Path, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn checkout(&self, _: &Path, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn pull(&self, _: &Path) -> Result<()> {
+            Ok(())
+        }
+        fn push(&self, _: &Path, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn delete_branch(&self, branch: &str) -> Result<()> {
+            if self.fail_delete_branch {
+                return Err(anyhow::anyhow!("delete_branch failed"));
+            }
+            self.deleted_branches
+                .lock()
+                .expect("lock")
+                .push(branch.to_string());
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct MockIssueRepoForCleanup {
+        metadata_updates: Arc<Mutex<Vec<crate::domain::metadata_update::MetadataUpdates>>>,
+    }
+
+    impl MockIssueRepoForCleanup {
+        fn new() -> (
+            Self,
+            Arc<Mutex<Vec<crate::domain::metadata_update::MetadataUpdates>>>,
+        ) {
+            let updates = Arc::new(Mutex::new(vec![]));
+            (
+                Self {
+                    metadata_updates: updates.clone(),
+                },
+                updates,
+            )
+        }
+    }
+
+    impl crate::application::port::issue_repository::IssueRepository for MockIssueRepoForCleanup {
+        async fn find_by_id(&self, _: i64) -> Result<Option<Issue>> {
+            unimplemented!()
+        }
+        async fn find_by_issue_number(&self, _: u64) -> Result<Option<Issue>> {
+            unimplemented!()
+        }
+        async fn find_active(&self) -> Result<Vec<Issue>> {
+            unimplemented!()
+        }
+        async fn find_all(&self) -> Result<Vec<Issue>> {
+            unimplemented!()
+        }
+        async fn save(&self, _: &Issue) -> Result<i64> {
+            unimplemented!()
+        }
+        async fn update_state(&self, _: i64, _: crate::domain::state::State) -> Result<()> {
+            unimplemented!()
+        }
+        async fn update(&self, _: &Issue) -> Result<()> {
+            unimplemented!()
+        }
+        async fn update_state_and_metadata(
+            &self,
+            _: i64,
+            updates: &crate::domain::metadata_update::MetadataUpdates,
+        ) -> Result<()> {
+            self.metadata_updates
+                .lock()
+                .expect("lock")
+                .push(updates.clone());
+            Ok(())
+        }
+        async fn find_by_state(&self, _: crate::domain::state::State) -> Result<Vec<Issue>> {
+            unimplemented!()
+        }
+    }
+
+    struct MockClaudeRunner;
+
+    impl crate::application::port::claude_code_runner::ClaudeCodeRunner for MockClaudeRunner {
+        fn spawn(
+            &self,
+            _: &str,
+            _: &Path,
+            _: Option<&str>,
+            _: &str,
+        ) -> Result<std::process::Child> {
+            unimplemented!()
+        }
+    }
+
+    fn make_completed_issue_with_worktree(feature_name: &str, wt_path: &str) -> Issue {
+        Issue {
+            id: 1,
+            github_issue_number: 42,
+            state: crate::domain::state::State::Completed,
+            feature_name: feature_name.to_string(),
+            weight: crate::domain::task_weight::TaskWeight::Medium,
+            worktree_path: Some(wt_path.to_string()),
+            ci_fix_count: 0,
+            close_finished: false,
+            consecutive_failures_epoch: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    /// T-3.CW.1: CleanupWorktree deletes both branches after successful worktree removal
+    #[tokio::test]
+    async fn cleanup_worktree_deletes_both_branches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wt_path = tmp.path().to_string_lossy().to_string();
+        let mut issue = make_completed_issue_with_worktree("issue-190", &wt_path);
+
+        let (worktree, deleted) = MockGitWorktreeForCleanup::new();
+        let (issue_repo, metadata_updates) = MockIssueRepoForCleanup::new();
+        let proc_repo = MockProcRepo::new();
+        let github = MockGitHubForInit::new();
+        let file_gen = MockFileGenerator::with_log(Arc::new(Mutex::new(vec![])));
+        let mut session_mgr = crate::application::session_manager::SessionManager::new();
+        let mut init_mgr = crate::application::init_task_manager::InitTaskManager::new();
+        let config =
+            Config::default_with_repo("owner".to_string(), "repo".to_string(), "main".to_string());
+
+        let effects = [Effect::CleanupWorktree];
+        super::execute_effects(
+            &github,
+            &issue_repo,
+            &proc_repo,
+            &MockClaudeRunner,
+            &worktree,
+            &file_gen,
+            &mut session_mgr,
+            &mut init_mgr,
+            &config,
+            &mut issue,
+            &effects,
+        )
+        .await
+        .expect("execute_effects should succeed");
+
+        let branches = deleted.lock().expect("lock");
+        assert!(
+            branches.contains(&"cupola/issue-190/main".to_string()),
+            "should delete main branch"
+        );
+        assert!(
+            branches.contains(&"cupola/issue-190/design".to_string()),
+            "should delete design branch"
+        );
+
+        let updates = metadata_updates.lock().expect("lock");
+        assert_eq!(updates.len(), 1, "should update metadata once");
+        assert!(
+            updates[0].worktree_path == Some(None),
+            "should clear worktree_path"
+        );
+        assert!(issue.worktree_path.is_none(), "issue.worktree_path cleared");
+    }
+
+    /// T-3.CW.2: CleanupWorktree continues and clears metadata even when delete_branch fails
+    #[tokio::test]
+    async fn cleanup_worktree_continues_on_delete_branch_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wt_path = tmp.path().to_string_lossy().to_string();
+        let mut issue = make_completed_issue_with_worktree("issue-190", &wt_path);
+
+        let (worktree, _deleted) = MockGitWorktreeForCleanup::new();
+        let worktree = worktree.with_failing_delete();
+        let (issue_repo, metadata_updates) = MockIssueRepoForCleanup::new();
+        let proc_repo = MockProcRepo::new();
+        let github = MockGitHubForInit::new();
+        let file_gen = MockFileGenerator::with_log(Arc::new(Mutex::new(vec![])));
+        let mut session_mgr = crate::application::session_manager::SessionManager::new();
+        let mut init_mgr = crate::application::init_task_manager::InitTaskManager::new();
+        let config =
+            Config::default_with_repo("owner".to_string(), "repo".to_string(), "main".to_string());
+
+        let effects = [Effect::CleanupWorktree];
+        let result = super::execute_effects(
+            &github,
+            &issue_repo,
+            &proc_repo,
+            &MockClaudeRunner,
+            &worktree,
+            &file_gen,
+            &mut session_mgr,
+            &mut init_mgr,
+            &config,
+            &mut issue,
+            &effects,
+        )
+        .await;
+
+        assert!(result.is_ok(), "should not fail when delete_branch fails");
+        let updates = metadata_updates.lock().expect("lock");
+        assert_eq!(
+            updates.len(),
+            1,
+            "should still clear metadata despite branch deletion failure"
+        );
+    }
+
+    /// T-3.CW.3: CleanupWorktree skips branch deletion when worktree_path is None
+    #[tokio::test]
+    async fn cleanup_worktree_skips_branch_deletion_when_no_worktree_path() {
+        let mut issue = Issue {
+            id: 1,
+            github_issue_number: 42,
+            state: crate::domain::state::State::Completed,
+            feature_name: "issue-190".to_string(),
+            weight: crate::domain::task_weight::TaskWeight::Medium,
+            worktree_path: None,
+            ci_fix_count: 0,
+            close_finished: false,
+            consecutive_failures_epoch: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let (worktree, deleted) = MockGitWorktreeForCleanup::new();
+        let (issue_repo, metadata_updates) = MockIssueRepoForCleanup::new();
+        let proc_repo = MockProcRepo::new();
+        let github = MockGitHubForInit::new();
+        let file_gen = MockFileGenerator::with_log(Arc::new(Mutex::new(vec![])));
+        let mut session_mgr = crate::application::session_manager::SessionManager::new();
+        let mut init_mgr = crate::application::init_task_manager::InitTaskManager::new();
+        let config =
+            Config::default_with_repo("owner".to_string(), "repo".to_string(), "main".to_string());
+
+        let effects = [Effect::CleanupWorktree];
+        super::execute_effects(
+            &github,
+            &issue_repo,
+            &proc_repo,
+            &MockClaudeRunner,
+            &worktree,
+            &file_gen,
+            &mut session_mgr,
+            &mut init_mgr,
+            &config,
+            &mut issue,
+            &effects,
+        )
+        .await
+        .expect("execute_effects should succeed");
+
+        assert!(
+            deleted.lock().expect("lock").is_empty(),
+            "should not call delete_branch when worktree_path is None"
+        );
+        assert!(
+            metadata_updates.lock().expect("lock").is_empty(),
+            "should not update metadata when worktree_path is None"
         );
     }
 }
