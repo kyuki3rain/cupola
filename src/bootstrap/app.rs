@@ -965,6 +965,14 @@ mod tests {
             Ok(None)
         }
 
+        async fn find_latest_with_pr_number(
+            &self,
+            _issue_id: i64,
+            _type_: crate::domain::process_run::ProcessRunType,
+        ) -> anyhow::Result<Option<crate::domain::process_run::ProcessRun>> {
+            Ok(None)
+        }
+
         async fn find_by_issue(
             &self,
             _issue_id: i64,
