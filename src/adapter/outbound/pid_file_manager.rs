@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use nix::sys::signal::kill;
 use nix::unistd::Pid;
 
-use crate::application::port::pid_file::{PidFileError, PidFilePort};
+use crate::application::port::pid_file::{PidFileError, PidFilePort, ProcessMode};
 
 pub struct PidFileManager {
     pid_file_path: PathBuf,
@@ -68,6 +68,60 @@ impl PidFilePort for PidFileManager {
             Err(nix::errno::Errno::EPERM) => true, // process exists but we lack permission
             Err(_) => false,
         }
+    }
+
+    fn write_pid_with_mode(&self, pid: u32, mode: ProcessMode) -> Result<(), PidFileError> {
+        let mode_str = match mode {
+            ProcessMode::Foreground => "foreground",
+            ProcessMode::Daemon => "daemon",
+        };
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&self.pid_file_path)
+            .map_err(|e| {
+                if e.kind() == ErrorKind::AlreadyExists {
+                    PidFileError::AlreadyExists
+                } else {
+                    PidFileError::Write(e.to_string())
+                }
+            })?;
+        write!(file, "{pid}\n{mode_str}\n").map_err(|e| PidFileError::Write(e.to_string()))
+    }
+
+    fn read_pid_and_mode(&self) -> Result<Option<(u32, Option<ProcessMode>)>, PidFileError> {
+        if !self.pid_file_path.exists() {
+            return Ok(None);
+        }
+        let content = std::fs::read_to_string(&self.pid_file_path)
+            .map_err(|e| PidFileError::Read(e.to_string()))?;
+        let mut lines = content.lines();
+        let pid_str = lines.next().unwrap_or("");
+        let pid = pid_str
+            .parse::<u32>()
+            .map_err(|e| PidFileError::InvalidContent(e.to_string()))?;
+        if pid == 0 || pid > i32::MAX as u32 {
+            return Err(PidFileError::InvalidContent(format!(
+                "PID {pid} is out of valid range (1..={})",
+                i32::MAX
+            )));
+        }
+        let mode = match lines.next() {
+            None => {
+                tracing::info!("PID file has no mode line (legacy format), treating as unknown");
+                None
+            }
+            Some("foreground") => Some(ProcessMode::Foreground),
+            Some("daemon") => Some(ProcessMode::Daemon),
+            Some(other) => {
+                tracing::warn!(
+                    mode = other,
+                    "PID file contains unknown mode string, treating as unknown"
+                );
+                None
+            }
+        };
+        Ok(Some((pid, mode)))
     }
 }
 
@@ -193,6 +247,103 @@ mod tests {
             matches!(err, PidFileError::AlreadyExists),
             "expected AlreadyExists, got {err:?}"
         );
+    }
+
+    #[test]
+    fn test_write_and_read_pid_with_mode_foreground() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("foreground.pid");
+        let mgr = PidFileManager::new(path);
+
+        mgr.write_pid_with_mode(12345, ProcessMode::Foreground)
+            .expect("write");
+        let result = mgr.read_pid_and_mode().expect("read");
+        assert_eq!(result, Some((12345, Some(ProcessMode::Foreground))));
+    }
+
+    #[test]
+    fn test_write_and_read_pid_with_mode_daemon() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("daemon.pid");
+        let mgr = PidFileManager::new(path);
+
+        mgr.write_pid_with_mode(99999, ProcessMode::Daemon)
+            .expect("write");
+        let result = mgr.read_pid_and_mode().expect("read");
+        assert_eq!(result, Some((99999, Some(ProcessMode::Daemon))));
+    }
+
+    #[test]
+    fn test_write_pid_with_mode_already_exists() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("double_mode.pid");
+        let mgr = PidFileManager::new(path);
+
+        mgr.write_pid_with_mode(111, ProcessMode::Foreground)
+            .expect("first write");
+        let err = mgr
+            .write_pid_with_mode(222, ProcessMode::Daemon)
+            .expect_err("second write should fail");
+        assert!(
+            matches!(err, PidFileError::AlreadyExists),
+            "expected AlreadyExists, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_read_pid_and_mode_legacy_single_line() {
+        let tmp = NamedTempFile::new().expect("temp file");
+        std::fs::write(tmp.path(), "54321\n").expect("write");
+        let mgr = manager_from_tempfile(&tmp);
+        let result = mgr.read_pid_and_mode().expect("read");
+        assert_eq!(result, Some((54321, None)));
+    }
+
+    #[test]
+    fn test_read_pid_and_mode_returns_none_when_absent() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("nonexistent_mode.pid");
+        let mgr = PidFileManager::new(path);
+        let result = mgr.read_pid_and_mode().expect("read");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_read_pid_and_mode_invalid_pid_zero() {
+        let tmp = NamedTempFile::new().expect("temp file");
+        std::fs::write(tmp.path(), "0\nforeground\n").expect("write");
+        let mgr = manager_from_tempfile(&tmp);
+        assert!(matches!(
+            mgr.read_pid_and_mode(),
+            Err(PidFileError::InvalidContent(_))
+        ));
+    }
+
+    #[test]
+    fn test_read_pid_and_mode_invalid_pid_overflow() {
+        let tmp = NamedTempFile::new().expect("temp file");
+        // i32::MAX + 1 = 2147483648
+        std::fs::write(tmp.path(), "2147483648\ndaemon\n").expect("write");
+        let mgr = manager_from_tempfile(&tmp);
+        assert!(matches!(
+            mgr.read_pid_and_mode(),
+            Err(PidFileError::InvalidContent(_))
+        ));
+    }
+
+    #[test]
+    fn test_write_pid_with_mode_succeeds_after_delete() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("retry_mode.pid");
+        let mgr = PidFileManager::new(path);
+
+        mgr.write_pid_with_mode(333, ProcessMode::Foreground)
+            .expect("first write");
+        mgr.delete_pid().expect("delete");
+        mgr.write_pid_with_mode(444, ProcessMode::Daemon)
+            .expect("write after delete");
+        let result = mgr.read_pid_and_mode().expect("read");
+        assert_eq!(result, Some((444, Some(ProcessMode::Daemon))));
     }
 
     #[test]
