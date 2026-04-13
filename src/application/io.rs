@@ -4,7 +4,6 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::application::port::github_client::{GitHubIssueDetail, ReviewThread};
-use crate::domain::author_association::TrustedAssociations;
 
 // === Input directory management ===
 
@@ -57,7 +56,7 @@ pub fn write_issue_input(worktree_path: &Path, detail: &GitHubIssueDetail) -> Re
 pub fn write_review_threads_input(
     worktree_path: &Path,
     threads: &[ReviewThread],
-    trusted_associations: &TrustedAssociations,
+    config: &crate::domain::config::Config,
 ) -> Result<()> {
     let inputs_dir = worktree_path.join(".cupola/inputs");
     std::fs::create_dir_all(&inputs_dir)
@@ -67,18 +66,18 @@ pub fn write_review_threads_input(
 
     let entries: Vec<ReviewThreadEntry> = threads
         .iter()
-        .map(|t| {
+        .filter_map(|t| {
             let filtered_comments: Vec<CommentEntry> = t
                 .comments
                 .iter()
                 .filter(|c| {
-                    if trusted_associations.is_trusted(&c.author_association) {
+                    if config.is_comment_trusted(&c.author_association, &c.author) {
                         true
                     } else {
                         tracing::info!(
                             author = c.author,
                             association = c.author_association.as_str(),
-                            "excluding review comment: author does not have trusted association"
+                            "excluding review comment: author is not trusted"
                         );
                         excluded_count += 1;
                         false
@@ -90,19 +89,24 @@ pub fn write_review_threads_input(
                 })
                 .collect();
 
-            ReviewThreadEntry {
+            // Skip threads with no trusted comments entirely.
+            if filtered_comments.is_empty() {
+                return None;
+            }
+
+            Some(ReviewThreadEntry {
                 thread_id: t.id.clone(),
                 path: t.path.clone(),
                 line: t.line,
                 comments: filtered_comments,
-            }
+            })
         })
         .collect();
 
     if excluded_count > 0 {
         tracing::info!(
             excluded_count,
-            "excluded review comments due to untrusted author association"
+            "excluded review comments from untrusted authors"
         );
     }
 
@@ -312,9 +316,17 @@ mod tests {
         assert!(content.contains("Please implement X."));
     }
 
+    fn test_config() -> crate::domain::config::Config {
+        crate::domain::config::Config::default_with_repo(
+            "owner".to_string(),
+            "repo".to_string(),
+            "main".to_string(),
+        )
+    }
+
     #[test]
     fn write_review_threads_creates_json() {
-        use crate::domain::author_association::{AuthorAssociation, TrustedAssociations};
+        use crate::domain::author_association::AuthorAssociation;
 
         let tmp = TempDir::new().expect("tempdir");
         let threads = vec![ReviewThread {
@@ -328,8 +340,7 @@ mod tests {
             }],
         }];
 
-        write_review_threads_input(tmp.path(), &threads, &TrustedAssociations::All)
-            .expect("should write");
+        write_review_threads_input(tmp.path(), &threads, &test_config()).expect("should write");
 
         let content =
             std::fs::read_to_string(tmp.path().join(".cupola/inputs/review_threads.json"))
@@ -343,7 +354,10 @@ mod tests {
         use crate::domain::author_association::{AuthorAssociation, TrustedAssociations};
 
         let tmp = TempDir::new().expect("tempdir");
-        let trusted = TrustedAssociations::Specific(vec![AuthorAssociation::Collaborator]);
+        let mut config = test_config();
+        config.trusted_associations =
+            TrustedAssociations::Specific(vec![AuthorAssociation::Collaborator]);
+        config.trusted_reviewers = vec![];
         let threads = vec![ReviewThread {
             id: "PRRT_abc".to_string(),
             path: "src/main.rs".to_string(),
@@ -362,7 +376,7 @@ mod tests {
             ],
         }];
 
-        write_review_threads_input(tmp.path(), &threads, &trusted).expect("should write");
+        write_review_threads_input(tmp.path(), &threads, &config).expect("should write");
 
         let content =
             std::fs::read_to_string(tmp.path().join(".cupola/inputs/review_threads.json"))
@@ -374,6 +388,68 @@ mod tests {
         assert!(
             !content.contains("external comment"),
             "external comment should be excluded"
+        );
+    }
+
+    #[test]
+    fn write_review_threads_trusted_reviewers_bypasses_association() {
+        use crate::domain::author_association::{AuthorAssociation, TrustedAssociations};
+
+        let tmp = TempDir::new().expect("tempdir");
+        let mut config = test_config();
+        // No association trusts NONE
+        config.trusted_associations = TrustedAssociations::Specific(vec![]);
+        // But copilot is in trusted_reviewers
+        config.trusted_reviewers = vec!["copilot-pull-request-reviewer".to_string()];
+        let threads = vec![ReviewThread {
+            id: "PRRT_bot".to_string(),
+            path: "src/lib.rs".to_string(),
+            line: Some(5),
+            comments: vec![ReviewComment {
+                author: "copilot-pull-request-reviewer".to_string(),
+                body: "bot review comment".to_string(),
+                author_association: AuthorAssociation::None,
+            }],
+        }];
+
+        write_review_threads_input(tmp.path(), &threads, &config).expect("should write");
+
+        let content =
+            std::fs::read_to_string(tmp.path().join(".cupola/inputs/review_threads.json"))
+                .expect("should read");
+        assert!(
+            content.contains("bot review comment"),
+            "trusted_reviewers should bypass association check"
+        );
+    }
+
+    #[test]
+    fn write_review_threads_skips_threads_with_no_trusted_comments() {
+        use crate::domain::author_association::{AuthorAssociation, TrustedAssociations};
+
+        let tmp = TempDir::new().expect("tempdir");
+        let mut config = test_config();
+        config.trusted_associations = TrustedAssociations::Specific(vec![]);
+        config.trusted_reviewers = vec![];
+        let threads = vec![ReviewThread {
+            id: "PRRT_untrusted".to_string(),
+            path: "src/lib.rs".to_string(),
+            line: Some(1),
+            comments: vec![ReviewComment {
+                author: "random-user".to_string(),
+                body: "untrusted comment".to_string(),
+                author_association: AuthorAssociation::None,
+            }],
+        }];
+
+        write_review_threads_input(tmp.path(), &threads, &config).expect("should write");
+
+        let content =
+            std::fs::read_to_string(tmp.path().join(".cupola/inputs/review_threads.json"))
+                .expect("should read");
+        assert!(
+            !content.contains("PRRT_untrusted"),
+            "thread with only untrusted comments should be excluded entirely"
         );
     }
 

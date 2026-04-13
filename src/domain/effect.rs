@@ -17,6 +17,7 @@ pub enum Effect {
     SpawnProcess {
         type_: ProcessRunType,
         causes: Vec<FixingProblemKind>,
+        pending_run_id: Option<i64>,
     },
     CleanupWorktree,
     CloseIssue,
@@ -74,6 +75,7 @@ mod tests {
         let _ = Effect::SpawnProcess {
             type_: ProcessRunType::Design,
             causes: vec![],
+            pending_run_id: None,
         };
         let _ = Effect::CleanupWorktree;
         let _ = Effect::CloseIssue;
@@ -95,7 +97,8 @@ mod tests {
         assert_eq!(
             Effect::SpawnProcess {
                 type_: ProcessRunType::Design,
-                causes: vec![]
+                causes: vec![],
+                pending_run_id: None,
             }
             .priority(),
             5
@@ -113,6 +116,7 @@ mod tests {
             Effect::SpawnProcess {
                 type_: ProcessRunType::Design,
                 causes: vec![],
+                pending_run_id: None,
             },
             Effect::SpawnInit,
         ];
@@ -123,7 +127,8 @@ mod tests {
             effects[2],
             Effect::SpawnProcess {
                 type_: ProcessRunType::Design,
-                causes: vec![]
+                causes: vec![],
+                pending_run_id: None,
             }
         );
         assert_eq!(effects[3], Effect::CloseIssue);
@@ -145,7 +150,8 @@ mod tests {
         assert!(
             !Effect::SpawnProcess {
                 type_: ProcessRunType::Design,
-                causes: vec![]
+                causes: vec![],
+                pending_run_id: None,
             }
             .is_best_effort()
         );

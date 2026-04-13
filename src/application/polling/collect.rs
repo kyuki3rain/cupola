@@ -114,10 +114,12 @@ where
     let github_issue = observe_github_issue(github, config, n).await?;
 
     // --- design_pr ---
-    let design_pr = observe_pr_for_type(github, process_repo, id, ProcessRunType::Design).await?;
+    let design_pr =
+        observe_pr_for_type(github, process_repo, config, id, ProcessRunType::Design).await?;
 
     // --- impl_pr ---
-    let impl_pr = observe_pr_for_type(github, process_repo, id, ProcessRunType::Impl).await?;
+    let impl_pr =
+        observe_pr_for_type(github, process_repo, config, id, ProcessRunType::Impl).await?;
 
     // --- ProcessesSnapshot ---
     let processes = observe_processes(process_repo, issue).await?;
@@ -192,6 +194,7 @@ async fn observe_github_issue<G: GitHubClient>(
 async fn observe_pr_for_type<G, P>(
     github: &G,
     process_repo: &P,
+    config: &Config,
     issue_id: i64,
     type_: ProcessRunType,
 ) -> Result<Option<PrSnapshot>>
@@ -234,7 +237,12 @@ where
     // For open PRs, gather more detail
     let (has_review_comments, ci_status, has_conflict) = if pr_state == PrState::Open {
         let threads = github.list_unresolved_threads(pr_number).await?;
-        let has_review_comments = !threads.is_empty();
+        // Only count threads that contain at least one trusted comment.
+        let has_review_comments = threads.iter().any(|t| {
+            t.comments
+                .iter()
+                .any(|c| config.is_comment_trusted(&c.author_association, &c.author))
+        });
 
         let check_runs = github.get_ci_check_runs(pr_number).await?;
         let ci = derive_ci_status(&check_runs);
@@ -305,6 +313,7 @@ async fn observe_processes<P: ProcessRunRepository>(
         Ok(Some(ProcessSnapshot {
             state: run.state,
             index: run.index,
+            run_id: run.id,
             consecutive_failures,
         }))
     }
@@ -694,7 +703,8 @@ mod tests {
         let github = MockGithub::with_tracker(true, vec![], Arc::clone(&tracker));
         let repo = MockProcessRunRepository::returning_none();
 
-        let result = observe_pr_for_type(&github, &repo, 1, ProcessRunType::Design)
+        let config = test_config();
+        let result = observe_pr_for_type(&github, &repo, &config, 1, ProcessRunType::Design)
             .await
             .expect("should not error");
 
@@ -714,7 +724,8 @@ mod tests {
         let github = MockGithubWithPrTracking::new(Arc::clone(&pr_status_calls));
         let repo = MockProcessRunRepository::returning_run(run);
 
-        let result = observe_pr_for_type(&github, &repo, 1, ProcessRunType::Design)
+        let config = test_config();
+        let result = observe_pr_for_type(&github, &repo, &config, 1, ProcessRunType::Design)
             .await
             .expect("should not error");
 
@@ -740,7 +751,8 @@ mod tests {
         let github = MockGithubWith404::new(Arc::clone(&pr_status_calls));
         let repo = MockProcessRunRepository::returning_run(run);
 
-        let result = observe_pr_for_type(&github, &repo, 1, ProcessRunType::Design)
+        let config = test_config();
+        let result = observe_pr_for_type(&github, &repo, &config, 1, ProcessRunType::Design)
             .await
             .expect("should not error on 404");
 

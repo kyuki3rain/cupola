@@ -23,7 +23,7 @@ use crate::domain::config::Config;
 use crate::domain::effect::Effect;
 use crate::domain::issue::Issue;
 use crate::domain::metadata_update::MetadataUpdates;
-use crate::domain::process_run::{ProcessRun, ProcessRunType};
+use crate::domain::process_run::{ProcessRun, ProcessRunState, ProcessRunType};
 
 /// Bound used anywhere SpawnInit needs to hand the worktree to a `tokio::spawn`
 /// task. `GitWorktreeManager` is a trivial wrapper around a `PathBuf` so `Clone`
@@ -200,7 +200,11 @@ where
             worktree.pull(path)?;
         }
 
-        Effect::SpawnProcess { type_, causes } => {
+        Effect::SpawnProcess {
+            type_,
+            causes,
+            pending_run_id,
+        } => {
             spawn_process(
                 github,
                 issue_repo,
@@ -212,6 +216,7 @@ where
                 issue,
                 *type_,
                 causes,
+                *pending_run_id,
             )
             .await?;
         }
@@ -432,6 +437,7 @@ async fn spawn_process<G, I, P, C, W>(
     issue: &Issue,
     type_: ProcessRunType,
     causes: &[crate::domain::fixing_problem_kind::FixingProblemKind],
+    pending_run_id: Option<i64>,
 ) -> Result<()>
 where
     G: GitHubClient,
@@ -448,6 +454,21 @@ where
                 issue_number = issue.github_issue_number,
                 "concurrent session limit reached, deferring spawn"
             );
+            // No session slot available. If this is a new spawn (no pending record),
+            // insert a pending ProcessRun so decide sees Pending next cycle instead
+            // of the previous Succeeded/Failed state.
+            if pending_run_id.is_none() {
+                let latest = process_repo.find_latest(issue.id, type_).await?;
+                let index = latest.map(|r| r.index + 1).unwrap_or(0);
+                let run = ProcessRun::new_pending(issue.id, type_, index, causes.to_vec());
+                let run_id = process_repo.save(&run).await?;
+                tracing::info!(
+                    issue_number = issue.github_issue_number,
+                    run_id,
+                    type_ = ?type_,
+                    "created pending process run (session limit)"
+                );
+            }
             return Ok(());
         }
         true
@@ -466,6 +487,7 @@ where
         issue,
         type_,
         causes,
+        pending_run_id,
     )
     .await
     {
@@ -508,6 +530,7 @@ async fn prepare_process_spawn<G, P, C, W>(
     issue: &Issue,
     type_: ProcessRunType,
     causes: &[crate::domain::fixing_problem_kind::FixingProblemKind],
+    pending_run_id: Option<i64>,
 ) -> Result<(Child, i64, u32)>
 where
     G: GitHubClient,
@@ -520,10 +543,6 @@ where
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("worktree_path is None for SpawnProcess"))?;
     let wt_path = Path::new(wt_path_str);
-
-    // Get next index for this type
-    let latest = process_repo.find_latest(issue.id, type_).await?;
-    let index = latest.map(|r| r.index + 1).unwrap_or(0);
 
     // Fetch issue detail for input files
     let detail = github.get_issue(issue.github_issue_number).await?;
@@ -543,8 +562,7 @@ where
         // Write review threads
         if let Some(pr_number) = pr_number_opt {
             let threads = github.list_unresolved_threads(pr_number).await?;
-            let trusted = &config.trusted_associations;
-            write_review_threads_input(wt_path, &threads, trusted)?;
+            write_review_threads_input(wt_path, &threads, config)?;
         }
     }
 
@@ -572,21 +590,26 @@ where
     let model_phase = phase_for_type(type_);
     let model = config.models.resolve(issue.weight, model_phase);
 
-    // Insert ProcessRun
-    let run = ProcessRun::new_running(issue.id, type_, index, causes.to_vec());
-    let run_id = process_repo.save(&run).await?;
+    // Determine run_id: reuse pending or create new running record
+    let run_id = if let Some(existing_run_id) = pending_run_id {
+        // Resume pending: update state to running
+        process_repo
+            .update_state(existing_run_id, ProcessRunState::Running)
+            .await?;
+        existing_run_id
+    } else {
+        // New spawn: insert as running
+        let latest = process_repo.find_latest(issue.id, type_).await?;
+        let index = latest.map(|r| r.index + 1).unwrap_or(0);
+        let run = ProcessRun::new_running(issue.id, type_, index, causes.to_vec());
+        process_repo.save(&run).await?
+    };
 
     // Spawn the process
     match claude_runner.spawn(&session_config.prompt, wt_path, schema, model) {
         Ok(mut child) => {
-            // Persist the OS pid before moving child into SessionManager, so
-            // process_runs.pid is populated for status / stall / recovery tooling
-            // (per docs/architecture/metadata.md ProcessRun.pid rules).
             let pid = child.id();
             if let Err(e) = process_repo.update_pid(run_id, pid).await {
-                // update_pid failed: kill the already-running process (best-effort)
-                // and mark the ProcessRun as failed so recovery tooling can act on it
-                // and decide() stops treating the run as active.
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = process_repo
@@ -597,7 +620,6 @@ where
             Ok((child, run_id, pid))
         }
         Err(e) => {
-            // Spawn failure: mark ProcessRun as failed immediately
             let _ = process_repo.mark_failed(run_id, Some(e.to_string())).await;
             Err(e)
         }
@@ -832,6 +854,7 @@ mod tests {
             Effect::SpawnProcess {
                 type_: ProcessRunType::Design,
                 causes: vec![],
+                pending_run_id: None,
             },
         ];
         effects.sort_by_key(|e| e.priority());
@@ -856,7 +879,8 @@ mod tests {
         assert!(
             !Effect::SpawnProcess {
                 type_: ProcessRunType::Design,
-                causes: vec![]
+                causes: vec![],
+                pending_run_id: None,
             }
             .is_best_effort()
         );
@@ -869,10 +893,12 @@ mod tests {
         let effect = Effect::SpawnProcess {
             type_: ProcessRunType::DesignFix,
             causes: causes.clone(),
+            pending_run_id: None,
         };
         if let Effect::SpawnProcess {
             type_: t,
             causes: c,
+            ..
         } = effect
         {
             assert_eq!(t, ProcessRunType::DesignFix);

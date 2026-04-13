@@ -26,43 +26,6 @@ pub fn decide(prev: &Issue, snap: &WorldSnapshot, cfg: &Config) -> Decision {
 
     let next_state = dispatch_state(prev, snap, cfg, &mut effects, &mut metadata_updates);
 
-    // Second-pass dispatch on the new state.
-    //
-    // The persistent-effect rules in `docs/architecture/effects.md` are stated
-    // in terms of `next_state` ("if state is ImplementationRunning and the impl
-    // process is not running, emit SwitchToImplBranch → SpawnProcess"), so on a
-    // transition cycle we must evaluate them against the new state — not the
-    // old one. Without this pass the chain only gets emitted in the *next*
-    // polling cycle, leaving a `polling_interval_secs`-sized lag and (as
-    // happened with the impl spawn chain) creating an opportunity for someone
-    // to forget a step in the manually-mirrored transition emission.
-    //
-    // We re-dispatch the same `decide_X` family with a synthetic Issue whose
-    // state is `next_state`, and append only the spawn-side effects from that
-    // call. Transition-edge effects (Post*Comment) and the second pass's own
-    // next_state choice are intentionally discarded — the first pass is the
-    // single source of truth for the transition itself.
-    if next_state != prev.state && needs_persistent_spawn_pass(next_state) {
-        let mut secondary_effects: Vec<Effect> = Vec::new();
-        let mut secondary_meta = MetadataUpdates::default();
-        let synthetic = Issue {
-            state: next_state,
-            ..prev.clone()
-        };
-        let _ = dispatch_state(
-            &synthetic,
-            snap,
-            cfg,
-            &mut secondary_effects,
-            &mut secondary_meta,
-        );
-        for e in secondary_effects {
-            if is_persistent_spawn_effect(&e) {
-                effects.push(e);
-            }
-        }
-    }
-
     if next_state != prev.state {
         metadata_updates.state = Some(next_state);
     }
@@ -70,31 +33,7 @@ pub fn decide(prev: &Issue, snap: &WorldSnapshot, cfg: &Config) -> Decision {
     Decision::new(next_state, metadata_updates, effects)
 }
 
-/// States whose persistent-effect table contains a spawn-side action that must
-/// be evaluated immediately on transition (not deferred to the next cycle).
-fn needs_persistent_spawn_pass(state: State) -> bool {
-    matches!(
-        state,
-        State::InitializeRunning
-            | State::DesignRunning
-            | State::ImplementationRunning
-            | State::DesignFixing
-            | State::ImplementationFixing
-    )
-}
-
-/// Whitelist of effects we accept from the second-pass dispatch. These are the
-/// "持続性エフェクト" of the spawn-side rows in `effects.md`. Transition-edge
-/// effects are intentionally excluded so the first pass remains authoritative.
-fn is_persistent_spawn_effect(effect: &Effect) -> bool {
-    matches!(
-        effect,
-        Effect::SpawnInit | Effect::SwitchToImplBranch | Effect::SpawnProcess { .. }
-    )
-}
-
-/// Internal dispatch helper used by both the primary pass and the second-pass
-/// re-evaluation. Returns the `decide_X` result for `issue.state`.
+/// Internal dispatch helper. Returns the `decide_X` result for `issue.state`.
 fn dispatch_state(
     issue: &Issue,
     snap: &WorldSnapshot,
@@ -172,6 +111,7 @@ fn decide_idle(
 ) -> State {
     if snap.github_issue.has_ready_label {
         if snap.github_issue.ready_label_trusted {
+            emit_spawn_init(snap, effects);
             State::InitializeRunning
         } else {
             effects.push(Effect::RejectUntrustedReadyIssue);
@@ -218,12 +158,14 @@ fn decide_initialize_running(
             if let Some(design_pr) = &snap.design_pr {
                 if design_pr.state == PrState::Merged {
                     metadata_updates.ci_fix_count = Some(0);
+                    emit_spawn_impl(snap, effects);
                     return State::ImplementationRunning;
                 }
                 if design_pr.state == PrState::Open {
                     return State::DesignReviewWaiting;
                 }
             }
+            emit_spawn_design(snap, effects);
             return State::DesignRunning;
         }
         // init.state == Running or Stale: emit SpawnInit if not running
@@ -253,10 +195,19 @@ fn decide_design_running(
         if design.consecutive_failures >= cfg.max_retries {
             return go_cancelled_retry_exhausted(effects);
         }
+        if design.state == ProcessRunState::Pending {
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::Design,
+                causes: vec![],
+                pending_run_id: Some(design.run_id),
+            });
+            return State::DesignRunning;
+        }
         if design.state == ProcessRunState::Failed {
             effects.push(Effect::SpawnProcess {
                 type_: ProcessRunType::Design,
                 causes: vec![],
+                pending_run_id: None,
             });
             return State::DesignRunning;
         }
@@ -264,35 +215,46 @@ fn decide_design_running(
             effects.push(Effect::SpawnProcess {
                 type_: ProcessRunType::Design,
                 causes: vec![],
+                pending_run_id: None,
             });
             return State::DesignRunning;
         }
-        if design.state == ProcessRunState::Succeeded
-            && let Some(design_pr) = &snap.design_pr
-        {
-            if design_pr.state == PrState::Merged {
-                metadata_updates.ci_fix_count = Some(0);
-                return State::ImplementationRunning;
+        if design.state == ProcessRunState::Succeeded {
+            if let Some(design_pr) = &snap.design_pr {
+                if design_pr.state == PrState::Merged {
+                    metadata_updates.ci_fix_count = Some(0);
+                    emit_spawn_impl(snap, effects);
+                    return State::ImplementationRunning;
+                }
+                if design_pr.state == PrState::Closed {
+                    metadata_updates.ci_fix_count = Some(0);
+                    effects.push(Effect::SpawnProcess {
+                        type_: ProcessRunType::Design,
+                        causes: vec![],
+                        pending_run_id: None,
+                    });
+                    return State::DesignRunning;
+                }
+                if design_pr.state == PrState::Open {
+                    return State::DesignReviewWaiting;
+                }
             }
-            if design_pr.state == PrState::Closed {
-                metadata_updates.ci_fix_count = Some(0);
-                effects.push(Effect::SpawnProcess {
-                    type_: ProcessRunType::Design,
-                    causes: vec![],
-                });
-                return State::DesignRunning;
-            }
-            if design_pr.state == PrState::Open {
-                return State::DesignReviewWaiting;
-            }
+            // Succeeded but PR is None (deleted/404): re-spawn
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::Design,
+                causes: vec![],
+                pending_run_id: None,
+            });
+            return State::DesignRunning;
         }
-        // Running or Stale-like without explicit pattern: no spawn
+        // Running or other: no spawn
         State::DesignRunning
     } else {
         // No design process: spawn
         effects.push(Effect::SpawnProcess {
             type_: ProcessRunType::Design,
             causes: vec![],
+            pending_run_id: None,
         });
         State::DesignRunning
     }
@@ -311,7 +273,10 @@ fn decide_design_review_waiting(
 
     let design_pr = match &snap.design_pr {
         Some(pr) => pr,
-        None => return State::DesignRunning,
+        None => {
+            emit_spawn_design(snap, effects);
+            return State::DesignRunning;
+        }
     };
 
     use crate::domain::world_snapshot::CiStatus;
@@ -319,15 +284,18 @@ fn decide_design_review_waiting(
     // Priority: merge > close > review > ci > conflict
     if design_pr.state == PrState::Merged {
         metadata_updates.ci_fix_count = Some(0);
+        emit_spawn_impl(snap, effects);
         return State::ImplementationRunning;
     }
     if design_pr.state == PrState::Closed {
         metadata_updates.ci_fix_count = Some(0);
+        emit_spawn_design(snap, effects);
         return State::DesignRunning;
     }
     if design_pr.has_review_comments {
         // review resets ci_fix_count
         metadata_updates.ci_fix_count = Some(0);
+        emit_spawn_design_fix(snap, design_pr, effects);
         return State::DesignFixing;
     }
     if design_pr.ci_status == CiStatus::Failure {
@@ -340,6 +308,7 @@ fn decide_design_review_waiting(
             return State::DesignReviewWaiting;
         }
         metadata_updates.ci_fix_count = Some(prev.ci_fix_count + 1);
+        emit_spawn_design_fix(snap, design_pr, effects);
         return State::DesignFixing;
     }
     if design_pr.has_conflict {
@@ -351,6 +320,7 @@ fn decide_design_review_waiting(
             return State::DesignReviewWaiting;
         }
         metadata_updates.ci_fix_count = Some(prev.ci_fix_count + 1);
+        emit_spawn_design_fix(snap, design_pr, effects);
         return State::DesignFixing;
     }
 
@@ -370,16 +340,21 @@ fn decide_design_fixing(
 
     let design_pr = match &snap.design_pr {
         Some(pr) => pr,
-        None => return State::DesignRunning,
+        None => {
+            emit_spawn_design(snap, effects);
+            return State::DesignRunning;
+        }
     };
 
     // PR state checks first
     if design_pr.state == PrState::Merged {
         metadata_updates.ci_fix_count = Some(0);
+        emit_spawn_impl(snap, effects);
         return State::ImplementationRunning;
     }
     if design_pr.state == PrState::Closed {
         metadata_updates.ci_fix_count = Some(0);
+        emit_spawn_design(snap, effects);
         return State::DesignRunning;
     }
 
@@ -387,11 +362,21 @@ fn decide_design_fixing(
         if design_fix.consecutive_failures >= cfg.max_retries {
             return go_cancelled_retry_exhausted(effects);
         }
+        if design_fix.state == ProcessRunState::Pending {
+            let causes = derive_fixing_causes(design_pr);
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::DesignFix,
+                causes,
+                pending_run_id: Some(design_fix.run_id),
+            });
+            return State::DesignFixing;
+        }
         if design_fix.state == ProcessRunState::Failed {
             let causes = derive_fixing_causes(design_pr);
             effects.push(Effect::SpawnProcess {
                 type_: ProcessRunType::DesignFix,
                 causes,
+                pending_run_id: None,
             });
             return State::DesignFixing;
         }
@@ -400,6 +385,7 @@ fn decide_design_fixing(
             effects.push(Effect::SpawnProcess {
                 type_: ProcessRunType::DesignFix,
                 causes,
+                pending_run_id: None,
             });
             return State::DesignFixing;
         }
@@ -414,6 +400,7 @@ fn decide_design_fixing(
         effects.push(Effect::SpawnProcess {
             type_: ProcessRunType::DesignFix,
             causes,
+            pending_run_id: None,
         });
         State::DesignFixing
     }
@@ -435,6 +422,115 @@ fn derive_fixing_causes(pr: &crate::domain::world_snapshot::PrSnapshot) -> Vec<F
     causes
 }
 
+// ── Persistent-effect helpers ──────────────────────────────────────
+//
+// Each helper emits the persistent effects required when `next.state`
+// is the corresponding spawn-capable state, per effects.md.  They are
+// called from transition sources that target that state.  The owning
+// `decide_*` functions use inline spawn logic for stable cycles.
+
+fn emit_spawn_init(snap: &WorldSnapshot, effects: &mut Vec<Effect>) {
+    let dominated = snap
+        .processes
+        .init
+        .as_ref()
+        .is_some_and(|p| p.state == ProcessRunState::Running);
+    if !dominated {
+        effects.push(Effect::SpawnInit);
+    }
+}
+
+fn emit_spawn_design(snap: &WorldSnapshot, effects: &mut Vec<Effect>) {
+    match &snap.processes.design {
+        Some(p) if p.state == ProcessRunState::Pending => {
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::Design,
+                causes: vec![],
+                pending_run_id: Some(p.run_id),
+            });
+        }
+        Some(p) if p.state == ProcessRunState::Running => {}
+        _ => {
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::Design,
+                causes: vec![],
+                pending_run_id: None,
+            });
+        }
+    }
+}
+
+fn emit_spawn_design_fix(
+    snap: &WorldSnapshot,
+    design_pr: &crate::domain::world_snapshot::PrSnapshot,
+    effects: &mut Vec<Effect>,
+) {
+    let causes = derive_fixing_causes(design_pr);
+    match &snap.processes.design_fix {
+        Some(p) if p.state == ProcessRunState::Pending => {
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::DesignFix,
+                causes,
+                pending_run_id: Some(p.run_id),
+            });
+        }
+        Some(p) if p.state == ProcessRunState::Running => {}
+        _ => {
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::DesignFix,
+                causes,
+                pending_run_id: None,
+            });
+        }
+    }
+}
+
+fn emit_spawn_impl(snap: &WorldSnapshot, effects: &mut Vec<Effect>) {
+    match &snap.processes.impl_ {
+        Some(p) if p.state == ProcessRunState::Pending => {
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::Impl,
+                causes: vec![],
+                pending_run_id: Some(p.run_id),
+            });
+        }
+        Some(p) if p.state == ProcessRunState::Running => {}
+        _ => {
+            effects.push(Effect::SwitchToImplBranch);
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::Impl,
+                causes: vec![],
+                pending_run_id: None,
+            });
+        }
+    }
+}
+
+fn emit_spawn_impl_fix(
+    snap: &WorldSnapshot,
+    impl_pr: &crate::domain::world_snapshot::PrSnapshot,
+    effects: &mut Vec<Effect>,
+) {
+    let causes = derive_fixing_causes(impl_pr);
+    match &snap.processes.impl_fix {
+        Some(p) if p.state == ProcessRunState::Pending => {
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::ImplFix,
+                causes,
+                pending_run_id: Some(p.run_id),
+            });
+        }
+        Some(p) if p.state == ProcessRunState::Running => {}
+        _ => {
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::ImplFix,
+                causes,
+                pending_run_id: None,
+            });
+        }
+    }
+}
+
 fn decide_implementation_running(
     _prev: &Issue,
     snap: &WorldSnapshot,
@@ -453,11 +549,21 @@ fn decide_implementation_running(
         if impl_proc.consecutive_failures >= cfg.max_retries {
             return go_cancelled_retry_exhausted(effects);
         }
+        if impl_proc.state == ProcessRunState::Pending {
+            // SwitchToImplBranch already done on first attempt
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::Impl,
+                causes: vec![],
+                pending_run_id: Some(impl_proc.run_id),
+            });
+            return State::ImplementationRunning;
+        }
         if impl_proc.state == ProcessRunState::Failed {
             effects.push(Effect::SwitchToImplBranch);
             effects.push(Effect::SpawnProcess {
                 type_: ProcessRunType::Impl,
                 causes: vec![],
+                pending_run_id: None,
             });
             return State::ImplementationRunning;
         }
@@ -466,31 +572,41 @@ fn decide_implementation_running(
             effects.push(Effect::SpawnProcess {
                 type_: ProcessRunType::Impl,
                 causes: vec![],
+                pending_run_id: None,
             });
             return State::ImplementationRunning;
         }
-        if impl_proc.state == ProcessRunState::Succeeded
-            && let Some(impl_pr) = &snap.impl_pr
-        {
-            if impl_pr.state == PrState::Merged {
-                effects.push(Effect::PostCompletedComment);
-                effects.push(Effect::CleanupWorktree);
-                effects.push(Effect::CloseIssue);
-                metadata_updates.ci_fix_count = Some(0);
-                return State::Completed;
+        if impl_proc.state == ProcessRunState::Succeeded {
+            if let Some(impl_pr) = &snap.impl_pr {
+                if impl_pr.state == PrState::Merged {
+                    effects.push(Effect::PostCompletedComment);
+                    effects.push(Effect::CleanupWorktree);
+                    effects.push(Effect::CloseIssue);
+                    metadata_updates.ci_fix_count = Some(0);
+                    return State::Completed;
+                }
+                if impl_pr.state == PrState::Closed {
+                    metadata_updates.ci_fix_count = Some(0);
+                    effects.push(Effect::SwitchToImplBranch);
+                    effects.push(Effect::SpawnProcess {
+                        type_: ProcessRunType::Impl,
+                        causes: vec![],
+                        pending_run_id: None,
+                    });
+                    return State::ImplementationRunning;
+                }
+                if impl_pr.state == PrState::Open {
+                    return State::ImplementationReviewWaiting;
+                }
             }
-            if impl_pr.state == PrState::Closed {
-                metadata_updates.ci_fix_count = Some(0);
-                effects.push(Effect::SwitchToImplBranch);
-                effects.push(Effect::SpawnProcess {
-                    type_: ProcessRunType::Impl,
-                    causes: vec![],
-                });
-                return State::ImplementationRunning;
-            }
-            if impl_pr.state == PrState::Open {
-                return State::ImplementationReviewWaiting;
-            }
+            // Succeeded but PR is None (deleted/404): re-spawn
+            effects.push(Effect::SwitchToImplBranch);
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::Impl,
+                causes: vec![],
+                pending_run_id: None,
+            });
+            return State::ImplementationRunning;
         }
         State::ImplementationRunning
     } else {
@@ -499,6 +615,7 @@ fn decide_implementation_running(
         effects.push(Effect::SpawnProcess {
             type_: ProcessRunType::Impl,
             causes: vec![],
+            pending_run_id: None,
         });
         State::ImplementationRunning
     }
@@ -520,7 +637,10 @@ fn decide_implementation_review_waiting(
 
     let impl_pr = match &snap.impl_pr {
         Some(pr) => pr,
-        None => return State::ImplementationRunning,
+        None => {
+            emit_spawn_impl(snap, effects);
+            return State::ImplementationRunning;
+        }
     };
 
     use crate::domain::world_snapshot::CiStatus;
@@ -534,10 +654,12 @@ fn decide_implementation_review_waiting(
     }
     if impl_pr.state == PrState::Closed {
         metadata_updates.ci_fix_count = Some(0);
+        emit_spawn_impl(snap, effects);
         return State::ImplementationRunning;
     }
     if impl_pr.has_review_comments {
         metadata_updates.ci_fix_count = Some(0);
+        emit_spawn_impl_fix(snap, impl_pr, effects);
         return State::ImplementationFixing;
     }
     if impl_pr.ci_status == CiStatus::Failure {
@@ -549,6 +671,7 @@ fn decide_implementation_review_waiting(
             return State::ImplementationReviewWaiting;
         }
         metadata_updates.ci_fix_count = Some(prev.ci_fix_count + 1);
+        emit_spawn_impl_fix(snap, impl_pr, effects);
         return State::ImplementationFixing;
     }
     if impl_pr.has_conflict {
@@ -560,6 +683,7 @@ fn decide_implementation_review_waiting(
             return State::ImplementationReviewWaiting;
         }
         metadata_updates.ci_fix_count = Some(prev.ci_fix_count + 1);
+        emit_spawn_impl_fix(snap, impl_pr, effects);
         return State::ImplementationFixing;
     }
 
@@ -582,7 +706,10 @@ fn decide_implementation_fixing(
 
     let impl_pr = match &snap.impl_pr {
         Some(pr) => pr,
-        None => return State::ImplementationRunning,
+        None => {
+            emit_spawn_impl(snap, effects);
+            return State::ImplementationRunning;
+        }
     };
 
     if impl_pr.state == PrState::Merged {
@@ -594,6 +721,7 @@ fn decide_implementation_fixing(
     }
     if impl_pr.state == PrState::Closed {
         metadata_updates.ci_fix_count = Some(0);
+        emit_spawn_impl(snap, effects);
         return State::ImplementationRunning;
     }
 
@@ -601,11 +729,21 @@ fn decide_implementation_fixing(
         if impl_fix.consecutive_failures >= cfg.max_retries {
             return go_cancelled_retry_exhausted(effects);
         }
+        if impl_fix.state == ProcessRunState::Pending {
+            let causes = derive_fixing_causes(impl_pr);
+            effects.push(Effect::SpawnProcess {
+                type_: ProcessRunType::ImplFix,
+                causes,
+                pending_run_id: Some(impl_fix.run_id),
+            });
+            return State::ImplementationFixing;
+        }
         if impl_fix.state == ProcessRunState::Failed {
             let causes = derive_fixing_causes(impl_pr);
             effects.push(Effect::SpawnProcess {
                 type_: ProcessRunType::ImplFix,
                 causes,
+                pending_run_id: None,
             });
             return State::ImplementationFixing;
         }
@@ -614,6 +752,7 @@ fn decide_implementation_fixing(
             effects.push(Effect::SpawnProcess {
                 type_: ProcessRunType::ImplFix,
                 causes,
+                pending_run_id: None,
             });
             return State::ImplementationFixing;
         }
@@ -626,6 +765,7 @@ fn decide_implementation_fixing(
         effects.push(Effect::SpawnProcess {
             type_: ProcessRunType::ImplFix,
             causes,
+            pending_run_id: None,
         });
         State::ImplementationFixing
     }
@@ -711,6 +851,7 @@ mod tests {
         snap.processes.init = Some(ProcessSnapshot {
             state,
             index: 0,
+            run_id: 0,
             consecutive_failures,
         });
         snap
@@ -721,6 +862,7 @@ mod tests {
         snap.processes.design = Some(ProcessSnapshot {
             state,
             index: 0,
+            run_id: 0,
             consecutive_failures,
         });
         snap
@@ -732,6 +874,7 @@ mod tests {
         snap.processes.design_fix = Some(ProcessSnapshot {
             state,
             index: 0,
+            run_id: 0,
             consecutive_failures,
         });
         snap
@@ -742,6 +885,7 @@ mod tests {
         snap.processes.impl_ = Some(ProcessSnapshot {
             state,
             index: 0,
+            run_id: 0,
             consecutive_failures,
         });
         snap
@@ -753,6 +897,7 @@ mod tests {
         snap.processes.impl_fix = Some(ProcessSnapshot {
             state,
             index: 0,
+            run_id: 0,
             consecutive_failures,
         });
         snap
@@ -947,6 +1092,23 @@ mod tests {
             e,
             Effect::SpawnProcess {
                 type_: ProcessRunType::Design,
+                ..
+            }
+        )));
+    }
+
+    /// T-1.D.dr.4b: pending stays in DesignRunning with SpawnProcess(pending_run_id=Some)
+    #[test]
+    fn dr_4b_design_pending_stays_with_spawn() {
+        let issue = make_issue(State::DesignRunning);
+        let snap = snap_with_design(ProcessRunState::Pending, 0);
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::DesignRunning);
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::Design,
+                pending_run_id: Some(_),
                 ..
             }
         )));
@@ -1254,6 +1416,23 @@ mod tests {
         )));
     }
 
+    /// T-1.D.df.7b: pending stays in DesignFixing with SpawnProcess(pending_run_id=Some)
+    #[test]
+    fn df_7b_design_fix_pending_stays_with_spawn() {
+        let issue = make_issue(State::DesignFixing);
+        let snap = snap_with_design_fix(ProcessRunState::Pending, 0);
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::DesignFixing);
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::DesignFix,
+                pending_run_id: Some(_),
+                ..
+            }
+        )));
+    }
+
     /// T-1.D.df.8
     #[test]
     fn df_8_design_fix_succeeded_goes_design_review_waiting() {
@@ -1334,6 +1513,29 @@ mod tests {
         let d = decide(&issue, &snap, &cfg());
         assert_eq!(d.next_state, State::ImplementationRunning);
         assert!(d.effects.contains(&Effect::SwitchToImplBranch));
+    }
+
+    /// T-1.D.ir.4b: pending stays in ImplementationRunning with SpawnProcess(pending_run_id=Some)
+    #[test]
+    fn ir_4b_impl_pending_stays_with_spawn() {
+        let issue = make_issue(State::ImplementationRunning);
+        let snap = snap_with_impl(ProcessRunState::Pending, 0);
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::ImplementationRunning);
+        // Pending skips SwitchToImplBranch (already done on first attempt)
+        assert!(
+            !d.effects
+                .iter()
+                .any(|e| matches!(e, Effect::SwitchToImplBranch))
+        );
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::Impl,
+                pending_run_id: Some(_),
+                ..
+            }
+        )));
     }
 
     /// T-1.D.ir.5 (impl.succeeded + impl_pr.merged → Completed)
@@ -1524,6 +1726,22 @@ mod tests {
     }
 
     #[test]
+    fn if_7b_impl_fix_pending_stays_with_spawn() {
+        let issue = make_issue(State::ImplementationFixing);
+        let snap = snap_with_impl_fix(ProcessRunState::Pending, 0);
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::ImplementationFixing);
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::ImplFix,
+                pending_run_id: Some(_),
+                ..
+            }
+        )));
+    }
+
+    #[test]
     fn if_8_impl_fix_succeeded_goes_impl_review_waiting() {
         let issue = make_issue(State::ImplementationFixing);
         let snap = snap_with_impl_fix(ProcessRunState::Succeeded, 0);
@@ -1703,5 +1921,296 @@ mod tests {
             d.metadata_updates.ci_fix_count,
             Some(cfg.max_ci_fix_cycles + 1)
         );
+    }
+
+    // ── Transition-point persistent effect tests ──────────────────────
+
+    /// ReviewWaiting → Fixing with stale Succeeded emits SpawnProcess
+    #[test]
+    fn drw_to_df_with_stale_succeeded_emits_spawn_process() {
+        let issue = make_issue(State::DesignReviewWaiting);
+        let mut snap = fixtures::idle();
+        let mut pr = fixtures::open_pr();
+        pr.has_review_comments = true;
+        snap.design_pr = Some(pr);
+        snap.processes.design_fix = Some(ProcessSnapshot {
+            state: ProcessRunState::Succeeded,
+            index: 0,
+            run_id: 23,
+            consecutive_failures: 0,
+        });
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::DesignFixing);
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::DesignFix,
+                ..
+            }
+        )));
+    }
+
+    /// ImplementationReviewWaiting → ImplementationFixing with stale Succeeded
+    #[test]
+    fn irw_to_if_with_stale_succeeded_emits_spawn_process() {
+        let issue = make_issue(State::ImplementationReviewWaiting);
+        let mut snap = fixtures::idle();
+        let mut pr = fixtures::open_pr();
+        pr.has_review_comments = true;
+        snap.impl_pr = Some(pr);
+        snap.processes.impl_fix = Some(ProcessSnapshot {
+            state: ProcessRunState::Succeeded,
+            index: 0,
+            run_id: 30,
+            consecutive_failures: 0,
+        });
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::ImplementationFixing);
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::ImplFix,
+                ..
+            }
+        )));
+    }
+
+    /// Idle → InitializeRunning emits SpawnInit
+    #[test]
+    fn idle_to_init_emits_spawn_init() {
+        let issue = make_issue(State::Idle);
+        let snap = snap_with_ready_label(true);
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::InitializeRunning);
+        assert!(d.effects.contains(&Effect::SpawnInit));
+    }
+
+    /// InitializeRunning → DesignRunning emits SpawnProcess(Design)
+    #[test]
+    fn init_to_dr_emits_spawn_design() {
+        let issue = make_issue(State::InitializeRunning);
+        let snap = snap_with_init(ProcessRunState::Succeeded, 0);
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::DesignRunning);
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::Design,
+                ..
+            }
+        )));
+    }
+
+    /// InitializeRunning → ImplementationRunning (design merged) emits SwitchToImplBranch + SpawnProcess(Impl)
+    #[test]
+    fn init_to_ir_emits_spawn_impl() {
+        let issue = make_issue(State::InitializeRunning);
+        let mut snap = snap_with_init(ProcessRunState::Succeeded, 0);
+        snap.design_pr = Some(fixtures::merged_pr());
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::ImplementationRunning);
+        assert!(d.effects.contains(&Effect::SwitchToImplBranch));
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::Impl,
+                ..
+            }
+        )));
+    }
+
+    /// DesignRunning → ImplementationRunning (design merged) emits SwitchToImplBranch + SpawnProcess(Impl)
+    #[test]
+    fn dr_to_ir_emits_spawn_impl() {
+        let issue = make_issue(State::DesignRunning);
+        let mut snap = snap_with_design(ProcessRunState::Succeeded, 0);
+        snap.design_pr = Some(fixtures::merged_pr());
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::ImplementationRunning);
+        assert!(d.effects.contains(&Effect::SwitchToImplBranch));
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::Impl,
+                ..
+            }
+        )));
+    }
+
+    /// DesignReviewWaiting → DesignRunning (PR None) emits SpawnProcess(Design)
+    #[test]
+    fn drw_to_dr_no_pr_emits_spawn_design() {
+        let issue = make_issue(State::DesignReviewWaiting);
+        let snap = fixtures::idle(); // no design_pr
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::DesignRunning);
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::Design,
+                ..
+            }
+        )));
+    }
+
+    /// DesignReviewWaiting → ImplementationRunning (merged) emits spawn chain
+    #[test]
+    fn drw_to_ir_merged_emits_spawn_impl() {
+        let issue = make_issue(State::DesignReviewWaiting);
+        let mut snap = fixtures::idle();
+        snap.design_pr = Some(fixtures::merged_pr());
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::ImplementationRunning);
+        assert!(d.effects.contains(&Effect::SwitchToImplBranch));
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::Impl,
+                ..
+            }
+        )));
+    }
+
+    /// DesignFixing → DesignRunning (PR closed) emits SpawnProcess(Design)
+    #[test]
+    fn df_to_dr_pr_closed_emits_spawn_design() {
+        let issue = make_issue(State::DesignFixing);
+        let mut snap = fixtures::idle();
+        snap.design_pr = Some(fixtures::closed_pr());
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::DesignRunning);
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::Design,
+                ..
+            }
+        )));
+    }
+
+    /// DesignFixing → ImplementationRunning (merged) emits spawn chain
+    #[test]
+    fn df_to_ir_merged_emits_spawn_impl() {
+        let issue = make_issue(State::DesignFixing);
+        let mut snap = fixtures::idle();
+        snap.design_pr = Some(fixtures::merged_pr());
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::ImplementationRunning);
+        assert!(d.effects.contains(&Effect::SwitchToImplBranch));
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::Impl,
+                ..
+            }
+        )));
+    }
+
+    /// ImplementationReviewWaiting → ImplementationRunning (PR closed) emits spawn chain
+    #[test]
+    fn irw_to_ir_pr_closed_emits_spawn_impl() {
+        let issue = make_issue(State::ImplementationReviewWaiting);
+        let mut snap = fixtures::idle();
+        snap.impl_pr = Some(fixtures::closed_pr());
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::ImplementationRunning);
+        assert!(d.effects.contains(&Effect::SwitchToImplBranch));
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::Impl,
+                ..
+            }
+        )));
+    }
+
+    /// ImplementationFixing → ImplementationRunning (PR closed) emits spawn chain
+    #[test]
+    fn if_to_ir_pr_closed_emits_spawn_impl() {
+        let issue = make_issue(State::ImplementationFixing);
+        let mut snap = fixtures::idle();
+        snap.impl_pr = Some(fixtures::closed_pr());
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::ImplementationRunning);
+        assert!(d.effects.contains(&Effect::SwitchToImplBranch));
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::Impl,
+                ..
+            }
+        )));
+    }
+
+    /// ReviewWaiting → Fixing with no prior process emits SpawnProcess
+    #[test]
+    fn drw_to_df_no_prior_process_emits_spawn() {
+        let issue = make_issue(State::DesignReviewWaiting);
+        let mut snap = fixtures::idle();
+        let mut pr = fixtures::open_pr();
+        pr.has_review_comments = true;
+        snap.design_pr = Some(pr);
+        // No design_fix process at all
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::DesignFixing);
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::DesignFix,
+                pending_run_id: None,
+                ..
+            }
+        )));
+    }
+
+    /// ReviewWaiting → Fixing with pending process emits SpawnProcess(pending_run_id=Some)
+    #[test]
+    fn drw_to_df_pending_process_emits_spawn_with_pending_id() {
+        let issue = make_issue(State::DesignReviewWaiting);
+        let mut snap = fixtures::idle();
+        let mut pr = fixtures::open_pr();
+        pr.has_review_comments = true;
+        snap.design_pr = Some(pr);
+        snap.processes.design_fix = Some(ProcessSnapshot {
+            state: ProcessRunState::Pending,
+            index: 1,
+            run_id: 42,
+            consecutive_failures: 0,
+        });
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::DesignFixing);
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::DesignFix,
+                pending_run_id: Some(42),
+                ..
+            }
+        )));
+    }
+
+    /// ReviewWaiting → Fixing with running process does NOT emit SpawnProcess
+    #[test]
+    fn drw_to_df_running_process_no_spawn() {
+        let issue = make_issue(State::DesignReviewWaiting);
+        let mut snap = fixtures::idle();
+        let mut pr = fixtures::open_pr();
+        pr.has_review_comments = true;
+        snap.design_pr = Some(pr);
+        snap.processes.design_fix = Some(ProcessSnapshot {
+            state: ProcessRunState::Running,
+            index: 1,
+            run_id: 42,
+            consecutive_failures: 0,
+        });
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::DesignFixing);
+        assert!(!d.effects.iter().any(|e| matches!(
+            e,
+            Effect::SpawnProcess {
+                type_: ProcessRunType::DesignFix,
+                ..
+            }
+        )));
     }
 }

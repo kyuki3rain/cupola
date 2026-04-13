@@ -105,6 +105,7 @@ fn succeeded_process(idx: u32) -> ProcessSnapshot {
     ProcessSnapshot {
         state: ProcessRunState::Succeeded,
         index: idx,
+        run_id: 0,
         consecutive_failures: 0,
     }
 }
@@ -113,6 +114,7 @@ fn failed_process(idx: u32, consecutive: u32) -> ProcessSnapshot {
     ProcessSnapshot {
         state: ProcessRunState::Failed,
         index: idx,
+        run_id: 0,
         consecutive_failures: consecutive,
     }
 }

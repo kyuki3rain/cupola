@@ -48,6 +48,7 @@ impl FromStr for ProcessRunType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessRunState {
+    Pending,
     Running,
     Succeeded,
     Failed,
@@ -57,6 +58,7 @@ pub enum ProcessRunState {
 impl fmt::Display for ProcessRunState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
+            ProcessRunState::Pending => "pending",
             ProcessRunState::Running => "running",
             ProcessRunState::Succeeded => "succeeded",
             ProcessRunState::Failed => "failed",
@@ -75,6 +77,7 @@ impl FromStr for ProcessRunState {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "pending" => Ok(ProcessRunState::Pending),
             "running" => Ok(ProcessRunState::Running),
             "succeeded" => Ok(ProcessRunState::Succeeded),
             "failed" => Ok(ProcessRunState::Failed),
@@ -112,6 +115,27 @@ impl ProcessRun {
             type_,
             index,
             state: ProcessRunState::Running,
+            pid: None,
+            pr_number: None,
+            causes,
+            error_message: None,
+            started_at: Utc::now(),
+            finished_at: None,
+        }
+    }
+
+    pub fn new_pending(
+        issue_id: i64,
+        type_: ProcessRunType,
+        index: u32,
+        causes: Vec<FixingProblemKind>,
+    ) -> Self {
+        Self {
+            id: 0,
+            issue_id,
+            type_,
+            index,
+            state: ProcessRunState::Pending,
             pid: None,
             pr_number: None,
             causes,

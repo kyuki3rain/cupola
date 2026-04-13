@@ -104,7 +104,13 @@ fn count_consecutive_failures_inner(
         .query_map(param_refs.as_slice(), |row| row.get(0))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    let count = states.iter().take_while(|s| s.as_str() == "failed").count() as u32;
+    // Skip leading pending states — they don't represent completion and must not
+    // break a failure streak (e.g. failed → pending → failed should count as 2).
+    let count = states
+        .iter()
+        .filter(|s| s.as_str() != "pending")
+        .take_while(|s| s.as_str() == "failed")
+        .count() as u32;
     Ok(count)
 }
 

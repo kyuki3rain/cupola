@@ -39,7 +39,7 @@ GithubIssueSnapshot {
 ```
 PrSnapshot {
   state:               open | merged | closed
-  has_review_comments: bool             // trusted actor の unresolved review thread が存在する
+  has_review_comments: bool             // trusted actor のコメントを含む unresolved review thread が存在する
   ci_status:           ok | failure | unknown
   has_conflict:        bool             // PR の mergeable が false（null の場合は unknown 扱い → false）
 }
@@ -47,7 +47,7 @@ PrSnapshot {
 
 - **観測元**: GitHub Pull Requests API、Review Threads API、Check Runs API
 - `state`: `closed` はマージされずにクローズされた状態。`merged` とは区別する
-- `has_review_comments`: コメント投稿者の author_association を確認し、非 trusted のスレッドは無視する。GitHub のレビュー決定（REQUEST_CHANGES 等）はスレッドを伴わない場合は観測されない（レビュースレッドのみ対象）
+- `has_review_comments`: スレッド内のコメントが trust 判定（`trusted_associations` によるロール判定 **OR** `trusted_reviewers` によるユーザー名判定）を1件も通過しないスレッドは、存在自体を無視する（遷移トリガーにもならず、Claude Code にも渡さない）。GitHub のレビュー決定（REQUEST_CHANGES 等）はスレッドを伴わない場合は観測されない（レビュースレッドのみ対象）
 - `ci_status`: check-run の conclusion が `failure` または `timed_out` の場合に `failure`。`cancelled` は `unknown` 扱い（新しいコミット push による自動キャンセルが多く、次のランを待つ）。計算中（null）も `unknown`
 
 **`closed` PR の扱い**: `*ReviewWaiting` または `*Fixing` 状態で PR が `closed`（マージなし）になった場合、対応する `*Running` 状態に戻して PR を再作成する。遷移ルールは [state-machine.md](./state-machine.md) の遷移テーブルを参照。
@@ -72,14 +72,15 @@ ProcessesSnapshot {
 
 ```
 ProcessSnapshot {
-  state:                running | succeeded | failed | stale
+  state:                pending | running | succeeded | failed | stale
   index:                u32
+  run_id:               i64    // 最新レコードの DB primary key（SpawnProcess エフェクトで pending_run_id として使用）
   consecutive_failures: u32    // 同 type の直近連続失敗数（retry_count 相当）
 }
 ```
 
 **consecutive_failures の計算**:
-同 `(issue_id, type)` の ProcessRun を `index` 降順で走査し、`state=failed` の連続件数を数える。`state=succeeded`、`state=stale`、または `state=running` に当たった時点で停止（stale は別状態文脈での終了であり現在のリトライとしてカウントしない。running はまだ完了していないためカウントしない）。
+同 `(issue_id, type)` の ProcessRun を `index` 降順で走査し、`state=failed` の連続件数を数える。`state=succeeded`、`state=stale`、`state=pending`、または `state=running` に当たった時点で停止（stale・pending は失敗ではないためカウントしない。running はまだ完了していないためカウントしない）。
 
 **init type の注意**: `init` ProcessRun は Stale Guard の対象外（SessionManager ではなく InitTaskManager/JoinHandle で管理）。そのため `init.state` は `running | succeeded | failed` のみ取り得る（`stale` には遷移しない）。
 
