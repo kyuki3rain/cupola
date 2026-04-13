@@ -63,6 +63,13 @@ impl ProcessRunRepository for NoopProcessRunRepository {
     ) -> Result<Option<crate::domain::process_run::ProcessRun>> {
         Err(anyhow::anyhow!("NoopProcessRunRepository: not wired"))
     }
+    async fn find_latest_with_pr_number(
+        &self,
+        _: i64,
+        _: crate::domain::process_run::ProcessRunType,
+    ) -> Result<Option<crate::domain::process_run::ProcessRun>> {
+        Err(anyhow::anyhow!("NoopProcessRunRepository: not wired"))
+    }
     async fn find_by_issue(&self, _: i64) -> Result<Vec<crate::domain::process_run::ProcessRun>> {
         Err(anyhow::anyhow!("NoopProcessRunRepository: not wired"))
     }

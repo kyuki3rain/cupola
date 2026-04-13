@@ -1149,6 +1149,14 @@ mod tests {
             Ok(None)
         }
 
+        async fn find_latest_with_pr_number(
+            &self,
+            _: i64,
+            _: ProcessRunType,
+        ) -> anyhow::Result<Option<ProcessRun>> {
+            Ok(None)
+        }
+
         async fn mark_failed(&self, run_id: i64, msg: Option<String>) -> anyhow::Result<()> {
             self.mark_failed_calls
                 .lock()

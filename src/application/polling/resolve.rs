@@ -554,6 +554,13 @@ mod tests {
         async fn find_latest(&self, _id: i64, _type: ProcessRunType) -> Result<Option<ProcessRun>> {
             Ok(None)
         }
+        async fn find_latest_with_pr_number(
+            &self,
+            _id: i64,
+            _type: ProcessRunType,
+        ) -> Result<Option<ProcessRun>> {
+            Ok(None)
+        }
         async fn find_by_issue(&self, _id: i64) -> Result<Vec<ProcessRun>> {
             Ok(vec![])
         }

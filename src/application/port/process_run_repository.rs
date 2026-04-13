@@ -46,6 +46,15 @@ pub trait ProcessRunRepository: Send + Sync {
         type_: ProcessRunType,
     ) -> impl std::future::Future<Output = Result<Option<ProcessRun>>> + Send;
 
+    /// Return the most recent ProcessRun for an issue with a given type where
+    /// `pr_number IS NOT NULL`. The returned `ProcessRun`, if `Some`, is
+    /// guaranteed to have `pr_number = Some(_)`.
+    fn find_latest_with_pr_number(
+        &self,
+        issue_id: i64,
+        type_: ProcessRunType,
+    ) -> impl std::future::Future<Output = Result<Option<ProcessRun>>> + Send;
+
     /// Return all ProcessRuns for an issue, ordered by id ascending.
     fn find_by_issue(
         &self,
