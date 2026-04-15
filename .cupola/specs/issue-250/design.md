@@ -128,7 +128,9 @@ if matches!(type_, DesignFix | ImplFix) {
     if let Err(e) = worktree.fetch() {
         tracing::warn!(error = %e, "fetch failed before fixing merge, proceeding with stale origin");
     }
-    worktree.merge(wt_path, &config.default_branch)?;  // fetch 後に merge
+    if let Err(e) = worktree.merge(wt_path, &config.default_branch) {
+        tracing::warn!(error = %e, "merge failed after fetch in fixing spawn, proceeding");
+    }
 }
 ```
 
