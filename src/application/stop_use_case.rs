@@ -122,6 +122,23 @@ mod tests {
         fn is_process_alive(&self, _pid: u32) -> bool {
             *self.alive.lock().unwrap()
         }
+
+        fn write_pid_with_mode(
+            &self,
+            _pid: u32,
+            _mode: crate::application::port::pid_file::ProcessMode,
+        ) -> Result<(), PidFileError> {
+            Ok(())
+        }
+
+        fn read_pid_and_mode(
+            &self,
+        ) -> Result<
+            Option<(u32, Option<crate::application::port::pid_file::ProcessMode>)>,
+            PidFileError,
+        > {
+            Ok(self.pid.map(|p| (p, None)))
+        }
     }
 
     struct MockSignal {
