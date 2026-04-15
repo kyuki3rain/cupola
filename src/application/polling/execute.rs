@@ -581,6 +581,17 @@ where
     let pr_number_opt = get_pr_number_for_type(process_repo, issue.id, type_).await?;
     let mut has_merge_conflict = false;
     if matches!(type_, ProcessRunType::DesignFix | ProcessRunType::ImplFix) {
+        // Fetch latest remote refs so the subsequent merge uses a current
+        // origin/main rather than a potentially stale local copy.  Fetch
+        // failure is non-fatal: log a warning and fall through to merge so
+        // that transient network issues do not block the fixing spawn.
+        if let Err(e) = worktree.fetch() {
+            tracing::warn!(
+                error = %e,
+                "fetch failed before fixing merge, proceeding with stale origin"
+            );
+        }
+
         // Merge latest default branch. Distinguish conflict (expected, Claude
         // Code will resolve) from other failures (ref/IO/state — nothing we
         // can delegate).
@@ -737,7 +748,7 @@ mod tests {
 
     use anyhow::Result;
 
-    use super::{perform_init_sync, prepare_init_handle};
+    use super::{perform_init_sync, prepare_init_handle, prepare_process_spawn};
     use crate::application::port::file_generator::FileGenerator;
     use crate::application::port::git_worktree::GitWorktree;
     use crate::application::port::github_client::{
@@ -761,6 +772,7 @@ mod tests {
     struct MockGitWorktree {
         calls: CallLog,
         worktree_exists: bool,
+        fail_fetch: bool,
     }
 
     impl MockGitWorktree {
@@ -768,6 +780,7 @@ mod tests {
             Self {
                 calls,
                 worktree_exists: false,
+                fail_fetch: false,
             }
         }
 
@@ -775,6 +788,15 @@ mod tests {
             Self {
                 calls,
                 worktree_exists: true,
+                fail_fetch: false,
+            }
+        }
+
+        fn with_fail_fetch(calls: CallLog) -> Self {
+            Self {
+                calls,
+                worktree_exists: false,
+                fail_fetch: true,
             }
         }
     }
@@ -782,10 +804,14 @@ mod tests {
     impl GitWorktree for MockGitWorktree {
         fn fetch(&self) -> Result<()> {
             self.calls.lock().expect("lock").push("fetch".to_string());
+            if self.fail_fetch {
+                return Err(anyhow::anyhow!("simulated fetch failure"));
+            }
             Ok(())
         }
 
         fn merge(&self, _p: &Path, _b: &str) -> Result<()> {
+            self.calls.lock().expect("lock").push("merge".to_string());
             Ok(())
         }
 
@@ -1487,6 +1513,23 @@ mod tests {
         }
     }
 
+    /// `ClaudeCodeRunner` that always returns an error from `spawn`.
+    /// Used in `prepare_process_spawn` tests so we can observe git side-effects
+    /// without needing a real process to be created.
+    struct MockClaudeRunnerFailing;
+
+    impl crate::application::port::claude_code_runner::ClaudeCodeRunner for MockClaudeRunnerFailing {
+        fn spawn(
+            &self,
+            _: &str,
+            _: &Path,
+            _: Option<&str>,
+            _: &str,
+        ) -> Result<std::process::Child> {
+            Err(anyhow::anyhow!("spawn intentionally failed in test"))
+        }
+    }
+
     fn make_completed_issue_with_worktree(feature_name: &str, wt_path: &str) -> Issue {
         Issue {
             id: 1,
@@ -1650,6 +1693,139 @@ mod tests {
         assert!(
             metadata_updates.lock().expect("lock").is_empty(),
             "should not update metadata when worktree_path is None"
+        );
+    }
+
+    // ── Tests for prepare_process_spawn fetch-before-merge behaviour ─────────
+
+    fn make_fixing_issue(wt_path: &str) -> Issue {
+        let mut issue = Issue::new(42, "issue-42".to_string());
+        issue.id = 1;
+        issue.state = crate::domain::state::State::DesignFixing;
+        issue.worktree_path = Some(wt_path.to_string());
+        issue
+    }
+
+    /// T-fix.1: DesignFix spawn で fetch → merge の順序が保証されること（要件 2.1）
+    #[tokio::test]
+    async fn fixing_spawn_calls_fetch_before_merge() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wt_path = dir.path().to_str().expect("utf8");
+        let issue = make_fixing_issue(wt_path);
+        let config = make_test_config(dir.path());
+
+        let log: CallLog = Arc::new(Mutex::new(vec![]));
+        let worktree = MockGitWorktree::with_log(log.clone());
+        let github = MockGitHubForInit::new();
+        let proc_repo = MockProcRepo::new();
+
+        let _ = prepare_process_spawn(
+            &github,
+            &proc_repo,
+            &MockClaudeRunnerFailing,
+            &worktree,
+            &config,
+            &issue,
+            ProcessRunType::DesignFix,
+            &[],
+            None,
+        )
+        .await;
+
+        let calls = log.lock().expect("lock").clone();
+        let fetch_pos = calls.iter().position(|c| c == "fetch");
+        let merge_pos = calls.iter().position(|c| c == "merge");
+
+        assert!(
+            fetch_pos.is_some(),
+            "fetch should be called in DesignFix spawn, calls: {:?}",
+            calls
+        );
+        assert!(
+            merge_pos.is_some(),
+            "merge should be called in DesignFix spawn, calls: {:?}",
+            calls
+        );
+        assert!(
+            fetch_pos.unwrap() < merge_pos.unwrap(),
+            "fetch must be called before merge, calls: {:?}",
+            calls
+        );
+    }
+
+    /// T-fix.2: fetch が失敗しても merge が呼ばれること（要件 2.2）
+    #[tokio::test]
+    async fn fixing_spawn_continues_to_merge_when_fetch_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wt_path = dir.path().to_str().expect("utf8");
+        let issue = make_fixing_issue(wt_path);
+        let config = make_test_config(dir.path());
+
+        let log: CallLog = Arc::new(Mutex::new(vec![]));
+        let worktree = MockGitWorktree::with_fail_fetch(log.clone());
+        let github = MockGitHubForInit::new();
+        let proc_repo = MockProcRepo::new();
+
+        let _ = prepare_process_spawn(
+            &github,
+            &proc_repo,
+            &MockClaudeRunnerFailing,
+            &worktree,
+            &config,
+            &issue,
+            ProcessRunType::DesignFix,
+            &[],
+            None,
+        )
+        .await;
+
+        let calls = log.lock().expect("lock").clone();
+        assert!(
+            calls.contains(&"fetch".to_string()),
+            "fetch should be attempted even when it fails, calls: {:?}",
+            calls
+        );
+        assert!(
+            calls.contains(&"merge".to_string()),
+            "merge should be called even when fetch fails, calls: {:?}",
+            calls
+        );
+    }
+
+    /// T-fix.3: Design などの non-fixing spawn type では fetch が呼ばれないこと（要件 2.3）
+    #[tokio::test]
+    async fn non_fixing_spawn_does_not_call_fetch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wt_path = dir.path().to_str().expect("utf8");
+
+        // Design spawn type (non-fixing)
+        let mut issue = make_fixing_issue(wt_path);
+        issue.state = crate::domain::state::State::DesignRunning;
+        let config = make_test_config(dir.path());
+
+        let log: CallLog = Arc::new(Mutex::new(vec![]));
+        let worktree = MockGitWorktree::with_log(log.clone());
+        let github = MockGitHubForInit::new();
+        let proc_repo = MockProcRepo::new();
+
+        let _ = prepare_process_spawn(
+            &github,
+            &proc_repo,
+            &MockClaudeRunnerFailing,
+            &worktree,
+            &config,
+            &issue,
+            ProcessRunType::Design,
+            &[],
+            None,
+        )
+        .await;
+
+        let calls = log.lock().expect("lock").clone();
+        assert!(
+            !calls.contains(&"fetch".to_string()),
+            "fetch should NOT be called for non-fixing spawn types, calls: {:?}",
+            calls
         );
     }
 }
