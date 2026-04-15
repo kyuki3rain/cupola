@@ -11,7 +11,7 @@ use crate::application::init_task_manager::InitTaskManager;
 use crate::application::io::{clear_inputs_dir, write_issue_input, write_review_threads_input};
 use crate::application::port::claude_code_runner::ClaudeCodeRunner;
 use crate::application::port::file_generator::FileGenerator;
-use crate::application::port::git_worktree::GitWorktree;
+use crate::application::port::git_worktree::{GitWorktree, MergeConflictError};
 use crate::application::port::github_client::GitHubClient;
 use crate::application::port::issue_repository::IssueRepository;
 use crate::application::port::process_run_repository::ProcessRunRepository;
@@ -555,10 +555,22 @@ where
     let pr_number_opt = get_pr_number_for_type(process_repo, issue.id, type_).await?;
     let mut has_merge_conflict = false;
     if matches!(type_, ProcessRunType::DesignFix | ProcessRunType::ImplFix) {
-        // Merge latest default branch
+        // Merge latest default branch. Distinguish conflict (expected, Claude
+        // Code will resolve) from other failures (ref/IO/state — nothing we
+        // can delegate).
         if let Err(e) = worktree.merge(wt_path, &format!("origin/{}", config.default_branch)) {
-            tracing::warn!(error = %e, "merge failed before fixing spawn, proceeding anyway");
-            has_merge_conflict = true;
+            if e.downcast_ref::<MergeConflictError>().is_some() {
+                has_merge_conflict = true;
+                tracing::warn!(
+                    error = %e,
+                    "merge conflict detected before fixing spawn, delegating resolution to Claude Code"
+                );
+            } else {
+                tracing::warn!(
+                    error = %e,
+                    "merge failed before fixing spawn (non-conflict), proceeding anyway"
+                );
+            }
         }
 
         // Write review threads
