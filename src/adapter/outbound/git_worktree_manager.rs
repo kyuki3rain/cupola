@@ -61,6 +61,18 @@ impl GitWorktree for GitWorktreeManager {
     }
 
     fn merge(&self, worktree_path: &Path, branch: &str) -> Result<()> {
+        // Reject `origin/X` (and other remote prefixes) early. The caller
+        // contract is a plain branch name; the impl adds `origin/`. Passing
+        // a pre-prefixed name would run `git merge origin/origin/main`,
+        // which fails with exit code 1 and would be indistinguishable from
+        // a real conflict.
+        if branch.starts_with("origin/") {
+            return Err(anyhow!(
+                "GitWorktree::merge expects a plain branch name, got {:?} (callers must not include the 'origin/' prefix)",
+                branch
+            ));
+        }
+
         let remote_branch = format!("origin/{branch}");
         let output = Command::new("git")
             .args(["merge", "--no-edit", &remote_branch])
@@ -533,6 +545,34 @@ mod tests {
         assert!(
             result.unwrap_err().is::<MergeConflictError>(),
             "conflicting merge should return MergeConflictError"
+        );
+    }
+
+    /// Regression: callers must pass a plain branch name to merge(); an
+    /// `origin/X` prefix is a misuse that `merge()` rejects up-front.
+    ///
+    /// Before this guard was added, passing `origin/main` would run
+    /// `git merge origin/origin/main`, which fails with exit code 1 — the
+    /// SAME code as a real merge conflict — and surfaced as a spurious
+    /// `MergeConflictError` in the fixing-spawn path (issue #248).  The
+    /// explicit up-front rejection makes the misuse impossible to confuse
+    /// with a genuine conflict.
+    #[test]
+    fn merge_rejects_origin_prefix_up_front() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_git_repo(repo_dir.path());
+        set_initial_branch_main(repo_dir.path());
+
+        let mgr = GitWorktreeManager::new(repo_dir.path());
+        let result = mgr.merge(repo_dir.path(), "origin/main");
+        let err = result.expect_err("origin/-prefixed branch name must be rejected");
+        assert!(
+            !err.is::<MergeConflictError>(),
+            "misuse must not be reported as a conflict"
+        );
+        assert!(
+            err.to_string().contains("plain branch name"),
+            "error should mention the plain-branch-name contract, got: {err}"
         );
     }
 
