@@ -1792,7 +1792,7 @@ mod tests {
         );
     }
 
-    /// T-fix.3: SpawnInit では fetch が呼ばれないこと（要件 2.3）
+    /// T-fix.3: Design などの non-fixing spawn type では fetch が呼ばれないこと（要件 2.3）
     #[tokio::test]
     async fn non_fixing_spawn_does_not_call_fetch() {
         let dir = tempfile::tempdir().expect("tempdir");
