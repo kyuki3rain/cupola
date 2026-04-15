@@ -536,6 +536,66 @@ mod tests {
         );
     }
 
+    /// Regression: callers must pass a plain branch name to merge(), NOT
+    /// an `origin/X` prefix.  The implementation prepends `origin/` itself,
+    /// so passing `origin/main` would attempt `git merge origin/origin/main`
+    /// which fails with exit code 1 — the SAME code as a real merge conflict.
+    /// This previously surfaced as a spurious MergeConflictError in the
+    /// fixing-spawn path (see issue #248).
+    #[test]
+    fn merge_with_origin_prefix_produces_spurious_conflict_error() {
+        let origin_dir = tempfile::tempdir().unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "--bare"])
+                .current_dir(origin_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_git_repo(repo_dir.path());
+        set_initial_branch_main(repo_dir.path());
+        assert!(
+            Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    origin_dir.path().to_str().unwrap(),
+                ])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        make_commit(repo_dir.path(), "a.txt", "seed", "init");
+        assert!(
+            Command::new("git")
+                .args(["push", "-u", "origin", "main"])
+                .current_dir(repo_dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let mgr = GitWorktreeManager::new(repo_dir.path());
+        // Caller mistake: pass already-prefixed branch name.
+        let result = mgr.merge(repo_dir.path(), "origin/main");
+        assert!(
+            result.is_err(),
+            "merge with double-origin prefix should fail"
+        );
+        // git emits exit code 1 for "not something we can merge", which the
+        // implementation cannot distinguish from a real conflict. This test
+        // documents the trap so callers know to pass a plain branch name.
+        assert!(
+            result.unwrap_err().is::<MergeConflictError>(),
+            "double-origin prefix surfaces as MergeConflictError — callers must pass plain branch name"
+        );
+    }
+
     /// T-4.WT.1: fetch_and_merge — conflict path returns Ok (merge state left for Claude to resolve).
     /// This mirrors merge_conflict_returns_err but uses the public fetch+merge sequence.
     #[test]

@@ -584,7 +584,7 @@ where
         // Merge latest default branch. Distinguish conflict (expected, Claude
         // Code will resolve) from other failures (ref/IO/state — nothing we
         // can delegate).
-        if let Err(e) = worktree.merge(wt_path, &format!("origin/{}", config.default_branch)) {
+        if let Err(e) = worktree.merge(wt_path, &config.default_branch) {
             if e.downcast_ref::<MergeConflictError>().is_some() {
                 has_merge_conflict = true;
                 tracing::warn!(

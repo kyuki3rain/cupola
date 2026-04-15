@@ -10,6 +10,13 @@ pub struct MergeConflictError;
 
 pub trait GitWorktree: Send + Sync {
     fn fetch(&self) -> Result<()>;
+    /// Merge `origin/{branch}` into the worktree.
+    ///
+    /// `branch` must be the plain branch name (e.g. `"main"`). Do NOT include
+    /// the `origin/` prefix — the implementation adds it. Passing
+    /// `"origin/main"` would attempt `git merge origin/origin/main`, which
+    /// fails with exit code 1 (the same as a real merge conflict) and
+    /// therefore surfaces as a spurious [`MergeConflictError`].
     fn merge(&self, worktree_path: &Path, branch: &str) -> Result<()>;
     fn exists(&self, path: &Path) -> bool;
     fn create(&self, path: &Path, branch: &str, start_point: &str) -> Result<()>;
