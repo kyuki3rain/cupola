@@ -819,9 +819,9 @@ fn check_daemon_not_running(
 /// (e.g. inside the polling loop) does not leave a stale PID file behind.
 ///
 /// # Behaviour
-/// 1. Logs the panic message and location via `tracing::error!` (no-op when the
-///    subscriber is not yet initialised) and `eprintln!` as a fallback.
-/// 2. Deletes the PID file (best-effort; errors are silently ignored).
+/// 1. Deletes the PID file (best-effort; errors are silently ignored).
+/// 2. Logs the panic message and location via `tracing::error!` (no-op when the
+///    subscriber is not yet initialised).
 /// 3. Invokes the previously-installed hook so that the default panic output
 ///    (stack trace to stderr) is preserved.
 pub fn install_panic_hook(pid_path: std::path::PathBuf) {
@@ -831,6 +831,12 @@ pub fn install_panic_hook(pid_path: std::path::PathBuf) {
     let previous_hook = std::panic::take_hook();
 
     std::panic::set_hook(Box::new(move |panic_info| {
+        // Best-effort PID file cleanup first — do this before any I/O that
+        // could itself panic (e.g. eprintln! on a broken pipe), so cleanup
+        // is never skipped due to a secondary failure.  Errors are silently
+        // ignored so the original panic is never obscured.
+        let _ = PidFileManager::new(pid_path.clone()).delete_pid();
+
         // Build a human-readable panic message from the payload.
         let msg: String = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
             (*s).to_string()
@@ -847,17 +853,13 @@ pub fn install_panic_hook(pid_path: std::path::PathBuf) {
                 line = loc.line(),
                 "daemon panicked"
             );
-            eprintln!("PANIC at {}:{}: {}", loc.file(), loc.line(), msg);
         } else {
             tracing::error!(message = %msg, "daemon panicked");
-            eprintln!("PANIC: {msg}");
         }
 
-        // Best-effort PID file cleanup — ignore errors so the original panic
-        // is never obscured by a secondary failure.
-        let _ = PidFileManager::new(pid_path.clone()).delete_pid();
-
         // Preserve the default panic behaviour (stderr backtrace / abort).
+        // The default hook already writes the panic message to stderr, so
+        // there is no need for an additional eprintln! here.
         previous_hook(panic_info);
     }));
 }
