@@ -1168,7 +1168,8 @@ mod tests {
         async fn observe_pr(
             &self,
             _: u64,
-        ) -> anyhow::Result<Option<crate::application::port::github_client::PrObservation>> {
+        ) -> anyhow::Result<Option<crate::application::port::github_client::PrObservation>>
+        {
             Ok(None)
         }
     }

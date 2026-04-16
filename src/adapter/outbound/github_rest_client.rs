@@ -88,42 +88,42 @@ impl OctocrabRestClient {
     }
 
     /// Fetch all open issues (not PRs) with full pagination.
+    /// Uses octocrab's `next` page link for reliable pagination instead of
+    /// relying on page size heuristics.
     pub async fn list_open_issues(&self) -> Result<Vec<OpenIssueInfo>> {
         let mut all_issues = Vec::new();
-        let mut page_num = 1u32;
+
+        let mut page = self
+            .octocrab
+            .issues(&self.owner, &self.repo)
+            .list()
+            .state(octocrab::params::State::Open)
+            .per_page(100)
+            .send()
+            .await
+            .context("failed to list open issues")?;
 
         loop {
-            let page = self
-                .octocrab
-                .issues(&self.owner, &self.repo)
-                .list()
-                .state(octocrab::params::State::Open)
-                .per_page(100)
-                .page(page_num)
-                .send()
-                .await
-                .with_context(|| {
-                    format!("failed to list open issues (page {page_num})")
-                })?;
-
-            let items = page.items;
-            let is_last = items.len() < 100;
-
-            for issue in items {
+            for issue in &page {
                 // GitHub Issues API includes PRs — filter them out
                 if issue.pull_request.is_some() {
                     continue;
                 }
                 all_issues.push(OpenIssueInfo {
                     number: issue.number,
-                    labels: issue.labels.into_iter().map(|l| l.name).collect(),
+                    labels: issue.labels.iter().map(|l| l.name.clone()).collect(),
                 });
             }
 
-            if is_last {
-                break;
-            }
-            page_num += 1;
+            page = match self
+                .octocrab
+                .get_page::<octocrab::models::issues::Issue>(&page.next)
+                .await
+                .context("failed to fetch next page of open issues")?
+            {
+                Some(next_page) => next_page,
+                None => break,
+            };
         }
 
         Ok(all_issues)

@@ -18,7 +18,10 @@ pub fn decide(prev: &Issue, snap: &WorldSnapshot, cfg: &Config) -> Decision {
     let mut metadata_updates = MetadataUpdates::default();
 
     // Cross-cutting: propagate weight change (only meaningful for open issues)
-    if let GithubIssueSnapshot::Open { weight: Some(snap_weight), .. } = &snap.github_issue
+    if let GithubIssueSnapshot::Open {
+        weight: Some(snap_weight),
+        ..
+    } = &snap.github_issue
         && *snap_weight != prev.weight
     {
         metadata_updates.weight = Some(*snap_weight);

@@ -48,21 +48,18 @@ where
 {
     // Step 1: Fetch all open issues (single paginated REST call).
     // Build a set of open issue numbers and a map of issue_number → labels.
-    let (open_numbers, labels_map) = match github.list_open_issues().await {
-        Ok(open_issues) => {
-            let mut numbers = HashSet::new();
-            let mut labels = HashMap::new();
-            for oi in open_issues {
-                numbers.insert(oi.number);
-                labels.insert(oi.number, oi.labels);
-            }
-            (numbers, labels)
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "list_open_issues failed, skipping this cycle");
-            return Ok(Vec::new());
-        }
-    };
+    // On failure, propagate the error to abort collect (and thus decide/execute).
+    // The resolve phase has already completed at this point, so async process
+    // resolution is unaffected. Falling back to an empty open set would cause
+    // all active issues to be observed as Closed, triggering unintended
+    // Cancelled transitions.
+    let open_issues = github.list_open_issues().await?;
+    let mut open_numbers = HashSet::new();
+    let mut labels_map = HashMap::new();
+    for oi in open_issues {
+        open_numbers.insert(oi.number);
+        labels_map.insert(oi.number, oi.labels);
+    }
 
     // Step 2: Discovery — find open issues with agent:ready that are not yet in DB.
     const READY_LABEL: &str = "agent:ready";
@@ -81,10 +78,7 @@ where
                         "failed to insert newly-discovered ready issue"
                     );
                 } else {
-                    tracing::info!(
-                        issue_number,
-                        "discovered new ready issue, inserted as Idle"
-                    );
+                    tracing::info!(issue_number, "discovered new ready issue, inserted as Idle");
                 }
             }
             Err(e) => tracing::warn!(
@@ -103,8 +97,7 @@ where
         let n = issue.github_issue_number;
         let is_open = open_numbers.contains(&n);
         let is_terminal = issue.state.is_terminal();
-        let is_converged =
-            issue.worktree_path.is_none() && issue.close_finished;
+        let is_converged = issue.worktree_path.is_none() && issue.close_finished;
 
         // Skip fully-converged terminal issues that are closed
         if is_terminal && is_converged && !is_open {
@@ -152,7 +145,8 @@ where
     let id = issue.id;
 
     // --- GithubIssueSnapshot ---
-    let github_issue = observe_github_issue(github, config, issue.github_issue_number, is_open, labels).await?;
+    let github_issue =
+        observe_github_issue(github, config, issue.github_issue_number, is_open, labels).await?;
 
     // --- PR observation ---
     // Always observe PRs for active issues (even if closed — merged impl PR → Completed).
@@ -165,8 +159,7 @@ where
     let (design_pr, impl_pr) = if should_observe_prs {
         let d =
             observe_pr_for_type(github, process_repo, config, id, ProcessRunType::Design).await?;
-        let i =
-            observe_pr_for_type(github, process_repo, config, id, ProcessRunType::Impl).await?;
+        let i = observe_pr_for_type(github, process_repo, config, id, ProcessRunType::Impl).await?;
         (d, i)
     } else {
         (None, None)
@@ -890,12 +883,14 @@ mod tests {
             n: u64,
         ) -> Result<Option<crate::application::port::github_client::PrObservation>> {
             self.observe_pr_calls.lock().unwrap().push(n);
-            Ok(Some(crate::application::port::github_client::PrObservation {
-                state: PrStatus::Open,
-                mergeable: Some(true),
-                unresolved_threads: vec![],
-                check_runs: vec![],
-            }))
+            Ok(Some(
+                crate::application::port::github_client::PrObservation {
+                    state: PrStatus::Open,
+                    mergeable: Some(true),
+                    unresolved_threads: vec![],
+                    check_runs: vec![],
+                },
+            ))
         }
     }
 

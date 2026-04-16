@@ -23,8 +23,8 @@ use cupola::domain::process_run::{ProcessRun, ProcessRunState, ProcessRunType};
 use cupola::domain::state::State;
 use cupola::domain::task_weight::TaskWeight;
 use cupola::domain::world_snapshot::{
-    CiStatus, GithubIssueSnapshot, PrSnapshot, PrState, ProcessSnapshot,
-    ProcessesSnapshot, WorldSnapshot,
+    CiStatus, GithubIssueSnapshot, PrSnapshot, PrState, ProcessSnapshot, ProcessesSnapshot,
+    WorldSnapshot,
 };
 
 fn setup_db() -> (SqliteIssueRepository, SqliteProcessRunRepository) {
