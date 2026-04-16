@@ -1,42 +1,37 @@
 # Implementation Plan
 
 - [ ] 1. 共通ヘルパー関数を抽出する
-- [ ] 1.1 マージコンフリクト解消セクション生成を `build_conflict_section` として切り出す
-  - `build_fixing_prompt` 内の `conflict_section` 生成ロジックを `fn build_conflict_section(has_merge_conflict: bool, default_branch: &str) -> String` として抽出する
-  - 既存ロジックを変更せずそのまま移植する
+- [ ] 1.1 マージコンフリクト解消セクション生成ロジックをプライベートヘルパーとして抽出する
+  - 既存のマージコンフリクト解消セクション生成ロジックを独立したプライベート関数に切り出す
+  - 挙動は変えずそのまま移植する（リファクタリングのみ、動作の変更なし）
   - _Requirements: 3.1_
 
-- [ ] 1.2 (P) causes から指示文リストを生成する `build_instructions_text` を切り出す
-  - `build_fixing_prompt` 内の `instructions_text` 生成ロジックを `fn build_instructions_text(causes: &[FixingProblemKind]) -> String` として抽出する
-  - 既存ロジックを変更せずそのまま移植する
+- [ ] 1.2 (P) causes から指示文リストを生成するロジックをプライベートヘルパーとして抽出する
+  - 既存の causes-to-instructions 変換ロジックを独立したプライベート関数に切り出す
+  - 挙動は変えずそのまま移植する（リファクタリングのみ）
   - _Requirements: 3.2, 3.3_
 
-- [ ] 1.3 (P) output-schema セクション生成を `build_output_section` として切り出す
-  - `build_fixing_prompt` 内の `output_section` 生成ロジックを `fn build_output_section(causes: &[FixingProblemKind], language: &str) -> String` として抽出する
-  - 既存ロジックを変更せずそのまま移植する
+- [ ] 1.3 (P) output-schema セクション生成ロジックをプライベートヘルパーとして抽出する
+  - 既存の output-schema セクション生成ロジックを独立したプライベート関数に切り出す
+  - 挙動は変えずそのまま移植する（リファクタリングのみ）
   - _Requirements: 3.2, 3.3_
 
-- [ ] 2. `build_design_fixing_prompt` を実装する
-- [ ] 2.1 DesignFixing 専用プロンプト関数を新規作成する
-  - `fn build_design_fixing_prompt(issue_number: u64, pr_number: u64, language: &str, causes: &[FixingProblemKind], has_merge_conflict: bool, default_branch: &str) -> String` を追加する
-  - プロンプト文言を設計ドキュメント修正向けに変更する（「Apply the necessary fixes to the design documents」相当）
-  - コミット指示を `git commit -m "docs: address requested changes"` とする
-  - `GENERIC_QUALITY_CHECK_INSTRUCTION` を品質チェック指示として使用する
+- [ ] 2. DesignFixing 専用プロンプト生成を実装する
+  - 設計ドキュメント修正に特化した文言（コード修正表現を除く）を含むプロンプトを生成する機能を追加する
+  - コミット指示は `docs:` プレフィックスを用いる
+  - 品質チェック指示として AGENTS.md / CLAUDE.md 参照の汎用指示を使用する
   - タスク 1 で抽出したヘルパーを呼び出してセクションを組み立てる
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7_
 
-- [ ] 3. `build_implementation_fixing_prompt` を実装する
-- [ ] 3.1 ImplementationFixing 専用プロンプト関数を新規作成する
-  - `fn build_implementation_fixing_prompt(issue_number: u64, pr_number: u64, language: &str, causes: &[FixingProblemKind], has_merge_conflict: bool, default_branch: &str) -> String` を追加する
-  - 現行 `build_fixing_prompt` の文言・構造を維持する（コミット指示 `fix:` を含む）
+- [ ] 3. ImplementationFixing 専用プロンプト生成を実装する
+  - 実装コード修正に特化した文言を含むプロンプトを生成する機能を追加する（現行と同等の内容）
+  - コミット指示は `fix:` プレフィックスを用いる（現状維持）
   - タスク 1 で抽出したヘルパーを呼び出してセクションを組み立てる
   - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7_
 
-- [ ] 4. `build_session_config` の呼び出し先を切り替える
-- [ ] 4.1 `State::DesignFixing` の分岐で `build_design_fixing_prompt` を呼ぶよう変更する
-  - `build_session_config` 内の `State::DesignFixing` 分岐を `build_design_fixing_prompt` 呼び出しに変更する
-  - `State::ImplementationFixing` 分岐を `build_implementation_fixing_prompt` 呼び出しに変更する
-  - 旧 `build_fixing_prompt` を削除する
+- [ ] 4. セッション設定の分岐先を fixing 種別ごとのプロンプト生成に切り替える
+  - `State::DesignFixing` では設計ドキュメント修正向けプロンプトを、`State::ImplementationFixing` では実装コード修正向けプロンプトを生成するよう分岐を変更する
+  - 旧共通プロンプト生成関数を削除する
   - _Requirements: 1.1, 2.1, 3.5_
 
 - [ ] 5. テストを整備する

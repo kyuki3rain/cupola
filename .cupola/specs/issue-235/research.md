@@ -10,7 +10,7 @@
 - **Discovery Scope**: Extension（既存関数の分割・最適化）
 - **Key Findings**:
   - `build_fixing_prompt` は `DesignFixing` と `ImplementationFixing` の両状態で共有されているが、修正対象（設計ドキュメント vs. 実装コード）が根本的に異なる
-  - 現状の `GENERIC_QUALITY_CHECK_INSTRUCTION` はコード向けであり、設計ドキュメント修正エージェントには不適切
+  - 現状の `GENERIC_QUALITY_CHECK_INSTRUCTION` は "quality checks described in AGENTS.md / CLAUDE.md" という汎用文言であり、設計フェーズでも共用可能（修正対象の説明文言とコミットプレフィックスが両種別の主な差分）
   - コミットメッセージプレフィックスが `fix:` に固定されており、ドキュメント修正には `docs:` が適切
   - マージコンフリクト処理・causes 解析・output-schema 生成は両種別で共通であり、内部ヘルパーとして再利用可能
 
