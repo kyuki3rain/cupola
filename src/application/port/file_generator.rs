@@ -7,9 +7,11 @@ pub trait FileGenerator: Send + Sync {
     /// cupola.toml テンプレートを生成する（冪等）。
     fn generate_toml_template(&self) -> Result<bool>;
     /// Claude Code 向けの Cupola assets を導入する（冪等）。
-    fn install_claude_code_assets(&self) -> Result<bool>;
+    /// `upgrade=true` の場合、既存の Cupola 管理ファイルを最新版で上書きする。
+    fn install_claude_code_assets(&self, upgrade: bool) -> Result<bool>;
     /// .gitignore に cupola エントリを追記する（冪等）。
-    fn append_gitignore_entries(&self) -> Result<bool>;
+    /// `upgrade=true` の場合、既存の cupola セクションを最新版で置き換える。
+    fn append_gitignore_entries(&self, upgrade: bool) -> Result<bool>;
     /// spec ディレクトリ（spec.json + requirements.md）を生成する（冪等）。
     fn generate_spec_directory(
         &self,
