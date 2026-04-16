@@ -57,6 +57,7 @@ PrSnapshot {
 
 **GraphQL クエリの取得上限**:
 - `reviewThreads`: カーソルベースのページネーションで全件取得する（上限なし）
+- `comments(first: 100)`: 1 スレッドあたり最大 100 コメント。通常のレビュースレッドでこの上限に達するのは稀だが、100 コメントを超える長い議論スレッドでは一部のコメントが観測されず、古い返信を見逃す可能性がある。trust 判定は取得済みコメントのみで行われるため、trusted actor のコメントが 100 件以降にしかない場合、スレッド全体が無視される
 - `checkSuites(first: 10)`: 1 コミットあたり最大 10 check suite。GitHub App / workflow ごとに 1 suite が作成されるため、通常のリポジトリではこの上限に達しない。10 を超える GitHub App が同一リポジトリに接続されている場合、一部の suite が観測されない可能性がある
 - `checkRuns(first: 100)`: 1 suite あたり最大 100 check run。1 workflow 内のジョブ数に相当し、通常この上限に達しない。100 を超えるジョブを持つ workflow では一部の run が観測されず、CI failure を見逃す可能性がある
 
