@@ -64,6 +64,10 @@ pub enum Command {
         /// Agent runtime to install assets for
         #[arg(long, value_enum, default_value_t = InitAgent::ClaudeCode)]
         agent: InitAgent,
+        /// Overwrite Cupola-managed files (rules, templates, commands) with the latest bundled versions.
+        /// User-owned files (cupola.toml, steering/, specs/) are never overwritten.
+        #[arg(long, default_value_t = false)]
+        upgrade: bool,
     },
     /// Show status of all issues
     Status,
@@ -194,23 +198,48 @@ mod tests {
     #[test]
     fn parse_init_command() {
         let cli = Cli::parse_from(["cupola", "init"]);
-        assert!(matches!(
-            cli.command,
-            Command::Init {
-                agent: InitAgent::ClaudeCode
+        match cli.command {
+            Command::Init { agent, upgrade } => {
+                assert_eq!(agent, InitAgent::ClaudeCode);
+                assert!(!upgrade, "--upgrade should default to false");
             }
-        ));
+            _ => panic!("expected Init command"),
+        }
     }
 
     #[test]
     fn parse_init_with_agent() {
         let cli = Cli::parse_from(["cupola", "init", "--agent", "claude-code"]);
-        assert!(matches!(
-            cli.command,
-            Command::Init {
-                agent: InitAgent::ClaudeCode
+        match cli.command {
+            Command::Init { agent, upgrade } => {
+                assert_eq!(agent, InitAgent::ClaudeCode);
+                assert!(!upgrade);
             }
-        ));
+            _ => panic!("expected Init command"),
+        }
+    }
+
+    #[test]
+    fn parse_init_with_upgrade_flag() {
+        let cli = Cli::parse_from(["cupola", "init", "--upgrade"]);
+        match cli.command {
+            Command::Init { upgrade, .. } => {
+                assert!(upgrade, "--upgrade flag should set upgrade to true");
+            }
+            _ => panic!("expected Init command"),
+        }
+    }
+
+    #[test]
+    fn parse_init_with_agent_and_upgrade() {
+        let cli = Cli::parse_from(["cupola", "init", "--agent", "claude-code", "--upgrade"]);
+        match cli.command {
+            Command::Init { agent, upgrade } => {
+                assert_eq!(agent, InitAgent::ClaudeCode);
+                assert!(upgrade);
+            }
+            _ => panic!("expected Init command"),
+        }
     }
 
     #[test]

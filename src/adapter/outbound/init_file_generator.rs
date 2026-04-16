@@ -249,6 +249,52 @@ const GITIGNORE_ENTRIES: &str = r#"# cupola
 .cupola/inputs/
 "#;
 
+/// `.gitignore` 内の Cupola 管理ブロックを `new_entries` で置き換える。
+///
+/// ブロックはマーカー行から始まり、最初の空行（またはファイル末尾）で終わる。
+/// マーカーより前の行およびブロック終端以降の行はそのまま保持される。
+fn replace_cupola_block(content: &str, new_entries: &str, line_ending: &str) -> String {
+    let ends_with_newline = content.ends_with('\n');
+    let lines: Vec<&str> = content.lines().collect();
+
+    let Some(marker_idx) = lines.iter().position(|l| *l == GITIGNORE_MARKER) else {
+        // マーカーが見つからない場合は末尾に追記する（呼び出し元の事前条件違反への安全なフォールバック）
+        let separator = if content.ends_with('\n') {
+            ""
+        } else {
+            line_ending
+        };
+        return format!("{content}{separator}{new_entries}");
+    };
+
+    // ブロック終端: マーカーより後の最初の空行、または EOF
+    let block_end_idx = lines[marker_idx + 1..]
+        .iter()
+        .position(|l| l.is_empty())
+        .map(|rel| marker_idx + 1 + rel)
+        .unwrap_or(lines.len());
+
+    let before_lines = &lines[..marker_idx];
+    let after_lines = &lines[block_end_idx..]; // 空行セパレータも含む
+
+    let mut result = String::new();
+
+    if !before_lines.is_empty() {
+        result.push_str(&before_lines.join(line_ending));
+        result.push_str(line_ending);
+    }
+    result.push_str(new_entries); // new_entries は line_ending で終わることが保証されている
+
+    if !after_lines.is_empty() {
+        result.push_str(&after_lines.join(line_ending));
+        if ends_with_newline {
+            result.push_str(line_ending);
+        }
+    }
+
+    result
+}
+
 #[derive(Clone)]
 pub struct InitFileGenerator {
     base_dir: PathBuf,
@@ -274,12 +320,12 @@ impl InitFileGenerator {
         Ok(true)
     }
 
-    pub fn install_claude_code_assets(&self) -> Result<bool> {
+    pub fn install_claude_code_assets(&self, upgrade: bool) -> Result<bool> {
         let mut wrote_any = false;
 
         for (relative_path, content) in CLAUDE_CODE_ASSETS {
             let path = self.base_dir.join(relative_path);
-            if path.exists() {
+            if path.exists() && !upgrade {
                 continue;
             }
 
@@ -309,14 +355,18 @@ impl InitFileGenerator {
         Ok(wrote_any)
     }
 
-    pub fn append_gitignore_entries(&self) -> Result<bool> {
+    pub fn append_gitignore_entries(&self, upgrade: bool) -> Result<bool> {
         let gitignore_path = self.base_dir.join(".gitignore");
 
         if gitignore_path.exists() {
             let content = std::fs::read_to_string(&gitignore_path).with_context(|| {
                 format!("failed to read .gitignore at {}", gitignore_path.display())
             })?;
-            if content.contains(GITIGNORE_MARKER) || content.contains(GITIGNORE_CONTENT_CHECK) {
+            // Use line-based matching to avoid false positives from substring matches
+            // (e.g. a comment like "# see .cupola/cupola.db" should not trigger detection)
+            let has_marker = content.lines().any(|l| l == GITIGNORE_MARKER);
+            let has_cupola = has_marker || content.lines().any(|l| l == GITIGNORE_CONTENT_CHECK);
+            if has_cupola && !upgrade {
                 tracing::info!(
                     path = %gitignore_path.display(),
                     "cupola entries already present in .gitignore, skipping"
@@ -328,18 +378,22 @@ impl InitFileGenerator {
             } else {
                 "\n"
             };
-            let separator = if content.ends_with('\n') {
-                ""
-            } else {
-                line_ending
-            };
             let entries = GITIGNORE_ENTRIES.replace('\n', line_ending);
-            let new_content = format!("{content}{separator}{entries}");
+            let new_content = if has_marker && upgrade {
+                // upgrade=true かつマーカーあり: マーカー行から最初の空行（またはEOF）までの
+                // Cupola 管理ブロックのみを新しいエントリで置き換え、それ以外は保持する
+                replace_cupola_block(&content, &entries, line_ending)
+            } else {
+                // マーカーなし（または upgrade=false）: 末尾に追記
+                let separator = if content.ends_with('\n') {
+                    ""
+                } else {
+                    line_ending
+                };
+                format!("{content}{separator}{entries}")
+            };
             std::fs::write(&gitignore_path, new_content).with_context(|| {
-                format!(
-                    "failed to append to .gitignore at {}",
-                    gitignore_path.display()
-                )
+                format!("failed to write .gitignore at {}", gitignore_path.display())
             })?;
         } else {
             std::fs::write(&gitignore_path, GITIGNORE_ENTRIES).with_context(|| {
@@ -434,12 +488,12 @@ impl FileGenerator for InitFileGenerator {
         InitFileGenerator::generate_toml_template(self)
     }
 
-    fn install_claude_code_assets(&self) -> Result<bool> {
-        InitFileGenerator::install_claude_code_assets(self)
+    fn install_claude_code_assets(&self, upgrade: bool) -> Result<bool> {
+        InitFileGenerator::install_claude_code_assets(self, upgrade)
     }
 
-    fn append_gitignore_entries(&self) -> Result<bool> {
-        InitFileGenerator::append_gitignore_entries(self)
+    fn append_gitignore_entries(&self, upgrade: bool) -> Result<bool> {
+        InitFileGenerator::append_gitignore_entries(self, upgrade)
     }
 
     fn generate_spec_directory(
@@ -512,7 +566,9 @@ mod tests {
     #[test]
     fn install_assets_writes_embedded_files() {
         let (tmp, generator) = setup();
-        let result = generator.install_claude_code_assets().expect("install");
+        let result = generator
+            .install_claude_code_assets(false)
+            .expect("install");
         assert!(result);
 
         assert!(
@@ -547,7 +603,9 @@ mod tests {
         fs::create_dir_all(existing.parent().expect("parent")).expect("create parent");
         fs::write(&existing, "existing").expect("write");
 
-        let result = generator.install_claude_code_assets().expect("install");
+        let result = generator
+            .install_claude_code_assets(false)
+            .expect("install");
         assert!(result);
         assert_eq!(fs::read_to_string(existing).expect("read"), "existing");
     }
@@ -555,15 +613,42 @@ mod tests {
     #[test]
     fn install_assets_returns_false_when_everything_exists() {
         let (_, generator) = setup();
-        generator.install_claude_code_assets().expect("first");
-        let result = generator.install_claude_code_assets().expect("second");
+        generator.install_claude_code_assets(false).expect("first");
+        let result = generator.install_claude_code_assets(false).expect("second");
         assert!(!result);
+    }
+
+    #[test]
+    fn install_assets_upgrade_overwrites_existing_managed_files() {
+        let (tmp, generator) = setup();
+        // 1回目: 通常インストール
+        generator
+            .install_claude_code_assets(false)
+            .expect("first install");
+
+        // Cupola 管理ファイルを書き換え
+        let spec_design = tmp
+            .path()
+            .join(".claude")
+            .join("commands")
+            .join("cupola")
+            .join("spec-design.md");
+        fs::write(&spec_design, "old content").expect("write old content");
+
+        // upgrade=true: 管理ファイルが上書きされる
+        let result = generator.install_claude_code_assets(true).expect("upgrade");
+        assert!(result, "upgrade should report files were written");
+        assert_ne!(
+            fs::read_to_string(&spec_design).expect("read"),
+            "old content",
+            "managed file should be overwritten on upgrade"
+        );
     }
 
     #[test]
     fn gitignore_appends_entries_when_absent() {
         let (tmp, generator) = setup();
-        let result = generator.append_gitignore_entries().expect("append");
+        let result = generator.append_gitignore_entries(false).expect("append");
         assert!(result);
 
         let gitignore_path = tmp.path().join(".gitignore");
@@ -580,7 +665,7 @@ mod tests {
         let gitignore_path = tmp.path().join(".gitignore");
         assert!(!gitignore_path.exists());
 
-        let result = generator.append_gitignore_entries().expect("append");
+        let result = generator.append_gitignore_entries(false).expect("append");
         assert!(result);
         assert!(gitignore_path.exists());
     }
@@ -591,7 +676,7 @@ mod tests {
         let gitignore_path = tmp.path().join(".gitignore");
         fs::write(&gitignore_path, "# cupola\n.cupola/cupola.db\n").expect("write");
 
-        let result = generator.append_gitignore_entries().expect("append");
+        let result = generator.append_gitignore_entries(false).expect("append");
         assert!(!result);
         assert_eq!(
             fs::read_to_string(&gitignore_path).expect("read"),
@@ -605,12 +690,80 @@ mod tests {
         let gitignore_path = tmp.path().join(".gitignore");
         fs::write(&gitignore_path, "node_modules/\n").expect("write");
 
-        let result = generator.append_gitignore_entries().expect("append");
+        let result = generator.append_gitignore_entries(false).expect("append");
         assert!(result);
 
         let content = fs::read_to_string(&gitignore_path).expect("read");
         assert!(content.contains("node_modules/"));
         assert!(content.contains(GITIGNORE_MARKER));
+    }
+
+    #[test]
+    fn gitignore_upgrade_replaces_existing_cupola_section() {
+        let (tmp, generator) = setup();
+        let gitignore_path = tmp.path().join(".gitignore");
+        fs::write(&gitignore_path, "node_modules/\n# cupola\nold-entry\n").expect("write");
+
+        let result = generator.append_gitignore_entries(true).expect("upgrade");
+        assert!(result, "upgrade should report the file was written");
+
+        let content = fs::read_to_string(&gitignore_path).expect("read");
+        assert!(
+            content.contains("node_modules/"),
+            "non-cupola entries preserved"
+        );
+        assert!(!content.contains("old-entry"), "old cupola entries removed");
+        assert!(
+            content.contains(".cupola/cupola.db"),
+            "new cupola entries present"
+        );
+    }
+
+    #[test]
+    fn gitignore_upgrade_preserves_content_after_cupola_section() {
+        let (tmp, generator) = setup();
+        let gitignore_path = tmp.path().join(".gitignore");
+        fs::write(
+            &gitignore_path,
+            "node_modules/\n# cupola\n.cupola/cupola.db\nold-entry\n\ndist/\nuser-rule/\n",
+        )
+        .expect("write");
+
+        let result = generator.append_gitignore_entries(true).expect("upgrade");
+        assert!(result);
+
+        let content = fs::read_to_string(&gitignore_path).expect("read");
+        assert!(
+            content.contains("node_modules/"),
+            "entries before cupola preserved"
+        );
+        assert!(!content.contains("old-entry"), "old cupola entries removed");
+        assert!(
+            content.contains(".cupola/cupola.db"),
+            "new cupola entries present"
+        );
+        assert!(
+            content.contains("dist/"),
+            "entries after cupola block preserved"
+        );
+        assert!(
+            content.contains("user-rule/"),
+            "entries after cupola block preserved"
+        );
+    }
+
+    #[test]
+    fn gitignore_upgrade_adds_section_when_absent() {
+        let (tmp, generator) = setup();
+        let gitignore_path = tmp.path().join(".gitignore");
+        fs::write(&gitignore_path, "node_modules/\n").expect("write");
+
+        let result = generator.append_gitignore_entries(true).expect("upgrade");
+        assert!(result);
+
+        let content = fs::read_to_string(&gitignore_path).expect("read");
+        assert!(content.contains("node_modules/"));
+        assert!(content.contains(".cupola/cupola.db"));
     }
 
     #[test]

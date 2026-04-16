@@ -875,11 +875,11 @@ mod tests {
             Ok(false)
         }
 
-        fn install_claude_code_assets(&self) -> Result<bool> {
+        fn install_claude_code_assets(&self, _upgrade: bool) -> Result<bool> {
             Ok(false)
         }
 
-        fn append_gitignore_entries(&self) -> Result<bool> {
+        fn append_gitignore_entries(&self, _upgrade: bool) -> Result<bool> {
             Ok(false)
         }
 

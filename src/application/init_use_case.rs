@@ -25,6 +25,8 @@ pub struct InitUseCase<D: DbInitializer, F: FileGenerator, R: CommandRunner> {
     file_gen: F,
     command_runner: R,
     init_agent: InitAgent,
+    /// `--upgrade` フラグ: Cupola 管理ファイルを最新版で上書きするかどうか。
+    upgrade: bool,
 }
 
 impl<D: DbInitializer, F: FileGenerator, R: CommandRunner> InitUseCase<D, F, R> {
@@ -35,6 +37,7 @@ impl<D: DbInitializer, F: FileGenerator, R: CommandRunner> InitUseCase<D, F, R> 
         file_gen: F,
         command_runner: R,
         init_agent: InitAgent,
+        upgrade: bool,
     ) -> Self {
         Self {
             base_dir,
@@ -43,6 +46,7 @@ impl<D: DbInitializer, F: FileGenerator, R: CommandRunner> InitUseCase<D, F, R> 
             file_gen,
             command_runner,
             init_agent,
+            upgrade,
         }
     }
 
@@ -71,12 +75,12 @@ impl<D: DbInitializer, F: FileGenerator, R: CommandRunner> InitUseCase<D, F, R> 
 
         let agent_assets_installed = self
             .file_gen
-            .install_claude_code_assets()
+            .install_claude_code_assets(self.upgrade)
             .context("failed to install Cupola agent assets")?;
 
         let gitignore_updated = self
             .file_gen
-            .append_gitignore_entries()
+            .append_gitignore_entries(self.upgrade)
             .context("failed to append .gitignore entries")?;
 
         let steering_bootstrap_message = self.bootstrap_steering()?;
@@ -146,6 +150,7 @@ mod tests {
             file_gen,
             runner,
             InitAgent::ClaudeCode,
+            false,
         );
         let report = uc.run().expect("run");
 
@@ -173,7 +178,7 @@ mod tests {
         fs::write(cupola_dir.join("cupola.toml"), "existing").expect("write toml");
         fs::write(tmp.path().join(".gitignore"), "# cupola\n").expect("write gitignore");
         InitFileGenerator::new(tmp.path().to_path_buf())
-            .install_claude_code_assets()
+            .install_claude_code_assets(false)
             .expect("install assets");
 
         let db = SqliteConnection::open_in_memory().expect("open db");
@@ -189,6 +194,7 @@ mod tests {
             file_gen,
             runner,
             InitAgent::ClaudeCode,
+            false,
         );
         let report = uc.run().expect("run");
 
@@ -226,6 +232,7 @@ mod tests {
             file_gen1,
             runner1,
             InitAgent::ClaudeCode,
+            false,
         );
         uc1.run().expect("first run");
 
@@ -249,6 +256,7 @@ mod tests {
             file_gen2,
             runner2,
             InitAgent::ClaudeCode,
+            false,
         );
         let report = uc2.run().expect("second run");
 
@@ -294,6 +302,7 @@ mod tests {
             file_gen,
             runner,
             InitAgent::ClaudeCode,
+            false,
         );
         let report = uc.run().expect("run");
 
@@ -316,6 +325,7 @@ mod tests {
             file_gen,
             runner,
             InitAgent::ClaudeCode,
+            false,
         );
         let report = uc.run().expect("run");
 
@@ -344,6 +354,7 @@ mod tests {
             file_gen,
             runner,
             InitAgent::ClaudeCode,
+            false,
         );
         let report = uc.run().expect("run");
         assert!(
@@ -367,6 +378,7 @@ mod tests {
             file_gen,
             runner,
             InitAgent::ClaudeCode,
+            false,
         );
         let report = uc.run().expect("run");
         assert!(report.gitignore_updated, "gitignore should be updated");
@@ -386,6 +398,7 @@ mod tests {
             file_gen,
             runner,
             InitAgent::ClaudeCode,
+            false,
         );
         let report = uc.run().expect("run");
         assert!(
@@ -410,6 +423,7 @@ mod tests {
             file_gen1,
             runner1,
             InitAgent::ClaudeCode,
+            false,
         );
         uc1.run().expect("first run");
 
@@ -424,12 +438,85 @@ mod tests {
             file_gen2,
             runner2,
             InitAgent::ClaudeCode,
+            false,
         );
         let report2 = uc2.run().expect("second run");
         // DB should not be re-initialized (already existed)
         assert!(
             !report2.db_initialized,
             "DB should not be re-initialized on second run"
+        );
+    }
+
+    /// --upgrade: Cupola 管理ファイルが上書きされ、ユーザー所有ファイルは保持される
+    #[test]
+    fn init_use_case_upgrade_overwrites_managed_files_preserves_user_owned() {
+        let tmp = TempDir::new().expect("temp dir");
+
+        // 1回目: 通常 init
+        let db1 = SqliteConnection::open_in_memory().expect("open db");
+        let file_gen1 = InitFileGenerator::new(tmp.path().to_path_buf());
+        let runner1 = MockCommandRunner::new();
+        let uc1 = InitUseCase::new(
+            tmp.path().to_path_buf(),
+            false,
+            db1,
+            file_gen1,
+            runner1,
+            InitAgent::ClaudeCode,
+            false,
+        );
+        uc1.run().expect("first run");
+
+        // Cupola 管理ファイルを古いコンテンツで上書き
+        let spec_design = tmp
+            .path()
+            .join(".claude")
+            .join("commands")
+            .join("cupola")
+            .join("spec-design.md");
+        fs::write(&spec_design, "old managed content").expect("write old managed");
+
+        // ユーザー所有ファイルをカスタム内容で上書き
+        let toml_path = tmp.path().join(".cupola").join("cupola.toml");
+        fs::write(&toml_path, "user customized toml").expect("write custom toml");
+
+        // 2回目: upgrade=true
+        let db2 = SqliteConnection::open_in_memory().expect("open db");
+        let file_gen2 = InitFileGenerator::new(tmp.path().to_path_buf());
+        let runner2 = MockCommandRunner::new();
+        let uc2 = InitUseCase::new(
+            tmp.path().to_path_buf(),
+            false,
+            db2,
+            file_gen2,
+            runner2,
+            InitAgent::ClaudeCode,
+            true,
+        );
+        let report = uc2.run().expect("upgrade run");
+
+        assert!(
+            report.agent_assets_installed,
+            "managed assets should be upgraded"
+        );
+        assert!(
+            !report.toml_created,
+            "user-owned toml should not be reported as created"
+        );
+
+        // Cupola 管理ファイルは上書きされる
+        assert_ne!(
+            fs::read_to_string(&spec_design).expect("read"),
+            "old managed content",
+            "managed file should be overwritten on upgrade"
+        );
+
+        // ユーザー所有ファイルは保持される
+        assert_eq!(
+            fs::read_to_string(&toml_path).expect("read"),
+            "user customized toml",
+            "user-owned cupola.toml must not be overwritten"
         );
     }
 }
