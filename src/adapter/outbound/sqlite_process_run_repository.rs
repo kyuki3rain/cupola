@@ -127,10 +127,7 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
         let error_message = run.error_message.clone();
 
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             conn.execute(
                 "INSERT INTO process_runs
                  (issue_id, type, idx, state, pid, pr_number, causes, error_message)
@@ -150,17 +147,19 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(conn.last_insert_rowid())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn update_pid(&self, run_id: i64, pid: u32) -> Result<()> {
         let db = self.db.clone();
         let pid_i64 = pid as i64;
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             conn.execute(
                 "UPDATE process_runs SET pid = ?1 WHERE id = ?2",
                 rusqlite::params![pid_i64, run_id],
@@ -169,17 +168,19 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn mark_succeeded(&self, run_id: i64, pr_number: Option<u64>) -> Result<()> {
         let db = self.db.clone();
         let pr = pr_number.map(|n| n as i64);
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             conn.execute(
                 "UPDATE process_runs
                  SET state = 'succeeded', pr_number = ?1, finished_at = datetime('now')
@@ -190,16 +191,18 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn mark_failed(&self, run_id: i64, error_message: Option<String>) -> Result<()> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             conn.execute(
                 "UPDATE process_runs
                  SET state = 'failed', error_message = ?1, finished_at = datetime('now')
@@ -210,16 +213,18 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn mark_stale(&self, run_id: i64) -> Result<()> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             conn.execute(
                 "UPDATE process_runs
                  SET state = 'stale', pid = NULL, finished_at = datetime('now')
@@ -230,16 +235,18 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn mark_stale_for_issue(&self, issue_id: i64) -> Result<()> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             conn.execute(
                 "UPDATE process_runs
                  SET state = 'stale', pid = NULL, finished_at = datetime('now')
@@ -250,7 +257,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn find_latest(
@@ -261,10 +273,7 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
         let db = self.db.clone();
         let type_str = type_.to_string();
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             let mut stmt = conn.prepare(
                 "SELECT id, issue_id, type, idx, state, pid, pr_number, causes,
                         started_at, finished_at, error_message
@@ -280,7 +289,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             }
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn find_latest_with_pr_number(
@@ -291,10 +305,7 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
         let db = self.db.clone();
         let type_str = type_.to_string();
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             let mut stmt = conn.prepare(
                 "SELECT id, issue_id, type, idx, state, pid, pr_number, causes,
                         started_at, finished_at, error_message
@@ -310,16 +321,18 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             }
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn find_by_issue(&self, issue_id: i64) -> Result<Vec<ProcessRun>> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             let mut stmt = conn.prepare(
                 "SELECT id, issue_id, type, idx, state, pid, pr_number, causes,
                         started_at, finished_at, error_message
@@ -332,7 +345,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(runs)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn count_consecutive_failures(
@@ -345,14 +363,16 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
         let type_str = type_.to_string();
         let since_str = since.map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string());
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             count_consecutive_failures_inner(&conn, issue_id, &type_str, since_str.as_deref())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn find_latest_with_consecutive_count(
@@ -365,10 +385,7 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
         let type_str = type_.to_string();
         let since_str = since.map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string());
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
 
             // Both queries run under a single mutex acquisition, preventing a concurrent
             // ProcessRun insert from slipping between the two reads.
@@ -428,16 +445,18 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(Some((run, count)))
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn find_all_running(&self) -> Result<Vec<ProcessRun>> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             let mut stmt = conn.prepare(
                 "SELECT id, issue_id, type, idx, state, pid, pr_number, causes,
                         started_at, finished_at, error_message
@@ -450,17 +469,19 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(runs)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn update_state(&self, run_id: i64, state: ProcessRunState) -> Result<()> {
         let db = self.db.clone();
         let state_str = state.to_string();
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             conn.execute(
                 "UPDATE process_runs SET state = ?1 WHERE id = ?2",
                 rusqlite::params![state_str, run_id],
@@ -469,7 +490,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 }
 
