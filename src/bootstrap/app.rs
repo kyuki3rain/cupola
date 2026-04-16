@@ -457,6 +457,10 @@ async fn start_foreground(
             other => anyhow::anyhow!("failed to write PID file: {other}"),
         })?;
 
+    // Install a panic hook that deletes the PID file if the polling loop panics
+    // unexpectedly, preventing a stale PID file from blocking the next startup.
+    install_panic_hook(pid_path.clone());
+
     // Wrap all post-write_pid work in a single async block so that any `?` propagation
     // (tracing, DB open, token resolution, client construction, polling) is captured as a
     // Result rather than causing an early function return. This ensures apply_pid_cleanup
@@ -620,6 +624,10 @@ async fn start_daemon_child(
             PidFileError::AlreadyExists => anyhow::anyhow!("cupola is already running"),
             other => anyhow::anyhow!("failed to write PID file: {other}"),
         })?;
+
+    // Install a panic hook that deletes the PID file if the polling loop panics
+    // unexpectedly, preventing a stale PID file from blocking the next startup.
+    install_panic_hook(pid_path.clone());
 
     // Wrap all post-write_pid work in a single async block so that any `?` propagation
     // (DB open, token resolution, client construction, polling) is captured as a Result
@@ -802,6 +810,56 @@ fn check_daemon_not_running(
         Ok(_) => Ok(()),
         Err(e) => Err(anyhow::anyhow!(e).context("failed to read PID file")),
     }
+}
+
+/// Installs a global panic hook that deletes the PID file at `pid_path` before
+/// the default panic handler runs.
+///
+/// Call this immediately after writing the PID file so that an unexpected panic
+/// (e.g. inside the polling loop) does not leave a stale PID file behind.
+///
+/// # Behaviour
+/// 1. Logs the panic message and location via `tracing::error!` (no-op when the
+///    subscriber is not yet initialised) and `eprintln!` as a fallback.
+/// 2. Deletes the PID file (best-effort; errors are silently ignored).
+/// 3. Invokes the previously-installed hook so that the default panic output
+///    (stack trace to stderr) is preserved.
+pub fn install_panic_hook(pid_path: std::path::PathBuf) {
+    use crate::application::port::pid_file::PidFilePort;
+
+    // Capture whatever hook is currently installed so we can chain it.
+    let previous_hook = std::panic::take_hook();
+
+    std::panic::set_hook(Box::new(move |panic_info| {
+        // Build a human-readable panic message from the payload.
+        let msg: String = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown panic payload".to_string()
+        };
+
+        if let Some(loc) = panic_info.location() {
+            tracing::error!(
+                message = %msg,
+                file = loc.file(),
+                line = loc.line(),
+                "daemon panicked"
+            );
+            eprintln!("PANIC at {}:{}: {}", loc.file(), loc.line(), msg);
+        } else {
+            tracing::error!(message = %msg, "daemon panicked");
+            eprintln!("PANIC: {msg}");
+        }
+
+        // Best-effort PID file cleanup — ignore errors so the original panic
+        // is never obscured by a secondary failure.
+        let _ = PidFileManager::new(pid_path.clone()).delete_pid();
+
+        // Preserve the default panic behaviour (stderr backtrace / abort).
+        previous_hook(panic_info);
+    }));
 }
 
 /// Deletes the PID file at `pid_path` as a best-effort fallback, then returns `result`
@@ -1689,6 +1747,74 @@ mod tests {
             output.contains("#55"),
             "should contain issue number; output: {output}"
         );
+    }
+
+    // --- install_panic_hook tests ---
+    //
+    // Panic hooks are global process state, so tests that install/remove hooks
+    // must run serially.  We use a module-level OnceLock<Mutex> for this purpose.
+
+    fn hook_test_mutex() -> &'static std::sync::Mutex<()> {
+        static M: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        M.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    /// After `install_panic_hook`, a panic deletes the PID file before unwinding.
+    #[test]
+    fn install_panic_hook_deletes_pid_file_on_panic() {
+        let _guard = hook_test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let pid_path = dir.path().join("cupola.pid");
+        std::fs::write(&pid_path, "12345\n").expect("write PID file");
+        assert!(pid_path.exists(), "PID file must exist before test");
+
+        // Save the current hook so we can restore it after the test.
+        let saved_hook = std::panic::take_hook();
+
+        super::install_panic_hook(pid_path.clone());
+
+        // Trigger a real panic and catch the unwind so the test process survives.
+        // The panic hook runs *before* unwinding, so the PID file should already
+        // be deleted when catch_unwind returns.
+        let result = std::panic::catch_unwind(|| {
+            panic!("intentional test panic");
+        });
+
+        // Restore the hook that was active before this test.
+        let _installed = std::panic::take_hook();
+        std::panic::set_hook(saved_hook);
+
+        assert!(result.is_err(), "catch_unwind should have caught a panic");
+        assert!(
+            !pid_path.exists(),
+            "PID file should be deleted by the panic hook"
+        );
+    }
+
+    /// When the PID file does not exist, the hook must complete without itself panicking.
+    #[test]
+    fn install_panic_hook_safe_when_pid_file_absent() {
+        let _guard = hook_test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let pid_path = dir.path().join("cupola.pid");
+        // Deliberately do NOT create the PID file.
+        assert!(!pid_path.exists(), "PID file must not exist before test");
+
+        let saved_hook = std::panic::take_hook();
+        super::install_panic_hook(pid_path.clone());
+
+        let result = std::panic::catch_unwind(|| {
+            panic!("intentional test panic – no pid file");
+        });
+
+        let _installed = std::panic::take_hook();
+        std::panic::set_hook(saved_hook);
+
+        // The hook must not itself panic even when the PID file is missing.
+        assert!(result.is_err(), "catch_unwind should have caught the panic");
+        // No assertion on pid_path.exists() since it was never created.
     }
 
     // --- check_daemon_not_running tests ---

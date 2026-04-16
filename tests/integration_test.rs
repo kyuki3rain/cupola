@@ -729,3 +729,77 @@ async fn two_concurrent_sessions_github_error_isolated_per_session() {
         "session B's ProcessRun should be succeeded"
     );
 }
+
+// ---------------------------------------------------------------------------
+// panic hook integration tests (Task 2.2)
+// ---------------------------------------------------------------------------
+//
+// Because panic hooks are global process state, these tests serialise access
+// via a dedicated mutex so that concurrent test threads do not interfere with
+// each other's hook state.
+
+fn panic_hook_mutex() -> &'static std::sync::Mutex<()> {
+    static M: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    M.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+/// T-PH.1: スレッドを spawn して PID ファイルを書き込み、install_panic_hook 設定後に
+/// スレッド内で panic!() させ、join で終了を待つ。終了後に PID ファイルが削除されていること。
+#[test]
+fn panic_hook_deletes_pid_file_in_spawned_thread() {
+    let _guard = panic_hook_mutex().lock().unwrap_or_else(|e| e.into_inner());
+
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let pid_path = dir.path().join("cupola.pid");
+    std::fs::write(&pid_path, "99999\n").expect("write PID file");
+    assert!(pid_path.exists(), "PID file must exist before test");
+
+    // Save and then install our hook in the main thread (hooks are global).
+    let saved_hook = std::panic::take_hook();
+    cupola::bootstrap::app::install_panic_hook(pid_path.clone());
+
+    // Spawn a thread that panics.  Because the hook is already installed,
+    // it will run when the thread panics, deleting the PID file.
+    let handle = std::thread::spawn(|| {
+        panic!("deliberate thread panic for hook test");
+    });
+
+    // The thread panicked → join returns Err.
+    let join_result = handle.join();
+
+    // Restore the previous hook before any assertions.
+    let _installed = std::panic::take_hook();
+    std::panic::set_hook(saved_hook);
+
+    assert!(join_result.is_err(), "thread should have panicked");
+    assert!(
+        !pid_path.exists(),
+        "PID file should be deleted by the panic hook after thread panic"
+    );
+}
+
+/// T-PH.2: PID ファイルが存在しない状態で panic しても hook が安全に完了すること。
+#[test]
+fn panic_hook_safe_when_pid_file_absent_in_thread() {
+    let _guard = panic_hook_mutex().lock().unwrap_or_else(|e| e.into_inner());
+
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let pid_path = dir.path().join("absent.pid");
+    // Do NOT create the file.
+    assert!(!pid_path.exists());
+
+    let saved_hook = std::panic::take_hook();
+    cupola::bootstrap::app::install_panic_hook(pid_path.clone());
+
+    let handle = std::thread::spawn(|| {
+        panic!("deliberate panic – absent pid file");
+    });
+
+    let join_result = handle.join();
+
+    let _installed = std::panic::take_hook();
+    std::panic::set_hook(saved_hook);
+
+    // The hook must not itself panic; joining must return Err (thread panicked).
+    assert!(join_result.is_err(), "thread should have panicked");
+}
