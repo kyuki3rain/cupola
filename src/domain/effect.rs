@@ -152,11 +152,13 @@ mod tests {
     fn is_best_effort_returns_correct_values() {
         assert!(Effect::PostCompletedComment.is_best_effort());
         assert!(Effect::PostCancelComment.is_best_effort());
-        assert!(Effect::PostRetryExhaustedComment {
-            process_type: ProcessRunType::Init,
-            consecutive_failures: 3,
-        }
-        .is_best_effort());
+        assert!(
+            Effect::PostRetryExhaustedComment {
+                process_type: ProcessRunType::Init,
+                consecutive_failures: 3,
+            }
+            .is_best_effort()
+        );
         assert!(Effect::RejectUntrustedReadyIssue.is_best_effort());
         assert!(Effect::PostCiFixLimitComment.is_best_effort());
         assert!(Effect::CleanupWorktree.is_best_effort());

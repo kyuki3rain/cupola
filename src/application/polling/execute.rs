@@ -733,7 +733,6 @@ async fn find_last_error<P: ProcessRunRepository>(
         .and_then(|r| r.error_message)
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -926,11 +925,13 @@ mod tests {
     fn best_effort_classification() {
         assert!(Effect::PostCompletedComment.is_best_effort());
         assert!(Effect::PostCancelComment.is_best_effort());
-        assert!(Effect::PostRetryExhaustedComment {
-            process_type: ProcessRunType::Design,
-            consecutive_failures: 3,
-        }
-        .is_best_effort());
+        assert!(
+            Effect::PostRetryExhaustedComment {
+                process_type: ProcessRunType::Design,
+                consecutive_failures: 3,
+            }
+            .is_best_effort()
+        );
         assert!(Effect::RejectUntrustedReadyIssue.is_best_effort());
         assert!(Effect::PostCiFixLimitComment.is_best_effort());
         assert!(Effect::CleanupWorktree.is_best_effort());

@@ -151,7 +151,11 @@ fn decide_initialize_running(
 
     if let Some(init) = &snap.processes.init {
         if init.consecutive_failures >= cfg.max_retries {
-            return go_cancelled_retry_exhausted(effects, ProcessRunType::Init, init.consecutive_failures);
+            return go_cancelled_retry_exhausted(
+                effects,
+                ProcessRunType::Init,
+                init.consecutive_failures,
+            );
         }
         if init.state == ProcessRunState::Failed {
             effects.push(Effect::SpawnInit);
@@ -208,7 +212,11 @@ fn decide_design_running(
 
     if let Some(design) = &snap.processes.design {
         if design.consecutive_failures >= cfg.max_retries {
-            return go_cancelled_retry_exhausted(effects, ProcessRunType::Design, design.consecutive_failures);
+            return go_cancelled_retry_exhausted(
+                effects,
+                ProcessRunType::Design,
+                design.consecutive_failures,
+            );
         }
         if design.state == ProcessRunState::Pending {
             effects.push(Effect::SpawnProcess {
@@ -375,7 +383,11 @@ fn decide_design_fixing(
 
     if let Some(design_fix) = &snap.processes.design_fix {
         if design_fix.consecutive_failures >= cfg.max_retries {
-            return go_cancelled_retry_exhausted(effects, ProcessRunType::DesignFix, design_fix.consecutive_failures);
+            return go_cancelled_retry_exhausted(
+                effects,
+                ProcessRunType::DesignFix,
+                design_fix.consecutive_failures,
+            );
         }
         if design_fix.state == ProcessRunState::Pending {
             let causes = derive_fixing_causes(design_pr);
@@ -562,7 +574,11 @@ fn decide_implementation_running(
 
     if let Some(impl_proc) = &snap.processes.impl_ {
         if impl_proc.consecutive_failures >= cfg.max_retries {
-            return go_cancelled_retry_exhausted(effects, ProcessRunType::Impl, impl_proc.consecutive_failures);
+            return go_cancelled_retry_exhausted(
+                effects,
+                ProcessRunType::Impl,
+                impl_proc.consecutive_failures,
+            );
         }
         if impl_proc.state == ProcessRunState::Pending {
             // SwitchToImplBranch already done on first attempt
@@ -742,7 +758,11 @@ fn decide_implementation_fixing(
 
     if let Some(impl_fix) = &snap.processes.impl_fix {
         if impl_fix.consecutive_failures >= cfg.max_retries {
-            return go_cancelled_retry_exhausted(effects, ProcessRunType::ImplFix, impl_fix.consecutive_failures);
+            return go_cancelled_retry_exhausted(
+                effects,
+                ProcessRunType::ImplFix,
+                impl_fix.consecutive_failures,
+            );
         }
         if impl_fix.state == ProcessRunState::Pending {
             let causes = derive_fixing_causes(impl_pr);
