@@ -24,10 +24,7 @@ impl IssueRepository for SqliteIssueRepository {
     async fn find_by_id(&self, id: i64) -> Result<Option<Issue>> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || -> Result<Option<Issue>> {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
@@ -47,10 +44,7 @@ impl IssueRepository for SqliteIssueRepository {
     async fn find_by_issue_number(&self, issue_number: u64) -> Result<Option<Issue>> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || -> Result<Option<Issue>> {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
@@ -70,10 +64,7 @@ impl IssueRepository for SqliteIssueRepository {
     async fn find_active(&self) -> Result<Vec<Issue>> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
@@ -93,10 +84,7 @@ impl IssueRepository for SqliteIssueRepository {
     async fn find_all(&self) -> Result<Vec<Issue>> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
@@ -117,10 +105,7 @@ impl IssueRepository for SqliteIssueRepository {
         let issue = issue.clone();
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             conn.execute(
                 "INSERT INTO issues (github_issue_number, state, feature_name, weight,
                                      worktree_path, ci_fix_count, close_finished,
@@ -150,10 +135,7 @@ impl IssueRepository for SqliteIssueRepository {
         let db = self.db.clone();
         let state_str = state.to_string();
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             conn.execute(
                 "UPDATE issues SET state = ?1, updated_at = datetime('now') WHERE id = ?2",
                 rusqlite::params![state_str, id],
@@ -169,10 +151,7 @@ impl IssueRepository for SqliteIssueRepository {
         let issue = issue.clone();
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             conn.execute(
                 "UPDATE issues SET state = ?1, feature_name = ?2, weight = ?3,
                                    worktree_path = ?4, ci_fix_count = ?5, close_finished = ?6,
@@ -206,10 +185,7 @@ impl IssueRepository for SqliteIssueRepository {
         let updates = updates.clone();
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             // Build dynamic SQL update.
             // Push each value first, then derive the ?N placeholder from param_values.len().
             // This eliminates manual index tracking and prevents silent data corruption
@@ -286,10 +262,7 @@ impl IssueRepository for SqliteIssueRepository {
         let db = self.db.clone();
         let state_str = state.to_string();
         tokio::task::spawn_blocking(move || {
-            let conn = db
-                .conn()
-                .lock()
-                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let conn = db.conn_lock();
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,

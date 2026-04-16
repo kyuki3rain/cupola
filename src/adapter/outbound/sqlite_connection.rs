@@ -40,11 +40,22 @@ impl SqliteConnection {
         Ok(())
     }
 
-    pub fn init_schema(&self) -> Result<()> {
-        let conn = self
-            .conn
+    /// Mutexロックを取得して返す。
+    ///
+    /// # Panics
+    /// Mutexが毒化している場合（前スレッドがクリティカルセクション内でパニック
+    /// した場合）にパニックする。ロック毒化は回復不可能な致命的状態であり、
+    /// 通常のエラーとして扱ってはならない。
+    pub fn conn_lock(&self) -> std::sync::MutexGuard<'_, rusqlite::Connection> {
+        // Mutex毒化（PoisonError）は前スレッドがクリティカルセクション内でパニックした
+        // 場合にのみ発生する回復不可能な致命的状態であるため、即座にパニックする。
+        self.conn
             .lock()
-            .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            .unwrap_or_else(|e| panic!("database Mutex poisoned: {e}"))
+    }
+
+    pub fn init_schema(&self) -> Result<()> {
+        let conn = self.conn_lock();
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS issues (
                 id                          INTEGER PRIMARY KEY,
@@ -148,6 +159,30 @@ impl DbInitializer for SqliteConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Task 1.2: conn_lock() が健全な Mutex に対して正常に動作することを検証する
+    #[test]
+    fn conn_lock_succeeds_on_healthy_mutex() {
+        let db = SqliteConnection::open_in_memory().expect("should open");
+        // 毒化していない場合は MutexGuard が返される（パニックしない）
+        let _guard = db.conn_lock();
+    }
+
+    /// Task 1.2: Mutex が毒化した場合に conn_lock() がパニックすることを検証する
+    #[test]
+    #[should_panic(expected = "poisoned")]
+    fn conn_lock_panics_on_poisoned_mutex() {
+        let db = SqliteConnection::open_in_memory().expect("should open");
+        let arc = db.conn().clone();
+        // 別スレッドでロックを保持したままパニックし、Mutex を毒化する
+        let _ = std::thread::spawn(move || {
+            let _guard = arc.lock().unwrap();
+            panic!("intentionally poison the mutex");
+        })
+        .join();
+        // Mutex が毒化しているため conn_lock() はパニックする
+        db.conn_lock();
+    }
 
     #[test]
     fn open_in_memory_and_init_schema() {
