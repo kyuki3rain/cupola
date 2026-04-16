@@ -7,7 +7,10 @@ pub enum Effect {
     // Transition effects (priority 1-2)
     PostCompletedComment,
     PostCancelComment,
-    PostRetryExhaustedComment,
+    PostRetryExhaustedComment {
+        process_type: ProcessRunType,
+        consecutive_failures: u32,
+    },
     // Event effects
     RejectUntrustedReadyIssue,
     PostCiFixLimitComment,
@@ -30,7 +33,7 @@ impl Effect {
             // Transition effects
             Effect::PostCompletedComment
             | Effect::PostCancelComment
-            | Effect::PostRetryExhaustedComment => 1,
+            | Effect::PostRetryExhaustedComment { .. } => 1,
             // Event effects
             Effect::RejectUntrustedReadyIssue | Effect::PostCiFixLimitComment => 2,
             // Persistent effects
@@ -47,7 +50,7 @@ impl Effect {
         match self {
             Effect::PostCompletedComment
             | Effect::PostCancelComment
-            | Effect::PostRetryExhaustedComment
+            | Effect::PostRetryExhaustedComment { .. }
             | Effect::RejectUntrustedReadyIssue
             | Effect::PostCiFixLimitComment
             | Effect::CleanupWorktree
@@ -67,7 +70,10 @@ mod tests {
         // Just verify all variants can be constructed
         let _ = Effect::PostCompletedComment;
         let _ = Effect::PostCancelComment;
-        let _ = Effect::PostRetryExhaustedComment;
+        let _ = Effect::PostRetryExhaustedComment {
+            process_type: ProcessRunType::Init,
+            consecutive_failures: 3,
+        };
         let _ = Effect::RejectUntrustedReadyIssue;
         let _ = Effect::PostCiFixLimitComment;
         let _ = Effect::SpawnInit;
@@ -87,7 +93,14 @@ mod tests {
         // transition effects (1)
         assert_eq!(Effect::PostCompletedComment.priority(), 1);
         assert_eq!(Effect::PostCancelComment.priority(), 1);
-        assert_eq!(Effect::PostRetryExhaustedComment.priority(), 1);
+        assert_eq!(
+            Effect::PostRetryExhaustedComment {
+                process_type: ProcessRunType::Init,
+                consecutive_failures: 3,
+            }
+            .priority(),
+            1
+        );
         // event effects (2)
         assert_eq!(Effect::RejectUntrustedReadyIssue.priority(), 2);
         assert_eq!(Effect::PostCiFixLimitComment.priority(), 2);
@@ -139,7 +152,13 @@ mod tests {
     fn is_best_effort_returns_correct_values() {
         assert!(Effect::PostCompletedComment.is_best_effort());
         assert!(Effect::PostCancelComment.is_best_effort());
-        assert!(Effect::PostRetryExhaustedComment.is_best_effort());
+        assert!(
+            Effect::PostRetryExhaustedComment {
+                process_type: ProcessRunType::Init,
+                consecutive_failures: 3,
+            }
+            .is_best_effort()
+        );
         assert!(Effect::RejectUntrustedReadyIssue.is_best_effort());
         assert!(Effect::PostCiFixLimitComment.is_best_effort());
         assert!(Effect::CleanupWorktree.is_best_effort());

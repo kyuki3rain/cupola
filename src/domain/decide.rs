@@ -78,8 +78,15 @@ fn go_cancelled_issue_closed(effects: &mut Vec<Effect>) -> State {
     State::Cancelled
 }
 
-fn go_cancelled_retry_exhausted(effects: &mut Vec<Effect>) -> State {
-    effects.push(Effect::PostRetryExhaustedComment);
+fn go_cancelled_retry_exhausted(
+    effects: &mut Vec<Effect>,
+    process_type: ProcessRunType,
+    consecutive_failures: u32,
+) -> State {
+    effects.push(Effect::PostRetryExhaustedComment {
+        process_type,
+        consecutive_failures,
+    });
     effects.push(Effect::CloseIssue);
     State::Cancelled
 }
@@ -144,7 +151,11 @@ fn decide_initialize_running(
 
     if let Some(init) = &snap.processes.init {
         if init.consecutive_failures >= cfg.max_retries {
-            return go_cancelled_retry_exhausted(effects);
+            return go_cancelled_retry_exhausted(
+                effects,
+                ProcessRunType::Init,
+                init.consecutive_failures,
+            );
         }
         if init.state == ProcessRunState::Failed {
             effects.push(Effect::SpawnInit);
@@ -201,7 +212,11 @@ fn decide_design_running(
 
     if let Some(design) = &snap.processes.design {
         if design.consecutive_failures >= cfg.max_retries {
-            return go_cancelled_retry_exhausted(effects);
+            return go_cancelled_retry_exhausted(
+                effects,
+                ProcessRunType::Design,
+                design.consecutive_failures,
+            );
         }
         if design.state == ProcessRunState::Pending {
             effects.push(Effect::SpawnProcess {
@@ -368,7 +383,11 @@ fn decide_design_fixing(
 
     if let Some(design_fix) = &snap.processes.design_fix {
         if design_fix.consecutive_failures >= cfg.max_retries {
-            return go_cancelled_retry_exhausted(effects);
+            return go_cancelled_retry_exhausted(
+                effects,
+                ProcessRunType::DesignFix,
+                design_fix.consecutive_failures,
+            );
         }
         if design_fix.state == ProcessRunState::Pending {
             let causes = derive_fixing_causes(design_pr);
@@ -555,7 +574,11 @@ fn decide_implementation_running(
 
     if let Some(impl_proc) = &snap.processes.impl_ {
         if impl_proc.consecutive_failures >= cfg.max_retries {
-            return go_cancelled_retry_exhausted(effects);
+            return go_cancelled_retry_exhausted(
+                effects,
+                ProcessRunType::Impl,
+                impl_proc.consecutive_failures,
+            );
         }
         if impl_proc.state == ProcessRunState::Pending {
             // SwitchToImplBranch already done on first attempt
@@ -735,7 +758,11 @@ fn decide_implementation_fixing(
 
     if let Some(impl_fix) = &snap.processes.impl_fix {
         if impl_fix.consecutive_failures >= cfg.max_retries {
-            return go_cancelled_retry_exhausted(effects);
+            return go_cancelled_retry_exhausted(
+                effects,
+                ProcessRunType::ImplFix,
+                impl_fix.consecutive_failures,
+            );
         }
         if impl_fix.state == ProcessRunState::Pending {
             let causes = derive_fixing_causes(impl_pr);
@@ -962,10 +989,17 @@ mod tests {
     #[test]
     fn init_2_consecutive_failures_at_max_goes_cancelled() {
         let issue = make_issue(State::InitializeRunning);
-        let snap = snap_with_init(ProcessRunState::Failed, cfg().max_retries);
+        let max = cfg().max_retries;
+        let snap = snap_with_init(ProcessRunState::Failed, max);
         let d = decide(&issue, &snap, &cfg());
         assert_eq!(d.next_state, State::Cancelled);
-        assert!(d.effects.contains(&Effect::PostRetryExhaustedComment));
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::PostRetryExhaustedComment {
+                process_type: ProcessRunType::Init,
+                consecutive_failures,
+            } if *consecutive_failures == max
+        )));
     }
 
     /// T-1.D.init.3
@@ -1070,10 +1104,17 @@ mod tests {
     #[test]
     fn dr_2_consecutive_failures_at_max_goes_cancelled() {
         let issue = make_issue(State::DesignRunning);
-        let snap = snap_with_design(ProcessRunState::Failed, cfg().max_retries);
+        let max = cfg().max_retries;
+        let snap = snap_with_design(ProcessRunState::Failed, max);
         let d = decide(&issue, &snap, &cfg());
         assert_eq!(d.next_state, State::Cancelled);
-        assert!(d.effects.contains(&Effect::PostRetryExhaustedComment));
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::PostRetryExhaustedComment {
+                process_type: ProcessRunType::Design,
+                consecutive_failures,
+            } if *consecutive_failures == max
+        )));
     }
 
     /// T-1.D.dr.3
@@ -1389,10 +1430,17 @@ mod tests {
     #[test]
     fn df_5_design_fix_failures_at_max_goes_cancelled() {
         let issue = make_issue(State::DesignFixing);
-        let snap = snap_with_design_fix(ProcessRunState::Failed, cfg().max_retries);
+        let max = cfg().max_retries;
+        let snap = snap_with_design_fix(ProcessRunState::Failed, max);
         let d = decide(&issue, &snap, &cfg());
         assert_eq!(d.next_state, State::Cancelled);
-        assert!(d.effects.contains(&Effect::PostRetryExhaustedComment));
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::PostRetryExhaustedComment {
+                process_type: ProcessRunType::DesignFix,
+                consecutive_failures,
+            } if *consecutive_failures == max
+        )));
     }
 
     /// T-1.D.df.6
@@ -1501,9 +1549,17 @@ mod tests {
     #[test]
     fn ir_2_consecutive_failures_at_max_goes_cancelled() {
         let issue = make_issue(State::ImplementationRunning);
-        let snap = snap_with_impl(ProcessRunState::Failed, cfg().max_retries);
+        let max = cfg().max_retries;
+        let snap = snap_with_impl(ProcessRunState::Failed, max);
         let d = decide(&issue, &snap, &cfg());
         assert_eq!(d.next_state, State::Cancelled);
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::PostRetryExhaustedComment {
+                process_type: ProcessRunType::Impl,
+                consecutive_failures,
+            } if *consecutive_failures == max
+        )));
     }
 
     /// T-1.D.ir.3
@@ -1708,9 +1764,17 @@ mod tests {
     #[test]
     fn if_5_impl_fix_failures_at_max_goes_cancelled() {
         let issue = make_issue(State::ImplementationFixing);
-        let snap = snap_with_impl_fix(ProcessRunState::Failed, cfg().max_retries);
+        let max = cfg().max_retries;
+        let snap = snap_with_impl_fix(ProcessRunState::Failed, max);
         let d = decide(&issue, &snap, &cfg());
         assert_eq!(d.next_state, State::Cancelled);
+        assert!(d.effects.iter().any(|e| matches!(
+            e,
+            Effect::PostRetryExhaustedComment {
+                process_type: ProcessRunType::ImplFix,
+                consecutive_failures,
+            } if *consecutive_failures == max
+        )));
     }
 
     #[test]
