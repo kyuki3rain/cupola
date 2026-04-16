@@ -12,10 +12,10 @@ SQLiteリポジトリ（`sqlite_*.rs`）は、`Arc<Mutex<Connection>>` を用い
 
 #### Acceptance Criteria
 
-1. When `.lock()` が毒化したMutexに対して呼び出されると、the SQLiteリポジトリ shall 原因を明示するメッセージとともに `panic!` する。
-2. The SQLiteリポジトリ shall ロック毒化エラーを `anyhow::anyhow!` でラップしたり、`?` 演算子で呼び出しコードに伝播させたりしてはならない。
-3. The システム shall ロック毒化が発生した箇所に、なぜ致命的な状態なのかを説明するコメントを含める。
-4. If 複数のリポジトリで同一パターンが使われている場合、the システム shall ロック取得ロジックをヘルパーメソッドに集約し、重複を排除する。
+1. When `.lock()` が毒化したMutexに対して呼び出されると、SQLiteリポジトリ shall 原因を明示するメッセージとともに `panic!` する。
+2. SQLiteリポジトリ shall ロック毒化エラーを `anyhow::anyhow!` でラップしたり、`?` 演算子で呼び出しコードに伝播させたりしてはならない。
+3. システム shall ロック毒化が発生した箇所に、なぜ致命的な状態なのかを説明するコメントを含める。
+4. If 複数のリポジトリで同一パターンが使われている場合、システム shall ロック取得ロジックをヘルパーメソッドに集約し、重複を排除する。
 
 ### Requirement 2: ロック毒化処理のリグレッションテスト
 
@@ -23,6 +23,6 @@ SQLiteリポジトリ（`sqlite_*.rs`）は、`Arc<Mutex<Connection>>` を用い
 
 #### Acceptance Criteria
 
-1. When Mutexが手動で毒化された状態でSQLiteリポジトリの操作が呼び出されると、the テスト shall `#[should_panic]` を用いてパニックの発生を検証する。
-2. When Mutexが毒化していない状態で操作が呼び出されると、the SQLiteリポジトリ shall 正常に動作し、既存のすべてのテストが通過する。
-3. The テスト shall ロック取得ヘルパーメソッドが毒化Mutexに対してパニックを起こすことを直接検証する。
+1. When Mutexが手動で毒化された状態でSQLiteリポジトリの操作が呼び出されると、テスト shall `#[should_panic]` を用いてパニックの発生を検証する。
+2. When Mutexが毒化していない状態で操作が呼び出されると、SQLiteリポジトリ shall 正常に動作し、既存のすべてのテストが通過する。
+3. テスト shall ロック取得ヘルパーメソッドが毒化Mutexに対してパニックを起こすことを直接検証する。

@@ -1,42 +1,39 @@
 # Implementation Plan
 
-- [ ] 1. `SqliteConnection` に `conn_lock()` ヘルパーメソッドを追加する
-- [ ] 1.1 `conn_lock()` メソッドの実装とコメント追加
-  - `SqliteConnection` に `pub fn conn_lock(&self) -> std::sync::MutexGuard<'_, rusqlite::Connection>` を追加する
-  - 実装には `self.conn.lock().unwrap_or_else(|e| panic!("database Mutex poisoned: a previous thread panicked while holding the lock: {e}"))` を使用する
-  - ロック毒化が致命的な理由を説明する doc コメントを追加する（`# Panics` セクション含む）
-  - `init_schema()` 内の既存の `.lock().map_err(...)` 呼び出しを `conn_lock()` に置き換える
+- [ ] 1. SQLite 接続のロック取得方法を一元化し、ロック状態の異常を一貫して扱えるようにする
+- [ ] 1.1 接続ロックの共通化と利用方針の明文化
+  - 接続ロックの取得を共通の入口に集約し、異常時に致命的な失敗として扱う方針を明確にする
+  - 初期化処理を含む既存の接続利用箇所で、共通化されたロック取得方式を利用する
+  - 利用者が期待できる挙動と異常時の扱いを説明する
   - _Requirements: 1.1, 1.2, 1.3, 1.4_
 
-- [ ] 1.2 `conn_lock()` の単体テスト追加
-  - `sqlite_connection.rs` のテストモジュールに `conn_lock_panics_on_poisoned_mutex` テストを追加する（`#[should_panic(expected = "poisoned")]`）
-  - Mutex毒化の再現: `std::thread::spawn(|| { let _g = conn.lock().unwrap(); panic!(); }).join()` のパターンを使用する
-  - `conn_lock_succeeds_on_healthy_mutex` テストで正常動作を検証する
+- [ ] 1.2 接続ロックの正常系・異常系を検証する
+  - ロックが健全な場合に接続へ安全にアクセスできることを確認する
+  - ロック状態が破損した場合に、定義した方針どおり失敗として扱われることを確認する
   - _Requirements: 2.1, 2.3_
 
-- [ ] 2. 各リポジトリの `.lock().map_err(...)` を `conn_lock()` に置き換える
-- [ ] 2.1 (P) `sqlite_issue_repository.rs` の置き換え
-  - すべての `db.conn().lock().map_err(|e| anyhow::anyhow!(...))?\n` を `db.conn_lock()` に置き換える（末尾の `?` も除去する）
-  - 影響する全メソッド: `find_by_id`, `find_by_issue_number`, `find_active`, `find_all`, `save`, `update_state`, `update`, `update_state_and_metadata`, `find_by_state`
+- [ ] 2. すべての関連リポジトリで共通の接続ロック方式へ移行する
+- [ ] 2.1 (P) Issue を扱う永続化処理で一貫した接続利用に揃える
+  - Issue 関連の取得・保存・更新処理が共通の接続ロック方式を利用するようにする
+  - 既存の振る舞いを維持したまま、接続取得時のエラーハンドリングを統一する
   - _Requirements: 1.2, 2.2_
 
-- [ ] 2.2 (P) `sqlite_process_run_repository.rs` の置き換え
-  - すべての `db.conn().lock().map_err(|e| anyhow::anyhow!(...))?\n` を `db.conn_lock()` に置き換える（末尾の `?` も除去する）
-  - 影響する全メソッド: `save`, `update_pid`, `mark_succeeded`, `mark_failed`, `mark_stale`, `mark_stale_for_issue`, `find_latest`, `find_latest_with_pr_number`, `find_by_issue`, `count_consecutive_failures`, `find_latest_with_consecutive_count`, `find_all_running`, `update_state`
+- [ ] 2.2 (P) Process run を扱う永続化処理で一貫した接続利用に揃える
+  - Process run 関連の取得・保存・状態更新処理が共通の接続ロック方式を利用するようにする
+  - 既存の振る舞いを維持したまま、接続取得時のエラーハンドリングを統一する
   - _Requirements: 1.2, 2.2_
 
-- [ ] 2.3 (P) `sqlite_execution_log_repository.rs` の置き換え
-  - すべての `db.conn().lock().map_err(|e| anyhow::anyhow!(...))?\n` を `db.conn_lock()` に置き換える（末尾の `?` も除去する）
-  - 影響する全メソッド: `record_start`, `record_finish`, `find_by_issue`
+- [ ] 2.3 (P) Execution log を扱う永続化処理で一貫した接続利用に揃える
+  - Execution log 関連の記録・取得処理が共通の接続ロック方式を利用するようにする
+  - 既存の振る舞いを維持したまま、接続取得時のエラーハンドリングを統一する
   - _Requirements: 1.2, 2.2_
 
-- [ ] 3. ビルド・テスト・Clippy 検証
-- [ ] 3.1 全テストの通過確認
-  - `devbox run test` で全テストが通過することを確認する
-  - 既存のリポジトリテスト（`sqlite_issue_repository`、`sqlite_process_run_repository`、`sqlite_execution_log_repository`）が引き続きパスすることを確認する（リグレッションなし）
+- [ ] 3. 変更全体の品質を確認する
+- [ ] 3.1 テスト観点でリグレッションがないことを確認する
+  - 既存の永続化処理を含むテストが継続して成功することを確認する
+  - 今回の接続ロック方針の変更によって既存機能が壊れていないことを確認する
   - _Requirements: 2.2_
 
-- [ ] 3.2 Clippy・フォーマット検証
-  - `devbox run clippy` で警告・エラーがないことを確認する（特に `expect_used = "deny"` に抵触していないことを検証）
-  - `devbox run fmt-check` でフォーマットが正しいことを確認する
-  - _Requirements: 1.1, 1.2_
+- [ ] 3.2 静的検証と整形ルールへの適合を確認する
+  - 警告やエラーなく品質基準を満たしていることを確認する
+  - コード整形規約に沿っていることを確認する
