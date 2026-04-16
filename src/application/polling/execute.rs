@@ -752,8 +752,7 @@ mod tests {
     use crate::application::port::file_generator::FileGenerator;
     use crate::application::port::git_worktree::GitWorktree;
     use crate::application::port::github_client::{
-        GitHubCheckRun, GitHubIssueDetail, GitHubPr, GitHubPrDetails, PrStatus,
-        RepositoryPermission, ReviewThread,
+        GitHubIssueDetail, GitHubPr, GitHubPrDetails, RepositoryPermission, ReviewThread,
     };
     use crate::application::port::process_run_repository::ProcessRunRepository;
     use crate::domain::config::Config;
@@ -1112,14 +1111,10 @@ mod tests {
             Ok(())
         }
 
-        async fn list_ready_issues(
+        async fn list_open_issues(
             &self,
-        ) -> anyhow::Result<Vec<crate::application::port::github_client::GitHubIssue>> {
+        ) -> anyhow::Result<Vec<crate::application::port::github_client::OpenIssueInfo>> {
             Ok(vec![])
-        }
-
-        async fn is_issue_open(&self, _: u64) -> anyhow::Result<bool> {
-            Ok(true)
         }
 
         async fn find_pr_by_branches(&self, _: &str, _: &str) -> anyhow::Result<Option<GitHubPr>> {
@@ -1150,24 +1145,12 @@ mod tests {
             Ok(())
         }
 
-        async fn get_ci_check_runs(&self, _: u64) -> anyhow::Result<Vec<GitHubCheckRun>> {
-            Ok(vec![])
-        }
-
         async fn get_job_logs(&self, _: u64) -> anyhow::Result<String> {
             Ok(String::new())
         }
 
-        async fn get_pr_mergeable(&self, _: u64) -> anyhow::Result<Option<bool>> {
-            Ok(None)
-        }
-
         async fn get_pr_details(&self, _: u64) -> anyhow::Result<GitHubPrDetails> {
             unimplemented!()
-        }
-
-        async fn get_pr_status(&self, _: u64) -> anyhow::Result<PrStatus> {
-            Ok(PrStatus::Open)
         }
 
         async fn fetch_label_actor_login(&self, _: u64, _: &str) -> anyhow::Result<Option<String>> {
@@ -1180,6 +1163,13 @@ mod tests {
 
         async fn remove_label(&self, _: u64, _: &str) -> anyhow::Result<()> {
             Ok(())
+        }
+
+        async fn observe_pr(
+            &self,
+            _: u64,
+        ) -> anyhow::Result<Option<crate::application::port::github_client::PrObservation>> {
+            Ok(None)
         }
     }
 

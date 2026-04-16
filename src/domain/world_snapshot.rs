@@ -1,17 +1,13 @@
 use crate::domain::process_run::ProcessRunState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GithubIssueState {
-    Open,
+pub enum GithubIssueSnapshot {
+    Open {
+        has_ready_label: bool,
+        ready_label_trusted: bool,
+        weight: Option<crate::domain::task_weight::TaskWeight>,
+    },
     Closed,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GithubIssueSnapshot {
-    pub state: GithubIssueState,
-    pub has_ready_label: bool,
-    pub ready_label_trusted: bool,
-    pub weight: Option<crate::domain::task_weight::TaskWeight>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,8 +63,7 @@ pub mod fixtures {
     use super::*;
 
     pub fn open_issue() -> GithubIssueSnapshot {
-        GithubIssueSnapshot {
-            state: GithubIssueState::Open,
+        GithubIssueSnapshot::Open {
             has_ready_label: false,
             ready_label_trusted: false,
             weight: None,
@@ -178,16 +173,27 @@ mod tests {
     /// T-1.W.2: GithubIssueSnapshot holds correct fields
     #[test]
     fn github_issue_snapshot_has_correct_fields() {
-        let snap = GithubIssueSnapshot {
-            state: GithubIssueState::Open,
+        let snap = GithubIssueSnapshot::Open {
             has_ready_label: true,
             ready_label_trusted: false,
             weight: None,
         };
-        assert_eq!(snap.state, GithubIssueState::Open);
-        assert!(snap.has_ready_label);
-        assert!(!snap.ready_label_trusted);
-        assert!(snap.weight.is_none());
+        if let GithubIssueSnapshot::Open {
+            has_ready_label,
+            ready_label_trusted,
+            weight,
+        } = &snap
+        {
+            assert!(*has_ready_label);
+            assert!(!*ready_label_trusted);
+            assert!(weight.is_none());
+        } else {
+            panic!("expected Open variant");
+        }
+
+        // Closed variant
+        let closed = GithubIssueSnapshot::Closed;
+        assert!(matches!(closed, GithubIssueSnapshot::Closed));
     }
 
     /// T-1.W.3: PrSnapshot holds correct fields
@@ -251,8 +257,13 @@ mod tests {
     #[test]
     fn idle_fixture_returns_sane_default() {
         let snap = fixtures::idle();
-        assert_eq!(snap.github_issue.state, GithubIssueState::Open);
-        assert!(!snap.github_issue.has_ready_label);
+        assert!(matches!(
+            snap.github_issue,
+            GithubIssueSnapshot::Open {
+                has_ready_label: false,
+                ..
+            }
+        ));
         assert!(snap.design_pr.is_none());
         assert!(snap.impl_pr.is_none());
         assert!(!snap.ci_fix_exhausted);

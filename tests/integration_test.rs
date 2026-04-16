@@ -47,8 +47,7 @@ use cupola::application::port::execution_log_repository::ExecutionLogRepository;
 use cupola::application::port::file_generator::FileGenerator;
 use cupola::application::port::git_worktree::GitWorktree;
 use cupola::application::port::github_client::{
-    GitHubCheckRun, GitHubClient, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails,
-    PrStatus, RepositoryPermission, ReviewThread,
+    GitHubClient, GitHubIssueDetail, GitHubPr, GitHubPrDetails, RepositoryPermission, ReviewThread,
 };
 use cupola::application::port::issue_repository::IssueRepository;
 use cupola::application::port::process_run_repository::ProcessRunRepository;
@@ -83,7 +82,9 @@ impl MockGitHubClient {
 }
 
 impl GitHubClient for MockGitHubClient {
-    async fn list_ready_issues(&self) -> Result<Vec<GitHubIssue>> {
+    async fn list_open_issues(
+        &self,
+    ) -> Result<Vec<cupola::application::port::github_client::OpenIssueInfo>> {
         Ok(vec![])
     }
     async fn get_issue(&self, _n: u64) -> Result<GitHubIssueDetail> {
@@ -93,14 +94,6 @@ impl GitHubClient for MockGitHubClient {
             body: "body".into(),
             labels: vec![],
         })
-    }
-    async fn is_issue_open(&self, issue_number: u64) -> Result<bool> {
-        Ok(!self
-            .state
-            .lock()
-            .unwrap()
-            .closed_github_issues
-            .contains(&issue_number))
     }
     async fn find_pr_by_branches(&self, _h: &str, _b: &str) -> Result<Option<GitHubPr>> {
         Ok(None)
@@ -132,27 +125,14 @@ impl GitHubClient for MockGitHubClient {
         self.state.lock().unwrap().closed_issues.push(issue_number);
         Ok(())
     }
-    async fn get_ci_check_runs(&self, _pr_number: u64) -> Result<Vec<GitHubCheckRun>> {
-        Ok(vec![])
-    }
     async fn get_job_logs(&self, _job_id: u64) -> Result<String> {
         Ok(String::new())
-    }
-    async fn get_pr_mergeable(&self, _pr_number: u64) -> Result<Option<bool>> {
-        Ok(Some(true))
     }
     async fn get_pr_details(&self, pr_number: u64) -> Result<GitHubPrDetails> {
         Ok(GitHubPrDetails {
             merged: self.state.lock().unwrap().merged_prs.contains(&pr_number),
             mergeable: Some(true),
         })
-    }
-    async fn get_pr_status(&self, pr_number: u64) -> Result<PrStatus> {
-        if self.state.lock().unwrap().merged_prs.contains(&pr_number) {
-            Ok(PrStatus::Merged)
-        } else {
-            Ok(PrStatus::Closed)
-        }
     }
 
     async fn fetch_label_actor_login(
@@ -169,6 +149,13 @@ impl GitHubClient for MockGitHubClient {
 
     async fn remove_label(&self, _issue_number: u64, _label_name: &str) -> Result<()> {
         Ok(())
+    }
+
+    async fn observe_pr(
+        &self,
+        _pr_number: u64,
+    ) -> Result<Option<cupola::application::port::github_client::PrObservation>> {
+        Ok(None)
     }
 }
 
@@ -550,7 +537,9 @@ struct SelectiveFailGitHub {
 }
 
 impl GitHubClient for SelectiveFailGitHub {
-    async fn list_ready_issues(&self) -> Result<Vec<GitHubIssue>> {
+    async fn list_open_issues(
+        &self,
+    ) -> Result<Vec<cupola::application::port::github_client::OpenIssueInfo>> {
         Ok(vec![])
     }
     async fn get_issue(&self, _n: u64) -> Result<GitHubIssueDetail> {
@@ -560,9 +549,6 @@ impl GitHubClient for SelectiveFailGitHub {
             body: String::new(),
             labels: vec![],
         })
-    }
-    async fn is_issue_open(&self, _n: u64) -> Result<bool> {
-        Ok(true)
     }
     async fn find_pr_by_branches(&self, head: &str, _base: &str) -> Result<Option<GitHubPr>> {
         if head == self.fail_head_branch {
@@ -592,23 +578,14 @@ impl GitHubClient for SelectiveFailGitHub {
     async fn close_issue(&self, _n: u64) -> Result<()> {
         Ok(())
     }
-    async fn get_ci_check_runs(&self, _n: u64) -> Result<Vec<GitHubCheckRun>> {
-        Ok(vec![])
-    }
     async fn get_job_logs(&self, _id: u64) -> Result<String> {
         Ok(String::new())
-    }
-    async fn get_pr_mergeable(&self, _n: u64) -> Result<Option<bool>> {
-        Ok(Some(true))
     }
     async fn get_pr_details(&self, _n: u64) -> Result<GitHubPrDetails> {
         Ok(GitHubPrDetails {
             merged: false,
             mergeable: Some(true),
         })
-    }
-    async fn get_pr_status(&self, _n: u64) -> Result<PrStatus> {
-        Ok(PrStatus::Closed)
     }
     async fn fetch_label_actor_login(&self, _n: u64, _label: &str) -> Result<Option<String>> {
         Ok(None)
@@ -618,6 +595,12 @@ impl GitHubClient for SelectiveFailGitHub {
     }
     async fn remove_label(&self, _n: u64, _label: &str) -> Result<()> {
         Ok(())
+    }
+    async fn observe_pr(
+        &self,
+        _n: u64,
+    ) -> Result<Option<cupola::application::port::github_client::PrObservation>> {
+        Ok(None)
     }
 }
 

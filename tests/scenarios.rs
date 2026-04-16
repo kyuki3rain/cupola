@@ -23,7 +23,7 @@ use cupola::domain::process_run::{ProcessRun, ProcessRunState, ProcessRunType};
 use cupola::domain::state::State;
 use cupola::domain::task_weight::TaskWeight;
 use cupola::domain::world_snapshot::{
-    CiStatus, GithubIssueSnapshot, GithubIssueState, PrSnapshot, PrState, ProcessSnapshot,
+    CiStatus, GithubIssueSnapshot, PrSnapshot, PrState, ProcessSnapshot,
     ProcessesSnapshot, WorldSnapshot,
 };
 
@@ -57,8 +57,7 @@ fn new_issue(id: i64, number: u64, state: State) -> Issue {
 }
 
 fn open_issue_snap() -> GithubIssueSnapshot {
-    GithubIssueSnapshot {
-        state: GithubIssueState::Open,
+    GithubIssueSnapshot::Open {
         has_ready_label: false,
         ready_label_trusted: false,
         weight: Some(TaskWeight::Medium),
@@ -66,17 +65,11 @@ fn open_issue_snap() -> GithubIssueSnapshot {
 }
 
 fn closed_issue_snap() -> GithubIssueSnapshot {
-    GithubIssueSnapshot {
-        state: GithubIssueState::Closed,
-        has_ready_label: false,
-        ready_label_trusted: false,
-        weight: Some(TaskWeight::Medium),
-    }
+    GithubIssueSnapshot::Closed
 }
 
 fn ready_issue_snap(trusted: bool) -> GithubIssueSnapshot {
-    GithubIssueSnapshot {
-        state: GithubIssueState::Open,
+    GithubIssueSnapshot::Open {
         has_ready_label: true,
         ready_label_trusted: trusted,
         weight: Some(TaskWeight::Medium),
@@ -393,8 +386,7 @@ fn t_7_it_reopen_cancelled_reopened_goes_idle() {
     issue.close_finished = true;
 
     let snap = WorldSnapshot {
-        github_issue: GithubIssueSnapshot {
-            state: GithubIssueState::Open, // issue was reopened
+        github_issue: GithubIssueSnapshot::Open {
             has_ready_label: false,
             ready_label_trusted: false,
             weight: Some(TaskWeight::Medium),

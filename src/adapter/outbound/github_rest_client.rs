@@ -2,8 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use octocrab::Octocrab;
 
 use crate::application::port::github_client::{
-    GitHubCheckRun, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails, PrStatus,
-    RepositoryPermission,
+    GitHubIssueDetail, GitHubPr, GitHubPrDetails, OpenIssueInfo, RepositoryPermission,
 };
 
 /// 文字列を URL パスセグメントとして percent-encode する。
@@ -47,77 +46,6 @@ impl OctocrabRestClient {
         })
     }
 
-    pub async fn get_ci_check_runs(&self, pr_number: u64) -> Result<Vec<GitHubCheckRun>> {
-        // Step 1: Get PR head SHA
-        let pr = self
-            .octocrab
-            .pulls(&self.owner, &self.repo)
-            .get(pr_number)
-            .await
-            .with_context(|| format!("failed to get PR #{pr_number} for CI check-runs"))?;
-
-        let sha = pr.head.sha.clone();
-
-        // Step 2: GET /repos/{owner}/{repo}/commits/{sha}/check-runs?per_page=100
-        let url = format!(
-            "https://api.github.com/repos/{}/{}/commits/{}/check-runs?per_page=100",
-            self.owner, self.repo, sha
-        );
-
-        let resp = self
-            .http_client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .send()
-            .await
-            .with_context(|| format!("failed to call check-runs API for SHA {sha}"))?;
-
-        if !resp.status().is_success() {
-            return Err(anyhow!(
-                "check-runs API returned {}: {}",
-                resp.status(),
-                resp.text().await.unwrap_or_default()
-            ));
-        }
-
-        let body: serde_json::Value = resp
-            .json()
-            .await
-            .context("failed to parse check-runs response")?;
-
-        let runs = body["check_runs"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|r| {
-                        let status = r["status"].as_str()?.to_string();
-                        if status != "completed" {
-                            return None;
-                        }
-                        Some(GitHubCheckRun {
-                            id: r["id"].as_u64().unwrap_or(0),
-                            name: r["name"].as_str().unwrap_or("").to_string(),
-                            status,
-                            conclusion: r["conclusion"].as_str().map(str::to_string),
-                            output_summary: r["output"]["summary"]
-                                .as_str()
-                                .filter(|s| !s.is_empty())
-                                .map(str::to_string),
-                            output_text: r["output"]["text"]
-                                .as_str()
-                                .filter(|s| !s.is_empty())
-                                .map(str::to_string),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        Ok(runs)
-    }
-
     pub async fn get_job_logs(&self, job_id: u64) -> Result<String> {
         let url = format!(
             "https://api.github.com/repos/{}/{}/actions/jobs/{}/logs",
@@ -145,17 +73,6 @@ impl OctocrabRestClient {
         resp.text().await.context("failed to read job logs body")
     }
 
-    pub async fn get_pr_mergeable(&self, pr_number: u64) -> Result<Option<bool>> {
-        let pr = self
-            .octocrab
-            .pulls(&self.owner, &self.repo)
-            .get(pr_number)
-            .await
-            .with_context(|| format!("failed to get PR #{pr_number} for mergeable check"))?;
-
-        Ok(pr.mergeable)
-    }
-
     pub async fn get_pr_details(&self, pr_number: u64) -> Result<GitHubPrDetails> {
         let pr = self
             .octocrab
@@ -170,26 +87,46 @@ impl OctocrabRestClient {
         })
     }
 
-    pub async fn list_ready_issues(&self) -> Result<Vec<GitHubIssue>> {
-        let page = self
-            .octocrab
-            .issues(&self.owner, &self.repo)
-            .list()
-            .labels(&[String::from("agent:ready")])
-            .state(octocrab::params::State::Open)
-            .per_page(100)
-            .send()
-            .await
-            .context("failed to list issues with agent:ready label")?;
+    /// Fetch all open issues (not PRs) with full pagination.
+    pub async fn list_open_issues(&self) -> Result<Vec<OpenIssueInfo>> {
+        let mut all_issues = Vec::new();
+        let mut page_num = 1u32;
 
-        Ok(page
-            .items
-            .into_iter()
-            .map(|i| GitHubIssue {
-                number: i.number,
-                title: i.title,
-            })
-            .collect())
+        loop {
+            let page = self
+                .octocrab
+                .issues(&self.owner, &self.repo)
+                .list()
+                .state(octocrab::params::State::Open)
+                .per_page(100)
+                .page(page_num)
+                .send()
+                .await
+                .with_context(|| {
+                    format!("failed to list open issues (page {page_num})")
+                })?;
+
+            let items = page.items;
+            let is_last = items.len() < 100;
+
+            for issue in items {
+                // GitHub Issues API includes PRs — filter them out
+                if issue.pull_request.is_some() {
+                    continue;
+                }
+                all_issues.push(OpenIssueInfo {
+                    number: issue.number,
+                    labels: issue.labels.into_iter().map(|l| l.name).collect(),
+                });
+            }
+
+            if is_last {
+                break;
+            }
+            page_num += 1;
+        }
+
+        Ok(all_issues)
     }
 
     pub async fn get_issue(&self, issue_number: u64) -> Result<GitHubIssueDetail> {
@@ -206,17 +143,6 @@ impl OctocrabRestClient {
             body: issue.body.unwrap_or_default(),
             labels: issue.labels.into_iter().map(|l| l.name).collect(),
         })
-    }
-
-    pub async fn is_issue_open(&self, issue_number: u64) -> Result<bool> {
-        let issue = self
-            .octocrab
-            .issues(&self.owner, &self.repo)
-            .get(issue_number)
-            .await
-            .with_context(|| format!("failed to get issue #{issue_number} for state check"))?;
-
-        Ok(issue.state == octocrab::models::IssueState::Open)
     }
 
     pub async fn find_pr_by_branches(&self, head: &str, base: &str) -> Result<Option<GitHubPr>> {
@@ -296,23 +222,6 @@ impl OctocrabRestClient {
             .with_context(|| format!("failed to close issue #{issue_number}"))?;
 
         Ok(())
-    }
-
-    pub async fn get_pr_status(&self, pr_number: u64) -> Result<PrStatus> {
-        let pr = self
-            .octocrab
-            .pulls(&self.owner, &self.repo)
-            .get(pr_number)
-            .await
-            .with_context(|| format!("failed to get PR #{pr_number} status"))?;
-
-        if pr.merged_at.is_some() {
-            Ok(PrStatus::Merged)
-        } else if pr.state == Some(octocrab::models::IssueState::Open) {
-            Ok(PrStatus::Open)
-        } else {
-            Ok(PrStatus::Closed)
-        }
     }
 
     /// Issue の timeline から、指定ラベルを最後に付与した actor の login を返す。

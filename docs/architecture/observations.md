@@ -23,16 +23,21 @@ WorldSnapshot {
 ### GithubIssueSnapshot
 
 ```
-GithubIssueSnapshot {
-  state:               open | closed
-  has_ready_label:     bool
-  ready_label_trusted: bool             // has_ready_label=false のとき意味を持たない
-  weight:              TaskWeight
+enum GithubIssueSnapshot {
+  Open {
+    has_ready_label:     bool
+    ready_label_trusted: bool           // has_ready_label=false のとき意味を持たない
+    weight:              Option<TaskWeight>
+  }
+  Closed
 }
 ```
 
-- **観測元**: GitHub Issues API
-- `ready_label_trusted`: 原則として、ラベル付与者の author_association が `trusted_associations` に含まれるかを確認する。`TrustedAssociations::All` 設定時は open issue に限り `true` とみなす。なお、closed issue の場合はこの一般則よりも closed issue 用ルールを優先し、設定値に関わらず常に `false` を返す
+- **観測元**: `list_open_issues` REST API（全 open issue を一括取得）+ `check_label_actor`（ready ラベルの trust 判定）
+- open/closed の判定は `list_open_issues` で取得した open issue 番号セットとの突き合わせで行う（per-issue API 呼び出しなし）
+- ラベル情報も `list_open_issues` のレスポンスから取得する（`get_issue` 不要）
+- `Closed` バリアントにはラベル・weight 情報を含まない（closed issue ではこれらは参照されないため）
+- `ready_label_trusted`: 原則として、ラベル付与者の author_association が `trusted_associations` に含まれるかを確認する。`TrustedAssociations::All` 設定時は open issue に限り `true` とみなす。Closed issue は `Closed` バリアントとなるため trust 判定自体が発生しない
 
 ### PrSnapshot
 
@@ -45,10 +50,15 @@ PrSnapshot {
 }
 ```
 
-- **観測元**: GitHub Pull Requests API、Review Threads API、Check Runs API
+- **観測元**: `observe_pr` 統合 GraphQL クエリ（1 PR あたり 1 回の GraphQL 呼び出しで state / mergeable / reviewThreads / checkRuns を一括取得）
 - `state`: `closed` はマージされずにクローズされた状態。`merged` とは区別する
 - `has_review_comments`: スレッド内のコメントが trust 判定（`trusted_associations` によるロール判定 **OR** `trusted_reviewers` によるユーザー名判定）を1件も通過しないスレッドは、存在自体を無視する（遷移トリガーにもならず、Claude Code にも渡さない）。GitHub のレビュー決定（REQUEST_CHANGES 等）はスレッドを伴わない場合は観測されない（レビュースレッドのみ対象）
 - `ci_status`: check-run の conclusion が `failure` または `timed_out` の場合に `failure`。`cancelled` は `unknown` 扱い（新しいコミット push による自動キャンセルが多く、次のランを待つ）。計算中（null）も `unknown`
+
+**GraphQL クエリの取得上限**:
+- `reviewThreads`: カーソルベースのページネーションで全件取得する（上限なし）
+- `checkSuites(first: 10)`: 1 コミットあたり最大 10 check suite。GitHub App / workflow ごとに 1 suite が作成されるため、通常のリポジトリではこの上限に達しない。10 を超える GitHub App が同一リポジトリに接続されている場合、一部の suite が観測されない可能性がある
+- `checkRuns(first: 100)`: 1 suite あたり最大 100 check run。1 workflow 内のジョブ数に相当し、通常この上限に達しない。100 を超えるジョブを持つ workflow では一部の run が観測されず、CI failure を見逃す可能性がある
 
 **`closed` PR の扱い**: `*ReviewWaiting` または `*Fixing` 状態で PR が `closed`（マージなし）になった場合、対応する `*Running` 状態に戻して PR を再作成する。遷移ルールは [state-machine.md](./state-machine.md) の遷移テーブルを参照。
 
@@ -87,21 +97,40 @@ ProcessSnapshot {
 ## Collect のビルドロジック
 
 ```
-for each issue in DB:
-  1. GitHub Issues API → GithubIssueSnapshot を構築
-  2. ProcessRun(type=design) のうち `pr_number IS NOT NULL` の最新レコードから pr_number を取得
-     → pr_number が Some の場合: GitHub PR API → PrSnapshot(design_pr) を構築
-       （404 → None 扱い。5xx・タイムアウト等はエラーとしてこの Issue のサイクルをスキップ）
-  3. ProcessRun(type=impl) のうち `pr_number IS NOT NULL` の最新レコードから pr_number を取得
-     → pr_number が Some の場合: GitHub PR API → PrSnapshot(impl_pr) を構築
-       （404 → None 扱い。5xx・タイムアウト等はエラーとしてこの Issue のサイクルをスキップ）
-  4. ProcessRun テーブルから各 type の最新レコードを取得 → ProcessesSnapshot を構築
-     （consecutive_failures も同時に集計）
-  5. issue.ci_fix_count >= config.max_ci_fix_cycles → ci_fix_exhausted を設定
-  6. WorldSnapshot を組み立てて Decide に渡す
+1. list_open_issues() で全 open issue を一括取得（REST, 全ページ取得）
+   → open_numbers: HashSet<u64>, labels_map: HashMap<u64, Vec<String>> を構築
+   ※ GitHub Issues API は PR も返すため、pull_request フィールドでフィルタする
+
+2. Discovery: labels_map 内で agent:ready ラベルを持つ issue のうち DB 未登録のものを Idle として save
+
+3. issue_repo.find_all() で DB 上の全 issue を取得
+
+4. for each issue in DB:
+   a. is_open = open_numbers.contains(issue_number)
+   b. フィルタリング:
+      - terminal + converged + !is_open → skip（完全に終了した issue）
+   c. GithubIssueSnapshot を構築:
+      - is_open=true → Open { labels_map から取得, check_label_actor で trust 判定 }
+      - is_open=false → Closed
+   d. PR 観測（should_observe_prs = !terminal || !converged）:
+      - active + closed → PR 観測あり（merged impl PR → Completed パスを保護）
+      - terminal + converged + open → PR 観測なし（decide が Cancelled→Idle を処理）
+      - ProcessRun(type=design/impl) の pr_number から observe_pr GraphQL → PrSnapshot を構築
+        （pullRequest: null → None 扱い）
+   e. ProcessRun テーブルから各 type の最新レコードを取得 → ProcessesSnapshot を構築
+   f. WorldSnapshot を組み立てて Decide に渡す
 ```
 
-Collect は DB・GitHub API の読み取りのみを行う。DB への書き込みは行わない。
+Collect は DB・GitHub API の読み取りのみを行う。DB への書き込みは discovery（新規 Idle issue の save）のみ。
+
+### API コール数
+
+| 呼び出し | 回数 | 用途 |
+|---|---|---|
+| `list_open_issues` (REST, 全ページ) | 1〜数回 | open issue 番号 + ラベル一覧 |
+| `observe_pr` (GraphQL 統合) | ≤2N | DB にリンクされた PR のみ (state + mergeable + threads + CI) |
+| `check_label_actor` | M | Idle + open + ready の issue のみ |
+| **合計** | **1 + 2N + M** | |
 
 **既知の制約**: PR 観測は DB に `pr_number` が記録されていることが前提。DB 破損・移行ミス等で `pr_number` が失われた場合、GitHub 上に PR が存在しても観測できず、スマートルーティングが機能しない（`InitializeRunning → DesignRunning` 側に倒れ、PR 作成が試みられる）。ただし PR 作成は冪等性要件（[polling-loop.md](./polling-loop.md) 参照）によりブランチ上の既存 PR を発見すれば再作成せず pr_number のみ取得する。
 

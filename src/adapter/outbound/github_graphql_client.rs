@@ -2,7 +2,9 @@ use anyhow::{Context, Result, anyhow};
 use reqwest::Client;
 use serde_json::{Value, json};
 
-use crate::application::port::github_client::{ReviewComment, ReviewThread};
+use crate::application::port::github_client::{
+    GitHubCheckRun, PrObservation, PrStatus, ReviewComment, ReviewThread,
+};
 use crate::domain::author_association::AuthorAssociation;
 
 const LIST_THREADS_QUERY: &str = r#"query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
@@ -20,6 +22,44 @@ const LIST_THREADS_QUERY: &str = r#"query($owner: String!, $repo: String!, $pr: 
               body
               author { login }
               authorAssociation
+            }
+          }
+        }
+      }
+    }
+  }
+}"#;
+
+const OBSERVE_PR_QUERY: &str = r#"query($owner: String!, $repo: String!, $pr: Int!, $threadAfter: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      state
+      mergeable
+      reviewThreads(first: 100, after: $threadAfter) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          isResolved
+          path
+          line
+          comments(first: 100) {
+            nodes {
+              body
+              author { login }
+              authorAssociation
+            }
+          }
+        }
+      }
+      commits(last: 1) {
+        nodes {
+          commit {
+            checkSuites(first: 10) {
+              nodes {
+                checkRuns(first: 100) {
+                  nodes { databaseId name status conclusion }
+                }
+              }
             }
           }
         }
@@ -85,6 +125,83 @@ impl GraphQLClient {
         }
 
         Ok(all_threads)
+    }
+
+    /// Unified PR observation: state, mergeable, unresolved threads, and CI check runs
+    /// in a single GraphQL call. Returns `Ok(None)` if the PR does not exist.
+    ///
+    /// Review threads are paginated (cursor-based). State, mergeable, and check runs
+    /// are parsed from the first page only.
+    pub async fn observe_pr(&self, pr_number: u64) -> Result<Option<PrObservation>> {
+        let mut accumulated_threads = Vec::new();
+        let mut thread_cursor: Option<String> = None;
+        let mut base_observation: Option<PrObservation> = None;
+
+        loop {
+            let after_value = match &thread_cursor {
+                Some(cursor) => Value::String(cursor.clone()),
+                None => Value::Null,
+            };
+            let variables = json!({
+                "owner": self.owner,
+                "repo": self.repo,
+                "pr": pr_number,
+                "threadAfter": after_value,
+            });
+            let payload = json!({
+                "query": OBSERVE_PR_QUERY,
+                "variables": variables,
+            });
+
+            let resp = self.execute_raw(&payload).await?;
+            check_graphql_errors(&resp)?;
+
+            let pr_data = &resp["data"]["repository"]["pullRequest"];
+
+            if pr_data.is_null() {
+                return Ok(None);
+            }
+
+            // Parse everything on first page; only threads on subsequent pages
+            if base_observation.is_none() {
+                let mut obs = match parse_pr_observation(pr_data) {
+                    Some(obs) => obs,
+                    None => return Ok(None),
+                };
+                // Threads from first page are already in obs; drain them to accumulated
+                accumulated_threads.append(&mut obs.unresolved_threads);
+                base_observation = Some(obs);
+            } else {
+                // Subsequent pages: only parse additional threads
+                if let Some(nodes) = pr_data["reviewThreads"]["nodes"].as_array() {
+                    for node in nodes {
+                        if node["isResolved"].as_bool() == Some(true) {
+                            continue;
+                        }
+                        if let Some(thread) = parse_review_thread(node) {
+                            accumulated_threads.push(thread);
+                        }
+                    }
+                }
+            }
+
+            let threads_data = &pr_data["reviewThreads"];
+            let has_next = threads_data["pageInfo"]["hasNextPage"]
+                .as_bool()
+                .unwrap_or(false);
+            if has_next {
+                thread_cursor = threads_data["pageInfo"]["endCursor"]
+                    .as_str()
+                    .map(String::from);
+            } else {
+                break;
+            }
+        }
+
+        Ok(base_observation.map(|mut obs| {
+            obs.unresolved_threads = accumulated_threads;
+            obs
+        }))
     }
 
     pub async fn reply_to_thread(&self, thread_id: &str, body: &str) -> Result<()> {
@@ -175,6 +292,73 @@ fn build_list_threads_payload(
     json!({
         "query": LIST_THREADS_QUERY,
         "variables": variables,
+    })
+}
+
+/// Parse a PR observation from a GraphQL pullRequest node.
+/// Returns `None` if `pr_data` is null (PR does not exist).
+fn parse_pr_observation(pr_data: &Value) -> Option<PrObservation> {
+    if pr_data.is_null() {
+        return None;
+    }
+
+    let state = match pr_data["state"].as_str() {
+        Some("MERGED") => PrStatus::Merged,
+        Some("CLOSED") => PrStatus::Closed,
+        _ => PrStatus::Open,
+    };
+
+    let mergeable = match pr_data["mergeable"].as_str() {
+        Some("MERGEABLE") => Some(true),
+        Some("CONFLICTING") => Some(false),
+        _ => None,
+    };
+
+    // Parse check runs from last commit
+    let mut check_runs = Vec::new();
+    if let Some(commits) = pr_data["commits"]["nodes"].as_array()
+        && let Some(commit_node) = commits.first()
+        && let Some(suites) = commit_node["commit"]["checkSuites"]["nodes"].as_array()
+    {
+        for suite in suites {
+            if let Some(runs) = suite["checkRuns"]["nodes"].as_array() {
+                for run in runs {
+                    let run_status = run["status"].as_str().unwrap_or("").to_string();
+                    // Include ALL runs (not just completed) so that
+                    // derive_ci_status can detect in-progress runs and
+                    // return Unknown instead of falsely reporting Ok.
+                    let conclusion = run["conclusion"].as_str().map(|s| s.to_lowercase());
+                    check_runs.push(GitHubCheckRun {
+                        id: run["databaseId"].as_u64().unwrap_or(0),
+                        name: run["name"].as_str().unwrap_or("").to_string(),
+                        status: run_status.to_lowercase(),
+                        conclusion,
+                        output_summary: None,
+                        output_text: None,
+                    });
+                }
+            }
+        }
+    }
+
+    // Parse unresolved review threads
+    let mut threads = Vec::new();
+    if let Some(nodes) = pr_data["reviewThreads"]["nodes"].as_array() {
+        for node in nodes {
+            if node["isResolved"].as_bool() == Some(true) {
+                continue;
+            }
+            if let Some(thread) = parse_review_thread(node) {
+                threads.push(thread);
+            }
+        }
+    }
+
+    Some(PrObservation {
+        state,
+        mergeable,
+        unresolved_threads: threads,
+        check_runs,
     })
 }
 
@@ -377,5 +561,117 @@ mod tests {
     fn list_threads_payload_passes_null_cursor_when_none() {
         let payload = build_list_threads_payload("owner", "repo", 1, None);
         assert!(payload["variables"]["after"].is_null());
+    }
+
+    // ── parse_pr_observation tests ──────────────────────────────────────
+
+    fn full_pr_data() -> Value {
+        json!({
+            "state": "OPEN",
+            "mergeable": "MERGEABLE",
+            "reviewThreads": {
+                "pageInfo": { "hasNextPage": false, "endCursor": null },
+                "nodes": [
+                    {
+                        "id": "T1",
+                        "isResolved": false,
+                        "path": "src/main.rs",
+                        "line": 10,
+                        "comments": {
+                            "nodes": [{
+                                "body": "Fix this",
+                                "author": { "login": "reviewer" },
+                                "authorAssociation": "COLLABORATOR"
+                            }]
+                        }
+                    },
+                    {
+                        "id": "T2",
+                        "isResolved": true,
+                        "path": "src/lib.rs",
+                        "line": 5,
+                        "comments": { "nodes": [] }
+                    }
+                ]
+            },
+            "commits": {
+                "nodes": [{
+                    "commit": {
+                        "checkSuites": {
+                            "nodes": [{
+                                "checkRuns": {
+                                    "nodes": [
+                                        {
+                                            "databaseId": 100,
+                                            "name": "ci",
+                                            "status": "COMPLETED",
+                                            "conclusion": "SUCCESS"
+                                        },
+                                        {
+                                            "databaseId": 101,
+                                            "name": "lint",
+                                            "status": "IN_PROGRESS",
+                                            "conclusion": null
+                                        }
+                                    ]
+                                }
+                            }]
+                        }
+                    }
+                }]
+            }
+        })
+    }
+
+    #[test]
+    fn parse_pr_observation_full() {
+        let data = full_pr_data();
+        let obs = parse_pr_observation(&data).expect("should parse");
+        assert_eq!(obs.state, PrStatus::Open);
+        assert_eq!(obs.mergeable, Some(true));
+        // Only unresolved thread (T1) should be included
+        assert_eq!(obs.unresolved_threads.len(), 1);
+        assert_eq!(obs.unresolved_threads[0].id, "T1");
+        // Both check runs should be included (completed + in-progress)
+        // so derive_ci_status can detect in-progress and return Unknown
+        assert_eq!(obs.check_runs.len(), 2);
+        assert_eq!(obs.check_runs[0].id, 100);
+        assert_eq!(obs.check_runs[0].name, "ci");
+        assert_eq!(obs.check_runs[0].conclusion.as_deref(), Some("success"));
+        assert_eq!(obs.check_runs[1].id, 101);
+        assert_eq!(obs.check_runs[1].name, "lint");
+        assert!(obs.check_runs[1].conclusion.is_none());
+    }
+
+    #[test]
+    fn parse_pr_observation_null_returns_none() {
+        assert!(parse_pr_observation(&Value::Null).is_none());
+    }
+
+    #[test]
+    fn parse_pr_observation_merged() {
+        let data = json!({
+            "state": "MERGED",
+            "mergeable": "UNKNOWN",
+            "reviewThreads": { "pageInfo": { "hasNextPage": false }, "nodes": [] },
+            "commits": { "nodes": [] }
+        });
+        let obs = parse_pr_observation(&data).expect("should parse");
+        assert_eq!(obs.state, PrStatus::Merged);
+        assert_eq!(obs.mergeable, None);
+        assert!(obs.unresolved_threads.is_empty());
+        assert!(obs.check_runs.is_empty());
+    }
+
+    #[test]
+    fn parse_pr_observation_conflicting() {
+        let data = json!({
+            "state": "OPEN",
+            "mergeable": "CONFLICTING",
+            "reviewThreads": { "pageInfo": { "hasNextPage": false }, "nodes": [] },
+            "commits": { "nodes": [] }
+        });
+        let obs = parse_pr_observation(&data).expect("should parse");
+        assert_eq!(obs.mergeable, Some(false));
     }
 }
