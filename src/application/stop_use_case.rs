@@ -19,6 +19,16 @@ impl<P: PidFilePort, S: SignalPort> StopUseCase<P, S> {
         }
     }
 
+    /// シグナルエラー後にプロセスが死亡している場合、PID ファイルを削除する。
+    /// 削除に失敗した場合は warn ログを出力する（エラーは返さない）。
+    fn cleanup_pid_file_if_dead(&self, pid: u32) {
+        if !self.pid_file.is_process_alive(pid)
+            && let Err(de) = self.pid_file.delete_pid()
+        {
+            tracing::warn!(pid, error = %de, "failed to delete PID file after signal error");
+        }
+    }
+
     /// 停止を実行する。成功時 Ok(StopResult)。
     pub async fn execute(&self) -> Result<StopResult, StopError> {
         let pid = match self.pid_file.read_pid()? {
@@ -39,7 +49,10 @@ impl<P: PidFilePort, S: SignalPort> StopUseCase<P, S> {
         }
 
         // Send SIGTERM (ESRCH — already dead — is handled inside SignalPort)
-        self.signal.send_sigterm(pid)?;
+        if let Err(e) = self.signal.send_sigterm(pid) {
+            self.cleanup_pid_file_if_dead(pid);
+            return Err(e);
+        }
 
         // Poll until process exits or timeout
         let poll_interval = Duration::from_millis(500);
@@ -56,7 +69,10 @@ impl<P: PidFilePort, S: SignalPort> StopUseCase<P, S> {
             if start.elapsed() >= self.shutdown_timeout {
                 // Timeout — send SIGKILL
                 tracing::warn!(pid, "shutdown timeout, sending SIGKILL");
-                self.signal.send_sigkill(pid)?;
+                if let Err(e) = self.signal.send_sigkill(pid) {
+                    self.cleanup_pid_file_if_dead(pid);
+                    return Err(e);
+                }
 
                 // Give the OS a brief moment to reap the process, then verify.
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -104,6 +120,8 @@ mod tests {
     struct MockPidFile {
         pid: Option<u32>,
         alive: Arc<Mutex<bool>>,
+        /// `delete_pid` が呼ばれたかどうかを追跡する（シグナルエラー後のクリーンアップ検証用）
+        deleted: Arc<Mutex<bool>>,
     }
 
     impl PidFilePort for MockPidFile {
@@ -116,6 +134,7 @@ mod tests {
         }
 
         fn delete_pid(&self) -> Result<(), PidFileError> {
+            *self.deleted.lock().unwrap() = true;
             Ok(())
         }
 
@@ -169,6 +188,7 @@ mod tests {
         let mock_pid = MockPidFile {
             pid: None,
             alive: alive.clone(),
+            deleted: Arc::new(Mutex::new(false)),
         };
         let mock_sig = MockSignal {
             kill_on_sigterm: false,
@@ -186,6 +206,7 @@ mod tests {
         let mock_pid = MockPidFile {
             pid: Some(99999),
             alive: alive.clone(),
+            deleted: Arc::new(Mutex::new(false)),
         };
         let mock_sig = MockSignal {
             kill_on_sigterm: false,
@@ -204,6 +225,7 @@ mod tests {
         let mock_pid = MockPidFile {
             pid: Some(12345),
             alive: alive.clone(),
+            deleted: Arc::new(Mutex::new(false)),
         };
         let mock_sig = MockSignal {
             kill_on_sigterm: true,
@@ -224,6 +246,7 @@ mod tests {
         let mock_pid = MockPidFile {
             pid: Some(12345),
             alive: alive.clone(),
+            deleted: Arc::new(Mutex::new(false)),
         };
         let mock_sig = MockSignal {
             kill_on_sigterm: false, // SIGTERM ignored
@@ -247,6 +270,7 @@ mod tests {
         let mock_pid = MockPidFile {
             pid: Some(0),
             alive: alive.clone(),
+            deleted: Arc::new(Mutex::new(false)),
         };
         let mock_sig = MockSignal {
             kill_on_sigterm: false,
@@ -258,6 +282,117 @@ mod tests {
         assert!(matches!(err, StopError::InvalidPid(0)));
     }
 
+    // --- T-258 signal failure path tests ---
+
+    /// SIGTERM が失敗し、プロセスが死亡している場合に delete_pid が呼ばれること
+    #[tokio::test]
+    async fn sigterm_failure_with_dead_process_deletes_pid_file() {
+        let alive = Arc::new(Mutex::new(true));
+        let deleted = Arc::new(Mutex::new(false));
+
+        // send_sigterm が Err を返し、その後プロセスが死んでいる状態をシミュレート
+        struct SigtermFailsAndKillsProcessSignal {
+            alive: Arc<Mutex<bool>>,
+        }
+        impl SignalPort for SigtermFailsAndKillsProcessSignal {
+            fn send_sigterm(&self, _pid: u32) -> Result<(), StopError> {
+                // シグナル送信はエラーだが、プロセスは既に死亡（競合状態シミュレート）
+                *self.alive.lock().unwrap() = false;
+                Err(StopError::Signal("EPERM".to_string()))
+            }
+            fn send_sigkill(&self, _pid: u32) -> Result<(), StopError> {
+                Ok(())
+            }
+        }
+
+        let mock_pid = MockPidFile {
+            pid: Some(12345),
+            alive: alive.clone(),
+            deleted: deleted.clone(),
+        };
+        let mock_sig = SigtermFailsAndKillsProcessSignal { alive };
+        let uc = StopUseCase::with_signal_sender(mock_pid, mock_sig, Duration::from_secs(30));
+
+        let result = uc.execute().await;
+        assert!(result.is_err(), "execute should return Err");
+        assert!(
+            *deleted.lock().unwrap(),
+            "delete_pid should have been called when process is dead after sigterm failure"
+        );
+    }
+
+    /// SIGKILL が失敗し、プロセスが死亡している場合に delete_pid が呼ばれること
+    #[tokio::test]
+    async fn sigkill_failure_with_dead_process_deletes_pid_file() {
+        let alive = Arc::new(Mutex::new(true));
+        let deleted = Arc::new(Mutex::new(false));
+
+        // send_sigterm は成功するが send_sigkill は Err を返す（プロセスは死亡）
+        struct SigkillFailsSignal {
+            alive: Arc<Mutex<bool>>,
+        }
+        impl SignalPort for SigkillFailsSignal {
+            fn send_sigterm(&self, _pid: u32) -> Result<(), StopError> {
+                // SIGTERM 無視（プロセス生存継続）
+                Ok(())
+            }
+            fn send_sigkill(&self, _pid: u32) -> Result<(), StopError> {
+                // SIGKILL もエラーだが、プロセスは既に死亡（競合状態シミュレート）
+                *self.alive.lock().unwrap() = false;
+                Err(StopError::Signal("EPERM".to_string()))
+            }
+        }
+
+        let mock_pid = MockPidFile {
+            pid: Some(12345),
+            alive: alive.clone(),
+            deleted: deleted.clone(),
+        };
+        let mock_sig = SigkillFailsSignal { alive };
+        // 極短タイムアウトで SIGKILL パスに誘導
+        let uc = StopUseCase::with_signal_sender(mock_pid, mock_sig, Duration::from_millis(1));
+
+        let result = uc.execute().await;
+        assert!(result.is_err(), "execute should return Err");
+        assert!(
+            *deleted.lock().unwrap(),
+            "delete_pid should have been called when process is dead after sigkill failure"
+        );
+    }
+
+    /// SIGTERM が失敗し、プロセスが生存している場合は delete_pid が呼ばれないこと
+    #[tokio::test]
+    async fn sigterm_failure_with_alive_process_does_not_delete_pid_file() {
+        let alive = Arc::new(Mutex::new(true));
+        let deleted = Arc::new(Mutex::new(false));
+
+        // send_sigterm が Err を返すが、プロセスは生存中
+        struct SigtermFailsAliveSignal;
+        impl SignalPort for SigtermFailsAliveSignal {
+            fn send_sigterm(&self, _pid: u32) -> Result<(), StopError> {
+                Err(StopError::Signal("EPERM".to_string()))
+            }
+            fn send_sigkill(&self, _pid: u32) -> Result<(), StopError> {
+                Ok(())
+            }
+        }
+
+        let mock_pid = MockPidFile {
+            pid: Some(12345),
+            alive: alive.clone(),
+            deleted: deleted.clone(),
+        };
+        let mock_sig = SigtermFailsAliveSignal;
+        let uc = StopUseCase::with_signal_sender(mock_pid, mock_sig, Duration::from_secs(30));
+
+        let result = uc.execute().await;
+        assert!(result.is_err(), "execute should return Err");
+        assert!(
+            !*deleted.lock().unwrap(),
+            "delete_pid should NOT have been called when process is still alive"
+        );
+    }
+
     // --- T-6.SP.* tests ---
 
     /// T-6.SP.1: PID ファイルなし → NotRunning
@@ -267,6 +402,7 @@ mod tests {
         let mock_pid = MockPidFile {
             pid: None,
             alive: alive.clone(),
+            deleted: Arc::new(Mutex::new(false)),
         };
         let mock_sig = MockSignal {
             kill_on_sigterm: false,
@@ -285,6 +421,7 @@ mod tests {
         let mock_pid = MockPidFile {
             pid: Some(12345),
             alive: alive.clone(),
+            deleted: Arc::new(Mutex::new(false)),
         };
         let mock_sig = MockSignal {
             kill_on_sigterm: false,
@@ -303,6 +440,7 @@ mod tests {
         let mock_pid = MockPidFile {
             pid: Some(5555),
             alive: alive.clone(),
+            deleted: Arc::new(Mutex::new(false)),
         };
         let mock_sig = MockSignal {
             kill_on_sigterm: true, // SIGTERM → 即終了
@@ -323,6 +461,7 @@ mod tests {
         let mock_pid = MockPidFile {
             pid: Some(7777),
             alive: alive.clone(),
+            deleted: Arc::new(Mutex::new(false)),
         };
         let mock_sig = MockSignal {
             kill_on_sigterm: false, // SIGTERM 無視
@@ -349,6 +488,7 @@ mod tests {
         let mock_pid = MockPidFile {
             pid: Some(3333),
             alive: alive.clone(),
+            deleted: Arc::new(Mutex::new(false)),
         };
         let mock_sig = MockSignal {
             kill_on_sigterm: true,
