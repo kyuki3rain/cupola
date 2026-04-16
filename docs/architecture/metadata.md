@@ -77,14 +77,14 @@ Collect は純粋な観測のみで DB を書かない。
 
 ### `close_finished`
 
-CloseIssue API 呼び出しが成功したかどうかを追跡するフラグ。Issue が既に人手でクローズ済みの場合も API は冪等に成功するため `true` になる。Cancelled では、このフラグが `true` かつ `github_issue.state == open`（再オープン検知）になると `Cancelled → Idle` 遷移のトリガーとなる。
+CloseIssue API 呼び出しが成功したかどうかを追跡するフラグ。Issue が既に人手でクローズ済みの場合も API は冪等に成功するため `true` になる。Cancelled では、このフラグが `true` かつ `github_issue is Open`（再オープン検知）になると `Cancelled → Idle` 遷移のトリガーとなる。
 
 | 操作 | タイミング | 主体 |
 |------|-----------|------|
 | `true` にセット | CloseIssue 成功時（Completed・Cancelled 両方） | Execute |
 | `false` にリセット | `Cancelled → Idle` 遷移時 | Persist（Decide が決定） |
 
-**既知の制約 — CloseIssue 永続失敗によるデッドロック**: cupola の GitHub トークンに Issue クローズ権限がないなど、CloseIssue が永続的に失敗し続けると `close_finished` が `false` のままとなる。この場合、Issue が GitHub 上で open であっても `Cancelled → Idle` 遷移条件（`close_finished && github_issue.state == open`）が成立しないため、再起動不能になる。回復手順: (a) 権限を修正して CloseIssue が成功するようにする、または (b) DB で `close_finished = true` に直接更新する。
+**既知の制約 — CloseIssue 永続失敗によるデッドロック**: cupola の GitHub トークンに Issue クローズ権限がないなど、CloseIssue が永続的に失敗し続けると `close_finished` が `false` のままとなる。この場合、Issue が GitHub 上で open であっても `Cancelled → Idle` 遷移条件（`close_finished && github_issue is Open`）が成立しないため、再起動不能になる。回復手順: (a) 権限を修正して CloseIssue が成功するようにする、または (b) DB で `close_finished = true` に直接更新する。
 
 ---
 

@@ -85,6 +85,17 @@ if let Some(handle) = self.init_handles.get(&issue.id) {
 
 `stall_timeout_secs`（デフォルト30分）を超過したプロセスをこのステップで SIGKILL する。kill されたプロセスは同サイクルの Resolve で失敗として処理される。
 
+## GitHub API 障害時のフォールバック
+
+Collect フェーズは `list_open_issues` の結果に全面的に依存する。この API 呼び出しが失敗した場合、空の open set にフォールバックすると全 active issue が Closed と誤認され、意図しない Cancelled 遷移を引き起こす。そのため **`list_open_issues` 失敗時は Err を返し、Collect 以降（Decide / Persist / Execute）をスキップする**。
+
+Resolve フェーズは Collect の前に完了しているため、非同期プロセスの回収・ProcessRun の DB 更新は GitHub API の状態に関係なく常に実行される。次のサイクルで API が復旧すれば、Resolve で回収済みの ProcessRun の状態変化を Collect が正しく観測し、遷移が再開する。
+
+```
+GitHub API 正常時:  Resolve → Collect → Decide → Persist → Execute
+GitHub API 障害時:  Resolve → Collect(Err) → (Decide/Persist/Execute スキップ)
+```
+
 ## Collect
 
 副作用なし。GitHub API・DB から観測を行い、Issue ごとに WorldSnapshot を構築する。

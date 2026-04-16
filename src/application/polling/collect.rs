@@ -1,18 +1,20 @@
 /// Collect phase: observe GitHub + DB state → build WorldSnapshot per issue.
 ///
-/// This phase is pure observation — no DB writes, no GitHub mutations.
+/// This phase is pure observation — no DB writes, no GitHub mutations
+/// (except for discovery of new Idle issues).
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use std::collections::{HashMap, HashSet};
 
-use crate::application::port::github_client::{GitHubClient, PrStatus};
+use crate::application::port::github_client::GitHubClient;
 use crate::application::port::issue_repository::IssueRepository;
 use crate::application::port::process_run_repository::ProcessRunRepository;
 use crate::domain::config::Config;
 use crate::domain::issue::Issue;
 use crate::domain::process_run::ProcessRunType;
 use crate::domain::world_snapshot::{
-    CiStatus, GithubIssueSnapshot, GithubIssueState, PrSnapshot, PrState, ProcessSnapshot,
-    ProcessesSnapshot, WorldSnapshot,
+    CiStatus, GithubIssueSnapshot, PrSnapshot, PrState, ProcessSnapshot, ProcessesSnapshot,
+    WorldSnapshot,
 };
 
 use crate::application::polling_use_case::label_to_weight;
@@ -25,10 +27,13 @@ pub struct IssueObservation {
 
 /// Collect observations for every issue tracked in the DB.
 ///
+/// Uses `list_open_issues` to fetch all open issues in a single paginated call,
+/// then matches against the DB to determine which issues need observation.
+///
 /// Terminal states (`Completed`, `Cancelled`) are included on purpose: Completed
 /// still runs persistent effects (CleanupWorktree, CloseIssue) until the worktree
 /// is gone and the issue is closed; Cancelled may transition back to Idle via the
-/// `close_finished && github_issue.state == open` rule. Issues that fail to observe
+/// `close_finished && github_issue is Open` rule. Issues that fail to observe
 /// (e.g. GitHub API 5xx) are skipped and logged.
 pub async fn collect_all<G, I, P>(
     github: &G,
@@ -41,52 +46,77 @@ where
     I: IssueRepository,
     P: ProcessRunRepository,
 {
-    // Discover newly-labeled GitHub issues and upsert them into the DB as Idle.
-    // Without this step the DB stays empty forever and the polling loop has nothing
-    // to observe. list_ready_issues returns issues currently carrying agent:ready.
-    match github.list_ready_issues().await {
-        Ok(ready) => {
-            for gi in ready {
-                match issue_repo.find_by_issue_number(gi.number).await {
-                    Ok(Some(_)) => {}
-                    Ok(None) => {
-                        let issue = Issue::new(gi.number, format!("issue-{}", gi.number));
-                        if let Err(e) = issue_repo.save(&issue).await {
-                            tracing::warn!(
-                                issue_number = gi.number,
-                                error = %e,
-                                "failed to insert newly-discovered ready issue"
-                            );
-                        } else {
-                            tracing::info!(
-                                issue_number = gi.number,
-                                "discovered new ready issue, inserted as Idle"
-                            );
-                        }
-                    }
-                    Err(e) => tracing::warn!(
-                        issue_number = gi.number,
-                        error = %e,
-                        "find_by_issue_number failed during discovery"
-                    ),
-                }
-            }
-        }
-        Err(e) => tracing::warn!(error = %e, "list_ready_issues failed, skipping discovery"),
+    // Step 1: Fetch all open issues (single paginated REST call).
+    // Build a set of open issue numbers and a map of issue_number → labels.
+    // On failure, propagate the error to abort collect (and thus decide/execute).
+    // The resolve phase has already completed at this point, so async process
+    // resolution is unaffected. Falling back to an empty open set would cause
+    // all active issues to be observed as Closed, triggering unintended
+    // Cancelled transitions.
+    let open_issues = github.list_open_issues().await?;
+    let mut open_numbers = HashSet::new();
+    let mut labels_map = HashMap::new();
+    for oi in open_issues {
+        open_numbers.insert(oi.number);
+        labels_map.insert(oi.number, oi.labels);
     }
 
-    // Load every issue (terminal states included — see above).
+    // Step 2: Discovery — find open issues with agent:ready that are not yet in DB.
+    const READY_LABEL: &str = "agent:ready";
+    for (&issue_number, labels) in &labels_map {
+        if !labels.iter().any(|l| l == READY_LABEL) {
+            continue;
+        }
+        match issue_repo.find_by_issue_number(issue_number).await {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                let issue = Issue::new(issue_number, format!("issue-{issue_number}"));
+                if let Err(e) = issue_repo.save(&issue).await {
+                    tracing::warn!(
+                        issue_number,
+                        error = %e,
+                        "failed to insert newly-discovered ready issue"
+                    );
+                } else {
+                    tracing::info!(issue_number, "discovered new ready issue, inserted as Idle");
+                }
+            }
+            Err(e) => tracing::warn!(
+                issue_number,
+                error = %e,
+                "find_by_issue_number failed during discovery"
+            ),
+        }
+    }
+
+    // Step 3: Load all tracked issues from DB and build observations.
     let issues = issue_repo.find_all().await?;
 
     let mut observations = Vec::new();
     for issue in issues {
-        match observe_issue(github, process_repo, config, &issue).await {
+        let n = issue.github_issue_number;
+        let is_open = open_numbers.contains(&n);
+        let is_terminal = issue.state.is_terminal();
+        let is_converged = issue.worktree_path.is_none() && issue.close_finished;
+
+        // Skip fully-converged terminal issues that are closed
+        if is_terminal && is_converged && !is_open {
+            continue;
+        }
+
+        let labels = if is_open {
+            labels_map.get(&n).map(|v| v.as_slice())
+        } else {
+            None
+        };
+
+        match observe_issue(github, process_repo, config, &issue, is_open, labels).await {
             Ok(snapshot) => {
                 observations.push(IssueObservation { issue, snapshot });
             }
             Err(e) => {
                 tracing::warn!(
-                    issue_number = issue.github_issue_number,
+                    issue_number = n,
                     error = %e,
                     "collect failed for issue, skipping this cycle"
                 );
@@ -97,29 +127,43 @@ where
 }
 
 /// Build a WorldSnapshot for a single issue.
+///
+/// `is_open`: whether this issue number was found in the `list_open_issues` result.
+/// `labels`: the issue's labels (from `list_open_issues`), or `None` if closed.
 async fn observe_issue<G, P>(
     github: &G,
     process_repo: &P,
     config: &Config,
     issue: &Issue,
+    is_open: bool,
+    labels: Option<&[String]>,
 ) -> Result<WorldSnapshot>
 where
     G: GitHubClient,
     P: ProcessRunRepository,
 {
-    let n = issue.github_issue_number;
     let id = issue.id;
 
     // --- GithubIssueSnapshot ---
-    let github_issue = observe_github_issue(github, config, n).await?;
+    let github_issue =
+        observe_github_issue(github, config, issue.github_issue_number, is_open, labels).await?;
 
-    // --- design_pr ---
-    let design_pr =
-        observe_pr_for_type(github, process_repo, config, id, ProcessRunType::Design).await?;
+    // --- PR observation ---
+    // Always observe PRs for active issues (even if closed — merged impl PR → Completed).
+    // For terminal + not converged issues, observe PRs for retry (CleanupWorktree/CloseIssue).
+    // For terminal + converged + open, skip PR observe (decide handles Cancelled→Idle).
+    let is_terminal = issue.state.is_terminal();
+    let is_converged = issue.worktree_path.is_none() && issue.close_finished;
+    let should_observe_prs = !is_terminal || !is_converged;
 
-    // --- impl_pr ---
-    let impl_pr =
-        observe_pr_for_type(github, process_repo, config, id, ProcessRunType::Impl).await?;
+    let (design_pr, impl_pr) = if should_observe_prs {
+        let d =
+            observe_pr_for_type(github, process_repo, config, id, ProcessRunType::Design).await?;
+        let i = observe_pr_for_type(github, process_repo, config, id, ProcessRunType::Impl).await?;
+        (d, i)
+    } else {
+        (None, None)
+    };
 
     // --- ProcessesSnapshot ---
     let processes = observe_processes(process_repo, issue).await?;
@@ -136,22 +180,27 @@ where
     })
 }
 
+/// Build a GithubIssueSnapshot from pre-fetched open-set membership and labels.
+///
+/// No per-issue GitHub API calls are made here (except `check_label_actor`
+/// for open issues with the ready label).
 async fn observe_github_issue<G: GitHubClient>(
     github: &G,
     config: &Config,
     issue_number: u64,
+    is_open: bool,
+    labels: Option<&[String]>,
 ) -> Result<GithubIssueSnapshot> {
-    let detail = github.get_issue(issue_number).await?;
-    let is_open = github.is_issue_open(issue_number).await?;
+    if !is_open {
+        return Ok(GithubIssueSnapshot::Closed);
+    }
+
+    let labels = labels.unwrap_or(&[]);
 
     const READY_LABEL: &str = "agent:ready";
-    let has_ready_label = detail.labels.iter().any(|l| l == READY_LABEL);
+    let has_ready_label = labels.iter().any(|l| l == READY_LABEL);
 
-    // Determine ready_label_trusted.
-    // Closed issues skip the permission check: they cannot transition to active
-    // states, so calling check_label_actor would only generate log spam without
-    // any useful effect.
-    let ready_label_trusted = if !has_ready_label || !is_open {
+    let ready_label_trusted = if !has_ready_label {
         false
     } else {
         use crate::application::association_guard::{AssociationCheckResult, check_label_actor};
@@ -177,14 +226,9 @@ async fn observe_github_issue<G: GitHubClient>(
         }
     };
 
-    let weight = label_to_weight(&detail.labels);
+    let weight = label_to_weight(labels);
 
-    Ok(GithubIssueSnapshot {
-        state: if is_open {
-            GithubIssueState::Open
-        } else {
-            GithubIssueState::Closed
-        },
+    Ok(GithubIssueSnapshot::Open {
         has_ready_label,
         ready_label_trusted,
         weight: Some(weight),
@@ -216,39 +260,30 @@ where
         )
     })?;
 
-    // Observe the PR
-    let status = match github.get_pr_status(pr_number).await {
-        Ok(s) => s,
-        Err(e) => {
-            // 404 → treat as None
-            if e.to_string().contains("404") {
-                return Ok(None);
-            }
-            return Err(e);
-        }
+    // Single GraphQL call for all PR observation data
+    let observation = match github.observe_pr(pr_number).await? {
+        Some(obs) => obs,
+        None => return Ok(None), // PR not found
     };
 
-    let pr_state = match status {
+    use crate::application::port::github_client::PrStatus;
+    let pr_state = match observation.state {
         PrStatus::Open => PrState::Open,
         PrStatus::Merged => PrState::Merged,
         PrStatus::Closed => PrState::Closed,
     };
 
-    // For open PRs, gather more detail
+    // For open PRs, derive review comments, CI status, and conflict from the observation
     let (has_review_comments, ci_status, has_conflict) = if pr_state == PrState::Open {
-        let threads = github.list_unresolved_threads(pr_number).await?;
-        // Only count threads that contain at least one trusted comment.
-        let has_review_comments = threads.iter().any(|t| {
+        let has_review_comments = observation.unresolved_threads.iter().any(|t| {
             t.comments
                 .iter()
                 .any(|c| config.is_comment_trusted(&c.author_association, &c.author))
         });
 
-        let check_runs = github.get_ci_check_runs(pr_number).await?;
-        let ci = derive_ci_status(&check_runs);
+        let ci = derive_ci_status(&observation.check_runs);
 
-        let mergeable = github.get_pr_mergeable(pr_number).await?;
-        let has_conflict = mergeable == Some(false);
+        let has_conflict = observation.mergeable == Some(false);
 
         (has_review_comments, ci, has_conflict)
     } else {
@@ -340,7 +375,7 @@ async fn observe_processes<P: ProcessRunRepository>(
 mod tests {
     use super::*;
     use crate::application::port::github_client::{
-        GitHubCheckRun, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails, ReviewThread,
+        GitHubCheckRun, GitHubIssueDetail, GitHubPr, GitHubPrDetails, PrStatus, ReviewThread,
     };
     use anyhow::Result;
     use std::sync::{
@@ -349,24 +384,22 @@ mod tests {
     };
 
     struct MockGithub {
-        is_open: bool,
-        labels: Vec<String>,
         /// Set to true when fetch_label_actor_login is called.
         label_actor_called: Arc<AtomicBool>,
     }
 
     impl MockGithub {
-        fn with_tracker(is_open: bool, labels: Vec<String>, tracker: Arc<AtomicBool>) -> Self {
+        fn with_tracker(tracker: Arc<AtomicBool>) -> Self {
             Self {
-                is_open,
-                labels,
                 label_actor_called: tracker,
             }
         }
     }
 
     impl GitHubClient for MockGithub {
-        async fn list_ready_issues(&self) -> Result<Vec<GitHubIssue>> {
+        async fn list_open_issues(
+            &self,
+        ) -> Result<Vec<crate::application::port::github_client::OpenIssueInfo>> {
             Ok(vec![])
         }
         async fn get_issue(&self, n: u64) -> Result<GitHubIssueDetail> {
@@ -374,11 +407,8 @@ mod tests {
                 number: n,
                 title: format!("issue-{n}"),
                 body: String::new(),
-                labels: self.labels.clone(),
+                labels: vec![],
             })
-        }
-        async fn is_issue_open(&self, _n: u64) -> Result<bool> {
-            Ok(self.is_open)
         }
         async fn find_pr_by_branches(&self, _h: &str, _b: &str) -> Result<Option<GitHubPr>> {
             Ok(None)
@@ -404,23 +434,14 @@ mod tests {
         async fn close_issue(&self, _n: u64) -> Result<()> {
             Ok(())
         }
-        async fn get_ci_check_runs(&self, _n: u64) -> Result<Vec<GitHubCheckRun>> {
-            Ok(vec![])
-        }
         async fn get_job_logs(&self, _id: u64) -> Result<String> {
             Ok(String::new())
-        }
-        async fn get_pr_mergeable(&self, _n: u64) -> Result<Option<bool>> {
-            Ok(Some(true))
         }
         async fn get_pr_details(&self, _n: u64) -> Result<GitHubPrDetails> {
             Ok(GitHubPrDetails {
                 merged: false,
                 mergeable: Some(true),
             })
-        }
-        async fn get_pr_status(&self, _n: u64) -> Result<PrStatus> {
-            Ok(PrStatus::Open)
         }
         async fn fetch_label_actor_login(&self, _n: u64, _label: &str) -> Result<Option<String>> {
             self.label_actor_called.store(true, Ordering::SeqCst);
@@ -435,6 +456,12 @@ mod tests {
         async fn remove_label(&self, _n: u64, _label: &str) -> Result<()> {
             Ok(())
         }
+        async fn observe_pr(
+            &self,
+            _n: u64,
+        ) -> Result<Option<crate::application::port::github_client::PrObservation>> {
+            Ok(None)
+        }
     }
 
     fn test_config() -> Config {
@@ -444,27 +471,19 @@ mod tests {
         config
     }
 
-    /// closed issue + ready label → ready_label_trusted == false, API 未呼び出し
+    /// closed issue → Closed snapshot, API 未呼び出し
     #[tokio::test]
-    async fn closed_issue_with_ready_label_skips_permission_check() {
+    async fn closed_issue_returns_closed_snapshot() {
         let tracker = Arc::new(AtomicBool::new(false));
-        let github = MockGithub::with_tracker(
-            false, // closed
-            vec!["agent:ready".to_string()],
-            Arc::clone(&tracker),
-        );
+        let github = MockGithub::with_tracker(Arc::clone(&tracker));
         let config = test_config();
 
-        let snapshot = observe_github_issue(&github, &config, 1).await.unwrap();
+        // Closed issue: is_open=false, labels=None
+        let snapshot = observe_github_issue(&github, &config, 1, false, None)
+            .await
+            .unwrap();
 
-        assert!(
-            snapshot.has_ready_label,
-            "has_ready_label should still reflect the label"
-        );
-        assert!(
-            !snapshot.ready_label_trusted,
-            "closed issue must not be trusted"
-        );
+        assert!(matches!(snapshot, GithubIssueSnapshot::Closed));
         assert!(
             !tracker.load(Ordering::SeqCst),
             "fetch_label_actor_login must NOT be called for closed issues"
@@ -475,11 +494,7 @@ mod tests {
     #[tokio::test]
     async fn open_issue_with_ready_label_calls_permission_api() {
         let tracker = Arc::new(AtomicBool::new(false));
-        let github = MockGithub::with_tracker(
-            true, // open
-            vec!["agent:ready".to_string()],
-            Arc::clone(&tracker),
-        );
+        let github = MockGithub::with_tracker(Arc::clone(&tracker));
         // Use Specific associations so the API is actually called.
         let mut config = test_config();
         config.trusted_associations =
@@ -487,32 +502,45 @@ mod tests {
                 crate::domain::author_association::AuthorAssociation::Owner,
             ]);
 
-        let snapshot = observe_github_issue(&github, &config, 1).await.unwrap();
+        let labels = vec!["agent:ready".to_string()];
+        let snapshot = observe_github_issue(&github, &config, 1, true, Some(&labels))
+            .await
+            .unwrap();
 
-        assert!(snapshot.has_ready_label);
-        // fetch_label_actor_login returns None → no actor login → untrusted
-        assert!(!snapshot.ready_label_trusted);
+        assert!(matches!(
+            snapshot,
+            GithubIssueSnapshot::Open {
+                has_ready_label: true,
+                ready_label_trusted: false,
+                ..
+            }
+        ));
         assert!(
             tracker.load(Ordering::SeqCst),
             "fetch_label_actor_login MUST be called for open issues with ready label"
         );
     }
 
-    /// closed issue + ラベルなし → ready_label_trusted == false
+    /// open issue + ラベルなし → ready_label_trusted == false, API 未呼び出し
     #[tokio::test]
-    async fn closed_issue_without_ready_label_is_not_trusted() {
+    async fn open_issue_without_ready_label_is_not_trusted() {
         let tracker = Arc::new(AtomicBool::new(false));
-        let github = MockGithub::with_tracker(
-            false, // closed
-            vec![],
-            Arc::clone(&tracker),
-        );
+        let github = MockGithub::with_tracker(Arc::clone(&tracker));
         let config = test_config();
 
-        let snapshot = observe_github_issue(&github, &config, 1).await.unwrap();
+        let labels: Vec<String> = vec![];
+        let snapshot = observe_github_issue(&github, &config, 1, true, Some(&labels))
+            .await
+            .unwrap();
 
-        assert!(!snapshot.has_ready_label);
-        assert!(!snapshot.ready_label_trusted);
+        assert!(matches!(
+            snapshot,
+            GithubIssueSnapshot::Open {
+                has_ready_label: false,
+                ready_label_trusted: false,
+                ..
+            }
+        ));
         assert!(
             !tracker.load(Ordering::SeqCst),
             "fetch_label_actor_login must NOT be called when no ready label"
@@ -700,7 +728,7 @@ mod tests {
     #[tokio::test]
     async fn observe_pr_for_type_returns_none_when_no_pr_run() {
         let tracker = Arc::new(AtomicBool::new(false));
-        let github = MockGithub::with_tracker(true, vec![], Arc::clone(&tracker));
+        let github = MockGithub::with_tracker(Arc::clone(&tracker));
         let repo = MockProcessRunRepository::returning_none();
 
         let config = test_config();
@@ -715,13 +743,13 @@ mod tests {
     }
 
     /// T-4.CO.2: find_latest_with_pr_number が Some(run) (pr_number=42) を返す場合、
-    /// github.get_pr_status(42) が呼ばれる
+    /// github.observe_pr(42) が呼ばれて PrSnapshot が返る
     #[tokio::test]
-    async fn observe_pr_for_type_calls_get_pr_status_with_pr_number() {
-        let pr_status_calls = Arc::new(Mutex::new(vec![]));
+    async fn observe_pr_for_type_calls_observe_pr_with_pr_number() {
+        let observe_pr_calls = Arc::new(Mutex::new(vec![]));
         let run = make_run_with_pr_number(42);
 
-        let github = MockGithubWithPrTracking::new(Arc::clone(&pr_status_calls));
+        let github = MockGithubWithPrTracking::new(Arc::clone(&observe_pr_calls));
         let repo = MockProcessRunRepository::returning_run(run);
 
         let config = test_config();
@@ -733,52 +761,52 @@ mod tests {
             result.is_some(),
             "expected Some(PrSnapshot) for pr_number=42"
         );
-        let calls = pr_status_calls.lock().unwrap();
+        let calls = observe_pr_calls.lock().unwrap();
         assert_eq!(
             calls.as_slice(),
             &[42u64],
-            "get_pr_status should be called with 42"
+            "observe_pr should be called with 42"
         );
     }
 
-    /// T-4.CO.3: github.get_pr_status が 404 エラーを返す場合、
-    /// observe_pr_for_type は Ok(None) を返す（404ハンドリングの回帰確認）
+    /// T-4.CO.3: github.observe_pr が None を返す場合（PR が存在しない）、
+    /// observe_pr_for_type は Ok(None) を返す
     #[tokio::test]
-    async fn observe_pr_for_type_returns_none_on_404() {
-        let pr_status_calls = Arc::new(Mutex::new(vec![]));
+    async fn observe_pr_for_type_returns_none_when_pr_not_found() {
+        let observe_pr_calls = Arc::new(Mutex::new(vec![]));
         let run = make_run_with_pr_number(99);
 
-        let github = MockGithubWith404::new(Arc::clone(&pr_status_calls));
+        let github = MockGithubWith404::new(Arc::clone(&observe_pr_calls));
         let repo = MockProcessRunRepository::returning_run(run);
 
         let config = test_config();
         let result = observe_pr_for_type(&github, &repo, &config, 1, ProcessRunType::Design)
             .await
-            .expect("should not error on 404");
+            .expect("should not error when PR not found");
 
         assert!(
             result.is_none(),
-            "expected None when get_pr_status returns 404"
+            "expected None when observe_pr returns None"
         );
     }
 
-    /// MockGithub that records get_pr_status calls and returns PrStatus::Open
+    /// MockGithub that records observe_pr calls and returns a PrObservation with PrStatus::Open
     struct MockGithubWithPrTracking {
-        pr_status_calls: Arc<Mutex<Vec<u64>>>,
+        observe_pr_calls: Arc<Mutex<Vec<u64>>>,
     }
 
     impl MockGithubWithPrTracking {
         fn new(calls: Arc<Mutex<Vec<u64>>>) -> Self {
             Self {
-                pr_status_calls: calls,
+                observe_pr_calls: calls,
             }
         }
     }
 
     impl GitHubClient for MockGithubWithPrTracking {
-        async fn list_ready_issues(
+        async fn list_open_issues(
             &self,
-        ) -> Result<Vec<crate::application::port::github_client::GitHubIssue>> {
+        ) -> Result<Vec<crate::application::port::github_client::OpenIssueInfo>> {
             Ok(vec![])
         }
         async fn get_issue(&self, n: u64) -> Result<GitHubIssueDetail> {
@@ -788,9 +816,6 @@ mod tests {
                 body: String::new(),
                 labels: vec![],
             })
-        }
-        async fn is_issue_open(&self, _n: u64) -> Result<bool> {
-            Ok(true)
         }
         async fn find_pr_by_branches(&self, _h: &str, _b: &str) -> Result<Option<GitHubPr>> {
             Ok(None)
@@ -816,24 +841,14 @@ mod tests {
         async fn close_issue(&self, _n: u64) -> Result<()> {
             Ok(())
         }
-        async fn get_ci_check_runs(&self, _n: u64) -> Result<Vec<GitHubCheckRun>> {
-            Ok(vec![])
-        }
         async fn get_job_logs(&self, _id: u64) -> Result<String> {
             Ok(String::new())
-        }
-        async fn get_pr_mergeable(&self, _n: u64) -> Result<Option<bool>> {
-            Ok(Some(true))
         }
         async fn get_pr_details(&self, _n: u64) -> Result<GitHubPrDetails> {
             Ok(GitHubPrDetails {
                 merged: false,
                 mergeable: Some(true),
             })
-        }
-        async fn get_pr_status(&self, n: u64) -> Result<PrStatus> {
-            self.pr_status_calls.lock().unwrap().push(n);
-            Ok(PrStatus::Open)
         }
         async fn fetch_label_actor_login(&self, _n: u64, _label: &str) -> Result<Option<String>> {
             Ok(None)
@@ -847,25 +862,40 @@ mod tests {
         async fn remove_label(&self, _n: u64, _label: &str) -> Result<()> {
             Ok(())
         }
+        async fn observe_pr(
+            &self,
+            n: u64,
+        ) -> Result<Option<crate::application::port::github_client::PrObservation>> {
+            self.observe_pr_calls.lock().unwrap().push(n);
+            Ok(Some(
+                crate::application::port::github_client::PrObservation {
+                    state: PrStatus::Open,
+                    mergeable: Some(true),
+                    unresolved_threads: vec![],
+                    check_runs: vec![],
+                },
+            ))
+        }
     }
 
-    /// MockGithub that returns a 404 error from get_pr_status
+    /// MockGithub that returns None from observe_pr (PR not found)
     struct MockGithubWith404 {
-        pr_status_calls: Arc<Mutex<Vec<u64>>>,
+        #[expect(dead_code)]
+        observe_pr_calls: Arc<Mutex<Vec<u64>>>,
     }
 
     impl MockGithubWith404 {
         fn new(calls: Arc<Mutex<Vec<u64>>>) -> Self {
             Self {
-                pr_status_calls: calls,
+                observe_pr_calls: calls,
             }
         }
     }
 
     impl GitHubClient for MockGithubWith404 {
-        async fn list_ready_issues(
+        async fn list_open_issues(
             &self,
-        ) -> Result<Vec<crate::application::port::github_client::GitHubIssue>> {
+        ) -> Result<Vec<crate::application::port::github_client::OpenIssueInfo>> {
             Ok(vec![])
         }
         async fn get_issue(&self, n: u64) -> Result<GitHubIssueDetail> {
@@ -875,9 +905,6 @@ mod tests {
                 body: String::new(),
                 labels: vec![],
             })
-        }
-        async fn is_issue_open(&self, _n: u64) -> Result<bool> {
-            Ok(true)
         }
         async fn find_pr_by_branches(&self, _h: &str, _b: &str) -> Result<Option<GitHubPr>> {
             Ok(None)
@@ -903,24 +930,14 @@ mod tests {
         async fn close_issue(&self, _n: u64) -> Result<()> {
             Ok(())
         }
-        async fn get_ci_check_runs(&self, _n: u64) -> Result<Vec<GitHubCheckRun>> {
-            Ok(vec![])
-        }
         async fn get_job_logs(&self, _id: u64) -> Result<String> {
             Ok(String::new())
-        }
-        async fn get_pr_mergeable(&self, _n: u64) -> Result<Option<bool>> {
-            Ok(Some(true))
         }
         async fn get_pr_details(&self, _n: u64) -> Result<GitHubPrDetails> {
             Ok(GitHubPrDetails {
                 merged: false,
                 mergeable: Some(true),
             })
-        }
-        async fn get_pr_status(&self, n: u64) -> Result<PrStatus> {
-            self.pr_status_calls.lock().unwrap().push(n);
-            Err(anyhow::anyhow!("404: Not Found"))
         }
         async fn fetch_label_actor_login(&self, _n: u64, _label: &str) -> Result<Option<String>> {
             Ok(None)
@@ -933,6 +950,12 @@ mod tests {
         }
         async fn remove_label(&self, _n: u64, _label: &str) -> Result<()> {
             Ok(())
+        }
+        async fn observe_pr(
+            &self,
+            _n: u64,
+        ) -> Result<Option<crate::application::port::github_client::PrObservation>> {
+            Ok(None)
         }
     }
 }

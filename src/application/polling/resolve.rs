@@ -446,8 +446,8 @@ pub fn kill_stalled(session_mgr: &mut SessionManager, stall_timeout_secs: u64) {
 mod tests {
     use super::*;
     use crate::application::port::github_client::{
-        GitHubCheckRun, GitHubClient, GitHubIssue, GitHubIssueDetail, GitHubPr, GitHubPrDetails,
-        PrStatus, RepositoryPermission, ReviewThread,
+        GitHubClient, GitHubIssueDetail, GitHubPr, GitHubPrDetails, RepositoryPermission,
+        ReviewThread,
     };
     use crate::application::port::issue_repository::IssueRepository;
     use crate::application::port::process_run_repository::ProcessRunRepository;
@@ -594,7 +594,9 @@ mod tests {
     struct GhFindPrError;
 
     impl GitHubClient for GhFindPrError {
-        async fn list_ready_issues(&self) -> Result<Vec<GitHubIssue>> {
+        async fn list_open_issues(
+            &self,
+        ) -> Result<Vec<crate::application::port::github_client::OpenIssueInfo>> {
             Ok(vec![])
         }
         async fn get_issue(&self, _n: u64) -> Result<GitHubIssueDetail> {
@@ -604,9 +606,6 @@ mod tests {
                 body: String::new(),
                 labels: vec![],
             })
-        }
-        async fn is_issue_open(&self, _n: u64) -> Result<bool> {
-            Ok(true)
         }
         async fn find_pr_by_branches(&self, _h: &str, _b: &str) -> Result<Option<GitHubPr>> {
             Err(anyhow::anyhow!("GitHub API unavailable"))
@@ -632,23 +631,14 @@ mod tests {
         async fn close_issue(&self, _n: u64) -> Result<()> {
             Ok(())
         }
-        async fn get_ci_check_runs(&self, _n: u64) -> Result<Vec<GitHubCheckRun>> {
-            Ok(vec![])
-        }
         async fn get_job_logs(&self, _id: u64) -> Result<String> {
             Ok(String::new())
-        }
-        async fn get_pr_mergeable(&self, _n: u64) -> Result<Option<bool>> {
-            Ok(Some(true))
         }
         async fn get_pr_details(&self, _n: u64) -> Result<GitHubPrDetails> {
             Ok(GitHubPrDetails {
                 merged: false,
                 mergeable: Some(true),
             })
-        }
-        async fn get_pr_status(&self, _n: u64) -> Result<PrStatus> {
-            Ok(PrStatus::Closed)
         }
         async fn fetch_label_actor_login(&self, _n: u64, _label: &str) -> Result<Option<String>> {
             Ok(None)
@@ -659,13 +649,21 @@ mod tests {
         async fn remove_label(&self, _n: u64, _label: &str) -> Result<()> {
             Ok(())
         }
+        async fn observe_pr(
+            &self,
+            _n: u64,
+        ) -> Result<Option<crate::application::port::github_client::PrObservation>> {
+            Ok(None)
+        }
     }
 
     /// Returns Ok(None) from find_pr_by_branches; always fails create_pr.
     struct GhCreatePrError;
 
     impl GitHubClient for GhCreatePrError {
-        async fn list_ready_issues(&self) -> Result<Vec<GitHubIssue>> {
+        async fn list_open_issues(
+            &self,
+        ) -> Result<Vec<crate::application::port::github_client::OpenIssueInfo>> {
             Ok(vec![])
         }
         async fn get_issue(&self, _n: u64) -> Result<GitHubIssueDetail> {
@@ -675,9 +673,6 @@ mod tests {
                 body: String::new(),
                 labels: vec![],
             })
-        }
-        async fn is_issue_open(&self, _n: u64) -> Result<bool> {
-            Ok(true)
         }
         async fn find_pr_by_branches(&self, _h: &str, _b: &str) -> Result<Option<GitHubPr>> {
             Ok(None)
@@ -703,23 +698,14 @@ mod tests {
         async fn close_issue(&self, _n: u64) -> Result<()> {
             Ok(())
         }
-        async fn get_ci_check_runs(&self, _n: u64) -> Result<Vec<GitHubCheckRun>> {
-            Ok(vec![])
-        }
         async fn get_job_logs(&self, _id: u64) -> Result<String> {
             Ok(String::new())
-        }
-        async fn get_pr_mergeable(&self, _n: u64) -> Result<Option<bool>> {
-            Ok(Some(true))
         }
         async fn get_pr_details(&self, _n: u64) -> Result<GitHubPrDetails> {
             Ok(GitHubPrDetails {
                 merged: false,
                 mergeable: Some(true),
             })
-        }
-        async fn get_pr_status(&self, _n: u64) -> Result<PrStatus> {
-            Ok(PrStatus::Closed)
         }
         async fn fetch_label_actor_login(&self, _n: u64, _label: &str) -> Result<Option<String>> {
             Ok(None)
@@ -729,6 +715,12 @@ mod tests {
         }
         async fn remove_label(&self, _n: u64, _label: &str) -> Result<()> {
             Ok(())
+        }
+        async fn observe_pr(
+            &self,
+            _n: u64,
+        ) -> Result<Option<crate::application::port::github_client::PrObservation>> {
+            Ok(None)
         }
     }
 

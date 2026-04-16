@@ -33,6 +33,14 @@ pub struct GitHubIssue {
     pub title: String,
 }
 
+/// Lightweight issue info returned by `list_open_issues`.
+/// Contains only the fields needed for collect-phase discovery and observation.
+#[derive(Debug, Clone)]
+pub struct OpenIssueInfo {
+    pub number: u64,
+    pub labels: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct GitHubIssueDetail {
     pub number: u64,
@@ -60,6 +68,17 @@ pub struct ReviewComment {
     pub author: String,
     pub body: String,
     pub author_association: AuthorAssociation,
+}
+
+/// Unified PR observation returned by a single GraphQL query.
+/// Replaces separate calls to get_pr_status, list_unresolved_threads,
+/// get_ci_check_runs, and get_pr_mergeable.
+#[derive(Debug, Clone)]
+pub struct PrObservation {
+    pub state: PrStatus,
+    pub mergeable: Option<bool>,
+    pub unresolved_threads: Vec<ReviewThread>,
+    pub check_runs: Vec<GitHubCheckRun>,
 }
 
 /// GitHub のリポジトリ permission level。
@@ -122,19 +141,16 @@ impl RepositoryPermission {
 }
 
 pub trait GitHubClient: Send + Sync {
-    fn list_ready_issues(
+    /// Fetch all open issues (not PRs) with full pagination.
+    /// Returns issue number + labels for each open issue.
+    fn list_open_issues(
         &self,
-    ) -> impl std::future::Future<Output = Result<Vec<GitHubIssue>>> + Send;
+    ) -> impl std::future::Future<Output = Result<Vec<OpenIssueInfo>>> + Send;
 
     fn get_issue(
         &self,
         issue_number: u64,
     ) -> impl std::future::Future<Output = Result<GitHubIssueDetail>> + Send;
-
-    fn is_issue_open(
-        &self,
-        issue_number: u64,
-    ) -> impl std::future::Future<Output = Result<bool>> + Send;
 
     fn find_pr_by_branches(
         &self,
@@ -182,33 +198,15 @@ pub trait GitHubClient: Send + Sync {
         issue_number: u64,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 
-    /// PR の CI check-runs を取得する。status が "completed" のもののみ返す。
-    fn get_ci_check_runs(
-        &self,
-        pr_number: u64,
-    ) -> impl std::future::Future<Output = Result<Vec<GitHubCheckRun>>> + Send;
-
     /// CI job のログを取得する。check-run ID を job ID として使用。
     fn get_job_logs(&self, job_id: u64)
     -> impl std::future::Future<Output = Result<String>> + Send;
-
-    /// PR の mergeable フィールドを取得する。None は GitHub が計算中を意味する。
-    fn get_pr_mergeable(
-        &self,
-        pr_number: u64,
-    ) -> impl std::future::Future<Output = Result<Option<bool>>> + Send;
 
     /// PR の merged / mergeable を 1 回の API 呼び出しで取得する。
     fn get_pr_details(
         &self,
         pr_number: u64,
     ) -> impl std::future::Future<Output = Result<GitHubPrDetails>> + Send;
-
-    /// PR の三状態（Open/Closed/Merged）を取得する。
-    fn get_pr_status(
-        &self,
-        pr_number: u64,
-    ) -> impl std::future::Future<Output = Result<PrStatus>> + Send;
 
     /// Issue の timeline から、指定ラベルを最後に付与した actor の login を返す。
     ///
@@ -233,4 +231,12 @@ pub trait GitHubClient: Send + Sync {
         issue_number: u64,
         label_name: &str,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
+
+    /// Unified PR observation via a single GraphQL query.
+    /// Returns state, mergeable, unresolved review threads, and CI check runs.
+    /// Returns `Ok(None)` if the PR does not exist (GraphQL returns `pullRequest: null`).
+    fn observe_pr(
+        &self,
+        pr_number: u64,
+    ) -> impl std::future::Future<Output = Result<Option<PrObservation>>> + Send;
 }

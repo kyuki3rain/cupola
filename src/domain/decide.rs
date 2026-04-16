@@ -8,7 +8,7 @@ use crate::domain::issue::Issue;
 use crate::domain::metadata_update::MetadataUpdates;
 use crate::domain::process_run::{ProcessRunState, ProcessRunType};
 use crate::domain::state::State;
-use crate::domain::world_snapshot::{GithubIssueState, PrState, WorldSnapshot};
+use crate::domain::world_snapshot::{GithubIssueSnapshot, PrState, WorldSnapshot};
 
 /// Pure decision function: given the current Issue state, observations (WorldSnapshot),
 /// and configuration, returns the Decision (next_state + metadata_updates + effects).
@@ -17,11 +17,14 @@ pub fn decide(prev: &Issue, snap: &WorldSnapshot, cfg: &Config) -> Decision {
     let mut effects: Vec<Effect> = Vec::new();
     let mut metadata_updates = MetadataUpdates::default();
 
-    // Cross-cutting: propagate weight change
-    if let Some(snap_weight) = snap.github_issue.weight
-        && snap_weight != prev.weight
+    // Cross-cutting: propagate weight change (only meaningful for open issues)
+    if let GithubIssueSnapshot::Open {
+        weight: Some(snap_weight),
+        ..
+    } = &snap.github_issue
+        && *snap_weight != prev.weight
     {
-        metadata_updates.weight = Some(snap_weight);
+        metadata_updates.weight = Some(*snap_weight);
     }
 
     let next_state = dispatch_state(prev, snap, cfg, &mut effects, &mut metadata_updates);
@@ -66,7 +69,7 @@ fn dispatch_state(
 }
 
 fn issue_is_closed(snap: &WorldSnapshot) -> bool {
-    snap.github_issue.state == GithubIssueState::Closed
+    matches!(snap.github_issue, GithubIssueSnapshot::Closed)
 }
 
 fn go_cancelled_issue_closed(effects: &mut Vec<Effect>) -> State {
@@ -109,8 +112,13 @@ fn decide_idle(
     effects: &mut Vec<Effect>,
     _metadata_updates: &mut MetadataUpdates,
 ) -> State {
-    if snap.github_issue.has_ready_label {
-        if snap.github_issue.ready_label_trusted {
+    if let GithubIssueSnapshot::Open {
+        has_ready_label: true,
+        ready_label_trusted,
+        ..
+    } = &snap.github_issue
+    {
+        if *ready_label_trusted {
             emit_spawn_init(snap, effects);
             State::InitializeRunning
         } else {
@@ -798,14 +806,14 @@ fn decide_cancelled(
         effects.push(Effect::CloseIssue);
         return State::Cancelled;
     }
-    // close_finished=true: check github_issue.state
-    if snap.github_issue.state == GithubIssueState::Open {
+    // close_finished=true: check whether github_issue is Open
+    if matches!(snap.github_issue, GithubIssueSnapshot::Open { .. }) {
         // Cancelled → Idle
         metadata_updates.consecutive_failures_epoch = Some(Some(Utc::now()));
         metadata_updates.close_finished = Some(false);
         return State::Idle;
     }
-    // close_finished=true, github_issue.state=closed: stay, no effects
+    // close_finished=true, github_issue is Closed: stay, no effects
     State::Cancelled
 }
 
@@ -815,7 +823,7 @@ fn decide_cancelled(
 mod tests {
     use super::*;
     use crate::domain::world_snapshot::{
-        CiStatus, GithubIssueState, ProcessSnapshot, WorldSnapshot, fixtures,
+        CiStatus, GithubIssueSnapshot, ProcessSnapshot, WorldSnapshot, fixtures,
     };
 
     fn cfg() -> Config {
@@ -835,14 +843,17 @@ mod tests {
 
     fn snap_with_ready_label(trusted: bool) -> WorldSnapshot {
         let mut snap = fixtures::idle();
-        snap.github_issue.has_ready_label = true;
-        snap.github_issue.ready_label_trusted = trusted;
+        snap.github_issue = GithubIssueSnapshot::Open {
+            has_ready_label: true,
+            ready_label_trusted: trusted,
+            weight: None,
+        };
         snap
     }
 
     fn snap_closed() -> WorldSnapshot {
         let mut snap = fixtures::idle();
-        snap.github_issue.state = GithubIssueState::Closed;
+        snap.github_issue = GithubIssueSnapshot::Closed;
         snap
     }
 
@@ -1037,7 +1048,7 @@ mod tests {
         let issue = make_issue(State::InitializeRunning);
         let mut snap = snap_with_init(ProcessRunState::Succeeded, 0);
         snap.impl_pr = Some(fixtures::merged_pr());
-        snap.github_issue.state = GithubIssueState::Closed;
+        snap.github_issue = GithubIssueSnapshot::Closed;
         let d = decide(&issue, &snap, &cfg());
         assert_eq!(d.next_state, State::Cancelled);
         assert!(d.effects.contains(&Effect::PostCancelComment));
@@ -1824,7 +1835,7 @@ mod tests {
     fn x_1_close_finished_issue_open_goes_idle() {
         let mut issue = make_issue(State::Cancelled);
         issue.close_finished = true;
-        let snap = fixtures::idle(); // github_issue.state == Open
+        let snap = fixtures::idle(); // github_issue is Open
         let d = decide(&issue, &snap, &cfg());
         assert_eq!(d.next_state, State::Idle);
         assert!(d.metadata_updates.consecutive_failures_epoch.is_some());
@@ -1874,7 +1885,11 @@ mod tests {
         let mut issue = make_issue(State::Idle);
         issue.weight = TaskWeight::Light;
         let mut snap = fixtures::idle();
-        snap.github_issue.weight = Some(TaskWeight::Heavy);
+        snap.github_issue = GithubIssueSnapshot::Open {
+            has_ready_label: false,
+            ready_label_trusted: false,
+            weight: Some(TaskWeight::Heavy),
+        };
         let d = decide(&issue, &snap, &cfg());
         assert_eq!(d.metadata_updates.weight, Some(TaskWeight::Heavy));
     }
