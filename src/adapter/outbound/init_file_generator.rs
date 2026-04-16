@@ -249,6 +249,52 @@ const GITIGNORE_ENTRIES: &str = r#"# cupola
 .cupola/inputs/
 "#;
 
+/// `.gitignore` 内の Cupola 管理ブロックを `new_entries` で置き換える。
+///
+/// ブロックはマーカー行から始まり、最初の空行（またはファイル末尾）で終わる。
+/// マーカーより前の行およびブロック終端以降の行はそのまま保持される。
+fn replace_cupola_block(content: &str, new_entries: &str, line_ending: &str) -> String {
+    let ends_with_newline = content.ends_with('\n');
+    let lines: Vec<&str> = content.lines().collect();
+
+    let Some(marker_idx) = lines.iter().position(|l| *l == GITIGNORE_MARKER) else {
+        // マーカーが見つからない場合は末尾に追記する（呼び出し元の事前条件違反への安全なフォールバック）
+        let separator = if content.ends_with('\n') {
+            ""
+        } else {
+            line_ending
+        };
+        return format!("{content}{separator}{new_entries}");
+    };
+
+    // ブロック終端: マーカーより後の最初の空行、または EOF
+    let block_end_idx = lines[marker_idx + 1..]
+        .iter()
+        .position(|l| l.is_empty())
+        .map(|rel| marker_idx + 1 + rel)
+        .unwrap_or(lines.len());
+
+    let before_lines = &lines[..marker_idx];
+    let after_lines = &lines[block_end_idx..]; // 空行セパレータも含む
+
+    let mut result = String::new();
+
+    if !before_lines.is_empty() {
+        result.push_str(&before_lines.join(line_ending));
+        result.push_str(line_ending);
+    }
+    result.push_str(new_entries); // new_entries は line_ending で終わることが保証されている
+
+    if !after_lines.is_empty() {
+        result.push_str(&after_lines.join(line_ending));
+        if ends_with_newline {
+            result.push_str(line_ending);
+        }
+    }
+
+    result
+}
+
 #[derive(Clone)]
 pub struct InitFileGenerator {
     base_dir: PathBuf,
@@ -316,8 +362,10 @@ impl InitFileGenerator {
             let content = std::fs::read_to_string(&gitignore_path).with_context(|| {
                 format!("failed to read .gitignore at {}", gitignore_path.display())
             })?;
-            let has_cupola =
-                content.contains(GITIGNORE_MARKER) || content.contains(GITIGNORE_CONTENT_CHECK);
+            // Use line-based matching to avoid false positives from substring matches
+            // (e.g. a comment like "# see .cupola/cupola.db" should not trigger detection)
+            let has_marker = content.lines().any(|l| l == GITIGNORE_MARKER);
+            let has_cupola = has_marker || content.lines().any(|l| l == GITIGNORE_CONTENT_CHECK);
             if has_cupola && !upgrade {
                 tracing::info!(
                     path = %gitignore_path.display(),
@@ -331,19 +379,12 @@ impl InitFileGenerator {
                 "\n"
             };
             let entries = GITIGNORE_ENTRIES.replace('\n', line_ending);
-            let new_content = if has_cupola {
-                // upgrade=true: 既存の cupola セクション（マーカー以降）を新しいエントリで置き換える
-                let marker_pos = content
-                    .find(GITIGNORE_MARKER)
-                    .or_else(|| content.find(GITIGNORE_CONTENT_CHECK))
-                    .unwrap_or(content.len());
-                let before = content[..marker_pos].trim_end();
-                if before.is_empty() {
-                    entries
-                } else {
-                    format!("{before}{line_ending}{entries}")
-                }
+            let new_content = if has_marker && upgrade {
+                // upgrade=true かつマーカーあり: マーカー行から最初の空行（またはEOF）までの
+                // Cupola 管理ブロックのみを新しいエントリで置き換え、それ以外は保持する
+                replace_cupola_block(&content, &entries, line_ending)
             } else {
+                // マーカーなし（または upgrade=false）: 末尾に追記
                 let separator = if content.ends_with('\n') {
                     ""
                 } else {
@@ -675,6 +716,39 @@ mod tests {
         assert!(
             content.contains(".cupola/cupola.db"),
             "new cupola entries present"
+        );
+    }
+
+    #[test]
+    fn gitignore_upgrade_preserves_content_after_cupola_section() {
+        let (tmp, generator) = setup();
+        let gitignore_path = tmp.path().join(".gitignore");
+        fs::write(
+            &gitignore_path,
+            "node_modules/\n# cupola\n.cupola/cupola.db\nold-entry\n\ndist/\nuser-rule/\n",
+        )
+        .expect("write");
+
+        let result = generator.append_gitignore_entries(true).expect("upgrade");
+        assert!(result);
+
+        let content = fs::read_to_string(&gitignore_path).expect("read");
+        assert!(
+            content.contains("node_modules/"),
+            "entries before cupola preserved"
+        );
+        assert!(!content.contains("old-entry"), "old cupola entries removed");
+        assert!(
+            content.contains(".cupola/cupola.db"),
+            "new cupola entries present"
+        );
+        assert!(
+            content.contains("dist/"),
+            "entries after cupola block preserved"
+        );
+        assert!(
+            content.contains("user-rule/"),
+            "entries after cupola block preserved"
         );
     }
 
