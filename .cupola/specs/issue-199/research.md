@@ -21,8 +21,8 @@
 - **コンテキスト**: `--upgrade` で上書き対象となるファイルを正確に把握する必要がある
 - **参照元**: `src/adapter/outbound/init_file_generator.rs` の `CLAUDE_CODE_ASSETS`
 - **調査結果**:
-  - `CLAUDE_CODE_ASSETS` 配列には 24 ファイルが定義されている
-  - 対象: `.claude/commands/cupola/*.md` (4ファイル)、`.cupola/settings/rules/*.md` (7ファイル)、`.cupola/settings/templates/specs/*.md|json` (6ファイル)、`.cupola/settings/templates/steering/*.md` (3ファイル)、`.cupola/settings/templates/steering-custom/*.md` (7ファイル)
+  - `CLAUDE_CODE_ASSETS` 配列には 29 ファイルが定義されている
+  - 対象: `.claude/commands/cupola/*.md` (4ファイル)、`.cupola/settings/rules/*.md` (9ファイル)、`.cupola/settings/templates/specs/*.md|json` (6ファイル)、`.cupola/settings/templates/steering/*.md` (3ファイル)、`.cupola/settings/templates/steering-custom/*.md` (7ファイル)
   - `install_claude_code_assets()` は全ファイルを `if path.exists() { continue; }` でスキップしている
   - `.cupola/steering/` ディレクトリ作成は `install_claude_code_assets()` 内で行われているが、steering配下のファイルは生成していない
 - **インパクト**: `upgrade=true` 時は `continue` を除去し、無条件で上書きすれば良い
@@ -96,7 +96,7 @@
 
 - テスト更新漏れ: `FileGenerator` トレイトメソッドのシグネチャ変更により、`MockFileGenerator` や全テストの呼び出し箇所でコンパイルエラーが発生する。`cargo check` を早期に実行して漏れを検出する。
 - `.gitignore` の置換ロジックのバグ: セクション境界の判定が誤るとユーザーエントリを消失させる可能性がある。プロパティベーステストでエッジケース（末尾改行なし、空ファイル、複数Cupolaブロックなど）を検証する。
-- `upgrade=true` 時の `InitReport` 報告: 現在の `agent_assets_installed: bool` の意味が「新規インストール」から「変更あり」にシフトするが、アップグレード時は既存ファイルを上書きするため `true` が返る。報告メッセージを `upgrade` フラグに応じて切り替えることで意味の齟齬を回避する。
+- `upgrade=true` 時の `InitReport` 報告: 現在の `agent_assets_installed: bool` の意味が「新規インストール」から「変更あり」にシフトする。差分比較によりファイルの変更がない場合は `false` が返り、`"already up to date"` メッセージを表示できる。報告メッセージを `upgrade` フラグに応じて切り替えることで意味の齟齬を回避する。
 
 ## 参照
 

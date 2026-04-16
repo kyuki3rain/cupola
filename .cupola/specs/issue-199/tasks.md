@@ -26,12 +26,13 @@
   - _Requirements: 1.1, 1.2, 2.1, 2.2, 2.3, 2.4, 3.1, 3.2, 3.3_
 
 - [ ] 4. `InitFileGenerator` のアップグレードロジック実装
-- [ ] 4.1 (P) `install_claude_code_assets` にアップグレード時の上書きロジックを実装する
+- [ ] 4.1 (P) `install_claude_code_assets` にアップグレード時の差分比較ロジックを実装する
   - `src/adapter/outbound/init_file_generator.rs` の `install_claude_code_assets` シグネチャを `(upgrade: bool)` に変更する
-  - `upgrade=true` の場合は `if path.exists() { continue; }` を除去し、全 `CLAUDE_CODE_ASSETS` を無条件で上書きする
+  - `upgrade=true` の場合も既存ファイルの内容と埋め込み `CLAUDE_CODE_ASSETS` の内容を比較し、差分がある場合のみ上書きする
+  - `upgrade=true` かつ差分がない場合は書き込みを行わずスキップし、`"already up to date"` を判定できる状態にする
   - `upgrade=false` の場合は既存の `exists()` チェックロジックを維持する
   - `FileGenerator` impl の委譲メソッドシグネチャも更新する
-  - テスト: `upgrade=true` で既存ファイルの内容が最新版に変わること、`upgrade=false` で既存ファイルがスキップされること
+  - テスト: `upgrade=true` で差分ありなら既存ファイルの内容が最新版に変わること、差分なしならスキップされること、`upgrade=false` で既存ファイルがスキップされること
   - _Requirements: 2.1, 2.2, 2.3, 2.4_
 
 - [ ] 4.2 (P) `append_gitignore_entries` にアップグレード時のセクション置換ロジックを実装する

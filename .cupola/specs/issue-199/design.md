@@ -90,8 +90,8 @@ sequenceDiagram
     CLI->>App: Command Init agent upgrade=true
     App->>UC: new base_dir db_existed db file_gen runner agent upgrade=true
     UC->>IFG: install_claude_code_assets upgrade=true
-    Note over IFG: upgrade=true の場合 exists チェックをスキップして上書き
-    IFG-->>UC: wrote_any=true
+    Note over IFG: upgrade=true の場合 既存内容と同梱内容を比較し差分があるファイルのみ上書き
+    IFG-->>UC: wrote_any=差分ありファイルが1つ以上あれば true
     UC->>IFG: append_gitignore_entries upgrade=true
     Note over IFG: マーカー既存の場合 Cupola セクションを置換
     IFG-->>UC: true
@@ -100,7 +100,7 @@ sequenceDiagram
 ```
 
 フロー上の重要な判断点:
-- `upgrade=true` 時、`install_claude_code_assets` は `CLAUDE_CODE_ASSETS` の全ファイルを無条件で上書きする（`if path.exists() { continue }` を除去）。
+- `upgrade=true` 時、`install_claude_code_assets` は `CLAUDE_CODE_ASSETS` の各ファイルについて既存内容と同梱内容を比較し、差分がある場合のみ上書きする（差分なしはスキップ）。
 - `.gitignore` 置換はCupolaブロック（`# cupola` マーカーから次の空行まで）を特定して差し替える。
 
 ## コンポーネントとインターフェース
@@ -257,9 +257,11 @@ upgrade=false（従来動作）:
   CLAUDE_CODE_ASSETS の各ファイルを path.exists() チェックし、存在すればスキップ
 
 upgrade=true（新動作）:
-  CLAUDE_CODE_ASSETS の全ファイルを無条件で上書き（exists チェック除去）
+  CLAUDE_CODE_ASSETS の各ファイルについて既存内容と同梱内容を比較する
+  ファイルが存在しない場合は新規作成、存在して内容差分がある場合のみ上書きする
+  内容差分がない場合は書き込みを省略する
   ステアリングディレクトリの作成はどちらのケースでも実行
-  戻り値: 少なくとも1ファイルを書き込んだ場合 true（upgrade=true なら常に true）
+  戻り値: 少なくとも1ファイルを新規作成または更新した場合 true、差分がなく変更なしの場合 false
 ```
 
 ##### `append_gitignore_entries(upgrade: bool)` の実装方針
@@ -323,7 +325,8 @@ upgrade=true かつマーカーが存在しない場合:
 
 ### 単体テスト（`src/adapter/outbound/init_file_generator.rs`）
 
-- `upgrade=true` 時に `CLAUDE_CODE_ASSETS` の全ファイルが上書きされること（既存ファイルの内容が変わること）
+- `upgrade=true` 時に差分ありの場合は既存ファイルの内容が最新版に変わること
+- `upgrade=true` 時に差分なしの場合は書き込みが省略（スキップ）されること
 - `upgrade=false` 時に既存ファイルがスキップされること（変更なし）
 - `.gitignore` 置換: マーカー既存かつ `upgrade=true` の場合にCupolaセクションのみが置換されること
 - `.gitignore` 置換: マーカー後のユーザー定義エントリが保護されること
