@@ -372,7 +372,7 @@ fn t_7_it_cancel_retry_process_failure_exhausted() {
         decision
             .effects
             .iter()
-            .any(|e| matches!(e, Effect::PostRetryExhaustedComment)),
+            .any(|e| matches!(e, Effect::PostRetryExhaustedComment { .. })),
         "should emit PostRetryExhaustedComment"
     );
 }

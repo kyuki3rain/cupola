@@ -135,13 +135,15 @@ where
             github.comment_on_issue(n, &msg).await?;
         }
 
-        Effect::PostRetryExhaustedComment => {
+        Effect::PostRetryExhaustedComment {
+            consecutive_failures,
+            ..
+        } => {
             let unknown = rust_i18n::t!("issue_comment.unknown_error", locale = lang);
             // Find the last error message from the most recent failed process run
             let last_error = find_last_error(process_repo, issue.id).await;
             let error_str = last_error.as_deref().unwrap_or(&unknown);
-            // Count consecutive failures across all process types
-            let count = count_total_failures(process_repo, issue.id).await;
+            let count = consecutive_failures;
             let msg = rust_i18n::t!(
                 "issue_comment.retry_exhausted",
                 locale = lang,
@@ -731,15 +733,6 @@ async fn find_last_error<P: ProcessRunRepository>(
         .and_then(|r| r.error_message)
 }
 
-async fn count_total_failures<P: ProcessRunRepository>(process_repo: &P, issue_id: i64) -> u32 {
-    let runs = process_repo
-        .find_by_issue(issue_id)
-        .await
-        .unwrap_or_default();
-    runs.into_iter()
-        .filter(|r| r.state == crate::domain::process_run::ProcessRunState::Failed)
-        .count() as u32
-}
 
 #[cfg(test)]
 mod tests {
@@ -933,7 +926,11 @@ mod tests {
     fn best_effort_classification() {
         assert!(Effect::PostCompletedComment.is_best_effort());
         assert!(Effect::PostCancelComment.is_best_effort());
-        assert!(Effect::PostRetryExhaustedComment.is_best_effort());
+        assert!(Effect::PostRetryExhaustedComment {
+            process_type: ProcessRunType::Design,
+            consecutive_failures: 3,
+        }
+        .is_best_effort());
         assert!(Effect::RejectUntrustedReadyIssue.is_best_effort());
         assert!(Effect::PostCiFixLimitComment.is_best_effort());
         assert!(Effect::CleanupWorktree.is_best_effort());
@@ -1684,6 +1681,51 @@ mod tests {
         assert!(
             metadata_updates.lock().expect("lock").is_empty(),
             "should not update metadata when worktree_path is None"
+        );
+    }
+
+    // ── Tests for PostRetryExhaustedComment payload usage ────────────────────
+
+    /// T-3.EX.re.1: PostRetryExhaustedComment uses consecutive_failures from payload as count
+    #[tokio::test]
+    async fn retry_exhausted_comment_uses_payload_consecutive_failures() {
+        let github = MockGitHubForInit::new();
+        let proc_repo = MockProcRepo::new();
+        let worktree = MockGitWorktreeForCleanup::new().0;
+        let (issue_repo, _) = MockIssueRepoForCleanup::new();
+        let file_gen = MockFileGenerator::with_log(Arc::new(Mutex::new(vec![])));
+        let mut session_mgr = crate::application::session_manager::SessionManager::new();
+        let mut init_mgr = crate::application::init_task_manager::InitTaskManager::new();
+        let config =
+            Config::default_with_repo("owner".to_string(), "repo".to_string(), "main".to_string());
+        let mut issue = make_test_issue("issue-1");
+
+        let effects = [Effect::PostRetryExhaustedComment {
+            process_type: ProcessRunType::Design,
+            consecutive_failures: 3,
+        }];
+        super::execute_effects(
+            &github,
+            &issue_repo,
+            &proc_repo,
+            &MockClaudeRunner,
+            &worktree,
+            &file_gen,
+            &mut session_mgr,
+            &mut init_mgr,
+            &config,
+            &mut issue,
+            &effects,
+        )
+        .await
+        .expect("execute_effects should succeed");
+
+        let comments = github.posted_comments();
+        assert_eq!(comments.len(), 1, "should post exactly one comment");
+        assert!(
+            comments[0].contains('3'),
+            "comment should contain the consecutive_failures count (3), got: {:?}",
+            comments[0]
         );
     }
 
