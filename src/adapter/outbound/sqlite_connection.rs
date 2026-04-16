@@ -181,7 +181,7 @@ mod tests {
         })
         .join();
         // Mutex が毒化しているため conn_lock() はパニックする
-        db.conn_lock();
+        drop(db.conn_lock());
     }
 
     async fn conn_lock_via_spawn_blocking(db: SqliteConnection) {
