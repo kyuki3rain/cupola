@@ -28,5 +28,5 @@
 - [ ] 3.1 テストと静的解析を実行してリグレッションがないことを確認する
   - `devbox run test` を実行してすべてのテストがパスすることを確認する
   - `devbox run clippy` を実行して警告がゼロであることを確認する
-  - `devbox run fmt` を実行してフォーマットを整える
+  - `devbox run fmt-check` を実行してフォーマット差分がないことを確認する
   - _Requirements: 2.5, 2.6_
