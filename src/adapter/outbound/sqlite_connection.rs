@@ -184,6 +184,31 @@ mod tests {
         db.conn_lock();
     }
 
+    async fn conn_lock_via_spawn_blocking(db: SqliteConnection) {
+        tokio::task::spawn_blocking(move || {
+            let _guard = db.conn_lock();
+        })
+        .await
+        .expect("spawn_blocking task should not panic");
+    }
+
+    /// Task 1.2: 実運用に近い spawn_blocking 経由でも Mutex 毒化が async 呼び出し側でパニックになることを検証する
+    #[tokio::test]
+    #[should_panic(expected = "spawn_blocking task should not panic")]
+    async fn conn_lock_panics_on_poisoned_mutex_via_spawn_blocking() {
+        let db = SqliteConnection::open_in_memory().expect("should open");
+        let arc = db.conn().clone();
+        // 別スレッドでロックを保持したままパニックし、Mutex を毒化する
+        let _ = std::thread::spawn(move || {
+            let _guard = arc.lock().unwrap();
+            panic!("intentionally poison the mutex");
+        })
+        .join();
+
+        // spawn_blocking 内の panic は JoinError になるため、await 側で unwrap/expect すると panic になる
+        conn_lock_via_spawn_blocking(db).await;
+    }
+
     #[test]
     fn open_in_memory_and_init_schema() {
         let db = SqliteConnection::open_in_memory().expect("should open");

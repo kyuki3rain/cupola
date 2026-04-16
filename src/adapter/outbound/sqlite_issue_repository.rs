@@ -38,7 +38,12 @@ impl IssueRepository for SqliteIssueRepository {
             Ok(issue)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn find_by_issue_number(&self, issue_number: u64) -> Result<Option<Issue>> {
@@ -58,7 +63,12 @@ impl IssueRepository for SqliteIssueRepository {
             Ok(issue)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn find_active(&self) -> Result<Vec<Issue>> {
@@ -78,7 +88,12 @@ impl IssueRepository for SqliteIssueRepository {
             Ok(issues)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn find_all(&self) -> Result<Vec<Issue>> {
@@ -98,7 +113,12 @@ impl IssueRepository for SqliteIssueRepository {
             Ok(issues)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn save(&self, issue: &Issue) -> Result<i64> {
@@ -128,7 +148,12 @@ impl IssueRepository for SqliteIssueRepository {
             Ok(conn.last_insert_rowid())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn update_state(&self, id: i64, state: State) -> Result<()> {
@@ -144,7 +169,12 @@ impl IssueRepository for SqliteIssueRepository {
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn update(&self, issue: &Issue) -> Result<()> {
@@ -174,7 +204,12 @@ impl IssueRepository for SqliteIssueRepository {
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn update_state_and_metadata(
@@ -255,7 +290,12 @@ impl IssueRepository for SqliteIssueRepository {
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn find_by_state(&self, state: State) -> Result<Vec<Issue>> {
@@ -276,7 +316,12 @@ impl IssueRepository for SqliteIssueRepository {
             Ok(issues)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 }
 

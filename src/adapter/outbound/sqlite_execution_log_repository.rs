@@ -31,7 +31,12 @@ impl ExecutionLogRepository for SqliteExecutionLogRepository {
             Ok(conn.last_insert_rowid())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn record_finish(
@@ -57,7 +62,12 @@ impl ExecutionLogRepository for SqliteExecutionLogRepository {
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn find_by_issue(&self, issue_id: i64) -> Result<Vec<ExecutionLog>> {
@@ -94,7 +104,12 @@ impl ExecutionLogRepository for SqliteExecutionLogRepository {
             Ok(logs)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 }
 

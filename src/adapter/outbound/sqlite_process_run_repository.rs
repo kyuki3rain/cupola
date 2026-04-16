@@ -147,7 +147,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(conn.last_insert_rowid())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn update_pid(&self, run_id: i64, pid: u32) -> Result<()> {
@@ -163,7 +168,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn mark_succeeded(&self, run_id: i64, pr_number: Option<u64>) -> Result<()> {
@@ -181,7 +191,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn mark_failed(&self, run_id: i64, error_message: Option<String>) -> Result<()> {
@@ -198,7 +213,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn mark_stale(&self, run_id: i64) -> Result<()> {
@@ -215,7 +235,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn mark_stale_for_issue(&self, issue_id: i64) -> Result<()> {
@@ -232,7 +257,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn find_latest(
@@ -259,7 +289,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             }
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn find_latest_with_pr_number(
@@ -286,7 +321,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             }
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn find_by_issue(&self, issue_id: i64) -> Result<Vec<ProcessRun>> {
@@ -305,7 +345,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(runs)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn count_consecutive_failures(
@@ -322,7 +367,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             count_consecutive_failures_inner(&conn, issue_id, &type_str, since_str.as_deref())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn find_latest_with_consecutive_count(
@@ -395,7 +445,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(Some((run, count)))
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn find_all_running(&self) -> Result<Vec<ProcessRun>> {
@@ -414,7 +469,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(runs)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 
     async fn update_state(&self, run_id: i64, state: ProcessRunState) -> Result<()> {
@@ -430,7 +490,12 @@ impl ProcessRunRepository for SqliteProcessRunRepository {
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+        .map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            }
+            anyhow::anyhow!("spawn_blocking task failed: {e}")
+        })?
     }
 }
 
