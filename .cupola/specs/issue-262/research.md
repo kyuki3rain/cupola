@@ -23,8 +23,9 @@
 - **Findings**:
   - `std::panic::take_hook()` で現在のデフォルトフックを取得し、クロージャ内でそれを呼び出すパターンで再伝播が実現できる
   - hook のクロージャは `'static` を要求するため、参照は使えない。`PathBuf` を move キャプチャする方法が最も単純
-  - `catch_unwind` は panic hook を呼ばないため、ユニットテストでは hook 関数自体を直接呼び出すアプローチが有効
-- **Implications**: `install_panic_hook(pid_path: PathBuf)` として `PathBuf` を受け取り、hook 内で `PidFileManager` を生成するシンプルな実装が適切
+  - panic hook は panic 発生時に呼ばれ、`catch_unwind` で回収される panic でも通常は hook 実行後に unwind が捕捉される
+  - そのためテストでは `catch_unwind` を使って panic を回収しつつ hook の副作用を検証できる。必要なら hook 本体を補助関数に切り出して直接テストすることも可能
+- **Implications**: `install_panic_hook(pid_path: PathBuf)` として `PathBuf` を受け取り、hook 内で `PidFileManager` を生成するシンプルな実装が適切。検証は `catch_unwind` ベースでも実施できる
 
 ### tracing 未初期化時の panic ログ
 
