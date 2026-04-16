@@ -151,7 +151,7 @@ fn execute(&self) -> Result<StopResult, StopError>
 
 ### Monitoring
 
-- `tracing::warn!(pid, "failed to delete PID file after signal error: {e}")` でクリーンアップ失敗を可観測にする
+- `tracing::warn!(pid, error = %e, "failed to delete PID file after signal error")` でクリーンアップ失敗を可観測にする
 
 ## Testing Strategy
 
