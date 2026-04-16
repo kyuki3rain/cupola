@@ -60,10 +60,10 @@ Related: #203, closed #215, closed #214, PR #255
 
 #### Acceptance Criteria
 
-1. While `issue.state == State::Idle` and `has_ready_label == true`, the Polling System shall call `check_label_actor` to verify the label actor's trust
-2. While `issue.state != State::Idle` and `has_ready_label == true`, the Polling System shall skip `check_label_actor` and set `ready_label_trusted` to `false`
-3. When `issue.state` becomes `State::Idle` in a polling cycle (e.g., after Cancelled → Idle transition), the Polling System shall call `check_label_actor` in the same cycle
-4. The Polling System shall pass `issue.state` to `observe_github_issue` so that the function can determine whether to call `check_label_actor`
+- **1.1**: While `issue.state == State::Idle` and `has_ready_label == true`, the Polling System shall call `check_label_actor` to verify the label actor's trust
+- **1.2**: While `issue.state != State::Idle` and `has_ready_label == true`, the Polling System shall skip `check_label_actor` and set `ready_label_trusted` to `false`
+- **1.3**: When `issue.state` transitions to `State::Idle` (e.g., after Cancelled → Idle), the Polling System shall call `check_label_actor` in the next polling cycle where the state is read as `Idle`
+- **1.4**: The Polling System shall pass `issue.state` to the label actor verification step so that the function can determine whether to call `check_label_actor`
 
 ### Requirement 2: 既存動作の維持（Idle 状態）
 
@@ -71,10 +71,10 @@ Related: #203, closed #215, closed #214, PR #255
 
 #### Acceptance Criteria
 
-1. While `issue.state == State::Idle`, `has_ready_label == true`, and `TrustedAssociations::All`, the Polling System shall return `ready_label_trusted: true` without calling Timeline API or Permission API
-2. While `issue.state == State::Idle`, `has_ready_label == true`, and `TrustedAssociations::Specific(...)`, the Polling System shall call `fetch_label_actor_login` and `fetch_user_permission` and return trust based on the result
-3. While `issue.state == State::Idle` and `has_ready_label == false`, the Polling System shall return `ready_label_trusted: false` without API calls
-4. If `check_label_actor` fails due to a GitHub API error while `issue.state == State::Idle`, the Polling System shall log a warning and treat the issue as untrusted
+- **2.1**: While `issue.state == State::Idle`, `has_ready_label == true`, and `TrustedAssociations::All`, the Polling System shall return `ready_label_trusted: true` without calling Timeline API or Permission API
+- **2.2**: While `issue.state == State::Idle`, `has_ready_label == true`, and `TrustedAssociations::Specific(...)`, the Polling System shall call Timeline API and Permission API and return trust based on the result
+- **2.3**: While `issue.state == State::Idle` and `has_ready_label == false`, the Polling System shall return `ready_label_trusted: false` without API calls
+- **2.4**: If label actor verification fails due to a GitHub API error while `issue.state == State::Idle`, the Polling System shall log a warning and treat the issue as untrusted
 
 ### Requirement 3: テストカバレッジ
 
@@ -82,6 +82,6 @@ Related: #203, closed #215, closed #214, PR #255
 
 #### Acceptance Criteria
 
-1. The Polling System shall have unit tests verifying that `fetch_label_actor_login` is NOT called for each non-Idle state (`InitializeRunning`, `DesignRunning`, `DesignReviewWaiting`, `DesignFixing`, `ImplementationRunning`, `ImplementationReviewWaiting`, `ImplementationFixing`, `Completed`, `Cancelled`) when `has_ready_label == true`
-2. The Polling System shall have unit tests verifying that `fetch_label_actor_login` IS called for `State::Idle` with `has_ready_label == true` and `TrustedAssociations::Specific`
-3. The Polling System shall have unit tests verifying that `fetch_label_actor_login` is NOT called for `State::Idle` with `has_ready_label == false`
+- **3.1**: The Polling System shall have unit tests verifying that the external label actor API is NOT called for each non-Idle state when `has_ready_label == true`
+- **3.2**: The Polling System shall have unit tests verifying that the external label actor API IS called for `State::Idle` with `has_ready_label == true` and specific trust associations configured
+- **3.3**: The Polling System shall have unit tests verifying that the external label actor API is NOT called for `State::Idle` with `has_ready_label == false`
