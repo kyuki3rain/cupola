@@ -75,10 +75,11 @@ where
         Err(e) => tracing::warn!(error = %e, "list_ready_issues failed, skipping discovery"),
     }
 
-    // Load only active issues (excludes completed / cancelled).
-    // Terminal-state issues no longer need observation — their side effects
-    // (CloseIssue, CleanupWorktree) have already converged.
-    let issues = issue_repo.find_active().await?;
+    // Load issues that still need observation: active issues plus terminal
+    // issues whose persistent effects have not yet converged (worktree_path
+    // still set, or close_finished is false). Fully-converged terminal
+    // issues are excluded to avoid wasting GitHub API calls.
+    let issues = issue_repo.find_observable().await?;
 
     let mut observations = Vec::new();
     for issue in issues {

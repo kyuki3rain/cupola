@@ -15,6 +15,9 @@ pub trait IssueRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<Option<Issue>>> + Send;
     fn find_active(&self) -> impl std::future::Future<Output = Result<Vec<Issue>>> + Send;
     fn find_all(&self) -> impl std::future::Future<Output = Result<Vec<Issue>>> + Send;
+    /// Active issues + terminal issues whose persistent effects have not
+    /// yet converged (worktree still exists or close not finished).
+    fn find_observable(&self) -> impl std::future::Future<Output = Result<Vec<Issue>>> + Send;
     fn save(&self, issue: &Issue) -> impl std::future::Future<Output = Result<i64>> + Send;
     fn update_state(
         &self,

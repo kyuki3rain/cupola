@@ -98,6 +98,9 @@ mod tests {
         async fn find_all(&self) -> anyhow::Result<Vec<Issue>> {
             unimplemented!()
         }
+        async fn find_observable(&self) -> anyhow::Result<Vec<Issue>> {
+            unimplemented!()
+        }
         async fn save(&self, _: &Issue) -> anyhow::Result<i64> {
             unimplemented!()
         }

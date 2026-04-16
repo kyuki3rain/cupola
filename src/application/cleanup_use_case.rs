@@ -175,6 +175,9 @@ mod tests {
         async fn find_all(&self) -> Result<Vec<Issue>> {
             unimplemented!()
         }
+        async fn find_observable(&self) -> Result<Vec<Issue>> {
+            unimplemented!()
+        }
         async fn save(&self, _: &Issue) -> Result<i64> {
             unimplemented!()
         }

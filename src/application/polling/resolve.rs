@@ -481,6 +481,9 @@ mod tests {
         async fn find_all(&self) -> Result<Vec<Issue>> {
             Ok(vec![])
         }
+        async fn find_observable(&self) -> Result<Vec<Issue>> {
+            Ok(vec![])
+        }
         async fn save(&self, _issue: &Issue) -> Result<i64> {
             Ok(0)
         }

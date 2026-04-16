@@ -113,6 +113,32 @@ impl IssueRepository for SqliteIssueRepository {
         .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
     }
 
+    async fn find_observable(&self) -> Result<Vec<Issue>> {
+        let db = self.db.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = db
+                .conn()
+                .lock()
+                .map_err(|e| anyhow::anyhow!("failed to acquire database lock: {e}"))?;
+            let mut stmt = conn.prepare(
+                "SELECT id, github_issue_number, state, feature_name, weight,
+                        worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
+                        created_at, updated_at
+                 FROM issues
+                 WHERE state NOT IN ('completed', 'cancelled')
+                    OR worktree_path IS NOT NULL
+                    OR close_finished = 0",
+            )?;
+            let issues = stmt
+                .query_map([], row_to_issue)?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .context("find_observable query failed")?;
+            Ok(issues)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking task failed: {e}"))?
+    }
+
     async fn save(&self, issue: &Issue) -> Result<i64> {
         let issue = issue.clone();
         let db = self.db.clone();
