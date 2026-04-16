@@ -81,20 +81,13 @@ graph TD
 | Intent | CI 修正上限コメントを i18n メッセージで投稿する |
 | Requirements | 1.3, 1.4, 1.5, 1.6 |
 
-**変更前:**
-```rust
-Effect::PostCiFixLimitComment => {
-    let msg = format!(
-        "CI fix limit reached ({} cycles). Automatic fixing has stopped.",
-        config.max_ci_fix_cycles
-    );
-    github.comment_on_issue(n, &msg).await?;
-}
-```
+**現状の課題:**
+- 固定英語メッセージを `config.max_ci_fix_cycles` 付きで組み立て、そのまま issue コメントとして投稿している
+- `config.language` が反映されないため、非英語環境では UI 言語とコメント言語が不整合になる
 
-**変更後の設計:**
-- `rust_i18n::t!("issue_comment.ci_fix_limit", locale = lang, max_cycles = config.max_ci_fix_cycles)` でメッセージを生成
-- `github.comment_on_issue(n, &msg).await?` でコメント投稿（非ベストエフォート呼び出し — `execute_effects` が上位でラップ）
+**設計方針:**
+- ロケール設定に応じた i18n メッセージで上限サイクル数を含むコメントを生成して投稿する
+- コメント投稿失敗は上位の `execute_effects()` ベストエフォートラッパーへ委譲する
 
 **Contracts**: Service [x]
 
@@ -105,25 +98,14 @@ Effect::PostCiFixLimitComment => {
 | Intent | 信頼されていないアクターによるラベルを削除し、i18n コメントを投稿。失敗時は warn ログ |
 | Requirements | 2.3, 3.1, 3.2, 3.3 |
 
-**変更前:**
-```rust
-Effect::RejectUntrustedReadyIssue => {
-    match github.remove_label(n, "agent:ready").await {
-        Ok(()) => {
-            let msg = "This issue was labeled `agent:ready` by an untrusted actor. ...".to_string();
-            let _ = github.comment_on_issue(n, &msg).await;
-        }
-        Err(e) => {
-            tracing::warn!(issue_number = n, error = %e, "failed to remove agent:ready label");
-        }
-    }
-}
-```
+**現状の課題:**
+- ラベル削除成功後、固定の英語メッセージをそのまま投稿していた
+- コメント投稿失敗は握りつぶされ、失敗時の観測性が不足していた
+- ラベル削除失敗時のみ `warn` ログを出力していた
 
-**変更後の設計:**
-- ラベル削除成功後、`rust_i18n::t!("issue_comment.reject_untrusted", locale = lang)` でメッセージ生成
-- コメント投稿は `if let Err(e) = github.comment_on_issue(n, &msg).await { tracing::warn!(...) }` パターン
-- `tracing::warn!` のフィールド: `issue_number = n`, `error = %e`, メッセージ文字列
+**設計方針:**
+- ラベル削除成功後、ロケール設定に応じた i18n メッセージを生成してコメントを投稿する
+- コメント投稿失敗時はエラーを握り潰さず、`issue_number` および `error` フィールドを含む警告ログを出力して処理を継続する
 
 **Contracts**: Service [x]
 

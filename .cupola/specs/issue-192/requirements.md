@@ -17,12 +17,12 @@
 
 #### 受け入れ基準
 
-1. The system shall have `issue_comment.ci_fix_limit` key in `locales/en.yml` containing an English message template with `%{max_cycles}` placeholder.
-2. The system shall have `issue_comment.ci_fix_limit` key in `locales/ja.yml` containing a Japanese message template with `%{max_cycles}` placeholder.
-3. When `Effect::PostCiFixLimitComment` is executed, the system shall generate the comment body using `rust_i18n::t!("issue_comment.ci_fix_limit", locale = lang, max_cycles = config.max_ci_fix_cycles)`.
-4. When `Effect::PostCiFixLimitComment` is executed, the system shall substitute `%{max_cycles}` with the actual value of `config.max_ci_fix_cycles` in the rendered message.
-5. When `Effect::PostCiFixLimitComment` is executed and `config.language` is set to `"ja"`, the system shall post a Japanese message to GitHub.
-6. When `Effect::PostCiFixLimitComment` is executed and `config.language` is set to `"en"`, the system shall post an English message to GitHub.
+1. The system shall `locales/en.yml` に `issue_comment.ci_fix_limit` キーを持ち、`%{max_cycles}` プレースホルダーを含む英語メッセージテンプレートを定義する。
+2. The system shall `locales/ja.yml` に `issue_comment.ci_fix_limit` キーを持ち、`%{max_cycles}` プレースホルダーを含む日本語メッセージテンプレートを定義する。
+3. When `Effect::PostCiFixLimitComment` が実行されたとき、the system shall ロケール設定に応じた i18n 関数を用いてコメント本文を生成する。
+4. When `Effect::PostCiFixLimitComment` が実行されたとき、the system shall レンダリング済みメッセージの `%{max_cycles}` を `config.max_ci_fix_cycles` の実際の値に置換する。
+5. When `Effect::PostCiFixLimitComment` が実行され、`config.language` が `"ja"` に設定されているとき、the system shall 日本語メッセージを GitHub に投稿する。
+6. When `Effect::PostCiFixLimitComment` が実行され、`config.language` が `"en"` に設定されているとき、the system shall 英語メッセージを GitHub に投稿する。
 
 ### Requirement 2: RejectUntrustedReadyIssue の i18n 対応
 
@@ -30,9 +30,9 @@
 
 #### 受け入れ基準
 
-1. The system shall have `issue_comment.reject_untrusted` key in `locales/en.yml` containing an English rejection message.
-2. The system shall have `issue_comment.reject_untrusted` key in `locales/ja.yml` containing a Japanese rejection message.
-3. When `Effect::RejectUntrustedReadyIssue` is executed and the label is removed successfully, the system shall generate the comment body using `rust_i18n::t!("issue_comment.reject_untrusted", locale = lang)`.
+1. The system shall `locales/en.yml` に `issue_comment.reject_untrusted` キーを持ち、英語の拒否メッセージを定義する。
+2. The system shall `locales/ja.yml` に `issue_comment.reject_untrusted` キーを持ち、日本語の拒否メッセージを定義する。
+3. When `Effect::RejectUntrustedReadyIssue` が実行されラベル削除が成功したとき、the system shall ロケール設定に応じた i18n 関数を用いてコメント本文を生成する。
 
 ### Requirement 3: RejectUntrustedReadyIssue のエラーログ修正
 
@@ -40,9 +40,9 @@
 
 #### 受け入れ基準
 
-1. When `Effect::RejectUntrustedReadyIssue` is executed, the label is removed successfully, but `github.comment_on_issue()` returns an error, the system shall emit a `tracing::warn!()` log containing `issue_number` and `error` fields.
-2. If `github.comment_on_issue()` returns an error for `RejectUntrustedReadyIssue`, the system shall not silently discard the error (i.e., `let _ = ...` pattern must not be used).
-3. The system shall follow the best-effort convention established in `execute_effects()` — failures are logged but do not abort the effect chain.
+1. When `Effect::RejectUntrustedReadyIssue` が実行され、ラベル削除に成功したが `github.comment_on_issue()` がエラーを返したとき、the system shall `issue_number` および `error` フィールドを含む警告ログを出力する。
+2. If `RejectUntrustedReadyIssue` において `github.comment_on_issue()` がエラーを返した場合、the system shall エラーを無声に破棄しない（`let _ = ...` パターンを使用しない）。
+3. The system shall `execute_effects()` で確立されたベストエフォート規約に従い、失敗はログに記録するがエフェクトチェーンを中断しない。
 
 ### Requirement 4: 既存テストの維持とテストカバレッジ
 
@@ -50,7 +50,7 @@
 
 #### 受け入れ基準
 
-1. The system shall pass all existing tests in `src/application/polling/execute.rs` after the changes.
-2. When `Effect::PostCiFixLimitComment` is executed with a mock GitHub client, the system shall post exactly one comment whose content matches the expected i18n template output with `max_cycles` substituted.
-3. When `Effect::RejectUntrustedReadyIssue` is executed and `github.comment_on_issue()` returns an error, the system shall call `tracing::warn!()` instead of silently dropping the error.
-4. The system shall verify that `%{max_cycles}` is correctly interpolated in both English and Japanese locale messages.
+1. The system shall 変更後も `src/application/polling/execute.rs` の既存テストをすべてパスする。
+2. When `Effect::PostCiFixLimitComment` がモック GitHub クライアントで実行されたとき、the system shall `max_cycles` を置換した期待する i18n テンプレート出力と一致する内容のコメントをちょうど1件投稿する。
+3. When `Effect::RejectUntrustedReadyIssue` が実行され `github.comment_on_issue()` がエラーを返したとき、the system shall エラーを無声に破棄する代わりに警告ログを出力する。
+4. The system shall 英語および日本語ロケールのメッセージで `%{max_cycles}` が正しく補間されることを検証する。
