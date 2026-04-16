@@ -34,7 +34,8 @@ impl ProcessAlivePort for NixProcessAlive {
         let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
     }
 }
-use crate::application::doctor_use_case::{CheckStatus, DoctorUseCase};
+use crate::application::doctor_result::CheckStatus;
+use crate::application::doctor_use_case::DoctorUseCase;
 use crate::application::init_use_case::InitUseCase;
 use crate::application::polling_use_case::PollingUseCase;
 use crate::application::port::issue_repository::IssueRepository;
@@ -166,7 +167,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             let use_case = DoctorUseCase::new(loader, runner);
             let results = use_case.run(&config);
 
-            use crate::application::doctor_use_case::DoctorSection;
+            use crate::application::doctor_result::DoctorSection;
 
             println!("=== Start Readiness ===");
             let mut has_failure = false;
