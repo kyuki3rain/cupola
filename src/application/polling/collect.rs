@@ -75,8 +75,10 @@ where
         Err(e) => tracing::warn!(error = %e, "list_ready_issues failed, skipping discovery"),
     }
 
-    // Load every issue (terminal states included — see above).
-    let issues = issue_repo.find_all().await?;
+    // Load only active issues (excludes completed / cancelled).
+    // Terminal-state issues no longer need observation — their side effects
+    // (CloseIssue, CleanupWorktree) have already converged.
+    let issues = issue_repo.find_active().await?;
 
     let mut observations = Vec::new();
     for issue in issues {
