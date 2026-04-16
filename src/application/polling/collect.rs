@@ -384,17 +384,13 @@ mod tests {
     };
 
     struct MockGithub {
-        is_open: bool,
-        labels: Vec<String>,
         /// Set to true when fetch_label_actor_login is called.
         label_actor_called: Arc<AtomicBool>,
     }
 
     impl MockGithub {
-        fn with_tracker(is_open: bool, labels: Vec<String>, tracker: Arc<AtomicBool>) -> Self {
+        fn with_tracker(tracker: Arc<AtomicBool>) -> Self {
             Self {
-                is_open,
-                labels,
                 label_actor_called: tracker,
             }
         }
@@ -411,7 +407,7 @@ mod tests {
                 number: n,
                 title: format!("issue-{n}"),
                 body: String::new(),
-                labels: self.labels.clone(),
+                labels: vec![],
             })
         }
         async fn find_pr_by_branches(&self, _h: &str, _b: &str) -> Result<Option<GitHubPr>> {
@@ -479,11 +475,7 @@ mod tests {
     #[tokio::test]
     async fn closed_issue_returns_closed_snapshot() {
         let tracker = Arc::new(AtomicBool::new(false));
-        let github = MockGithub::with_tracker(
-            false, // closed
-            vec!["agent:ready".to_string()],
-            Arc::clone(&tracker),
-        );
+        let github = MockGithub::with_tracker(Arc::clone(&tracker));
         let config = test_config();
 
         // Closed issue: is_open=false, labels=None
@@ -502,11 +494,7 @@ mod tests {
     #[tokio::test]
     async fn open_issue_with_ready_label_calls_permission_api() {
         let tracker = Arc::new(AtomicBool::new(false));
-        let github = MockGithub::with_tracker(
-            true, // open
-            vec!["agent:ready".to_string()],
-            Arc::clone(&tracker),
-        );
+        let github = MockGithub::with_tracker(Arc::clone(&tracker));
         // Use Specific associations so the API is actually called.
         let mut config = test_config();
         config.trusted_associations =
@@ -537,11 +525,7 @@ mod tests {
     #[tokio::test]
     async fn open_issue_without_ready_label_is_not_trusted() {
         let tracker = Arc::new(AtomicBool::new(false));
-        let github = MockGithub::with_tracker(
-            true, // open
-            vec![],
-            Arc::clone(&tracker),
-        );
+        let github = MockGithub::with_tracker(Arc::clone(&tracker));
         let config = test_config();
 
         let labels: Vec<String> = vec![];
@@ -744,7 +728,7 @@ mod tests {
     #[tokio::test]
     async fn observe_pr_for_type_returns_none_when_no_pr_run() {
         let tracker = Arc::new(AtomicBool::new(false));
-        let github = MockGithub::with_tracker(true, vec![], Arc::clone(&tracker));
+        let github = MockGithub::with_tracker(Arc::clone(&tracker));
         let repo = MockProcessRunRepository::returning_none();
 
         let config = test_config();

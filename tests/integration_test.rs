@@ -66,7 +66,6 @@ struct MockGitHubState {
     comments: Vec<(u64, String)>,
     closed_issues: Vec<u64>,
     merged_prs: Vec<u64>,
-    closed_github_issues: Vec<u64>,
 }
 
 struct MockGitHubClient {
