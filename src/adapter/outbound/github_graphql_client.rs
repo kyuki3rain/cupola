@@ -116,9 +116,16 @@ impl GraphQLClient {
                 .as_bool()
                 .unwrap_or(false);
             if has_next {
-                thread_cursor = threads_data["pageInfo"]["endCursor"]
-                    .as_str()
-                    .map(String::from);
+                match threads_data["pageInfo"]["endCursor"].as_str() {
+                    Some(cursor) => thread_cursor = Some(cursor.to_string()),
+                    None => {
+                        tracing::warn!(
+                            pr_number,
+                            "GraphQL hasNextPage=true but endCursor is null, stopping pagination"
+                        );
+                        break;
+                    }
+                }
             } else {
                 break;
             }
