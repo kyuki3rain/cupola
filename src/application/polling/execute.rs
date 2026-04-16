@@ -137,11 +137,12 @@ where
 
         Effect::PostRetryExhaustedComment {
             consecutive_failures,
-            ..
+            process_type,
         } => {
             let unknown = rust_i18n::t!("issue_comment.unknown_error", locale = lang);
             // Find the last error message from the most recent failed process run
-            let last_error = find_last_error(process_repo, issue.id).await;
+            // for the same process type as the exhausted retry count.
+            let last_error = find_last_error(process_repo, issue.id, *process_type).await;
             let error_str = last_error.as_deref().unwrap_or(&unknown);
             let count = consecutive_failures;
             let msg = rust_i18n::t!(
@@ -725,11 +726,15 @@ fn phase_for_type(type_: ProcessRunType) -> Option<crate::domain::phase::Phase> 
 async fn find_last_error<P: ProcessRunRepository>(
     process_repo: &P,
     issue_id: i64,
+    process_type: crate::domain::process_run::ProcessRunType,
 ) -> Option<String> {
     let runs = process_repo.find_by_issue(issue_id).await.ok()?;
     runs.into_iter()
         .rev()
-        .find(|r| r.state == crate::domain::process_run::ProcessRunState::Failed)
+        .find(|r| {
+            r.state == crate::domain::process_run::ProcessRunState::Failed
+                && r.type_ == process_type
+        })
         .and_then(|r| r.error_message)
 }
 
@@ -1723,9 +1728,12 @@ mod tests {
 
         let comments = github.posted_comments();
         assert_eq!(comments.len(), 1, "should post exactly one comment");
+        // The default locale is "ja", so the retry_exhausted template renders
+        // the count as "（3 回）". Assert on this specific substring to ensure
+        // the interpolated count value is exactly 3, not any incidental "3".
         assert!(
-            comments[0].contains('3'),
-            "comment should contain the consecutive_failures count (3), got: {:?}",
+            comments[0].contains("（3 回）"),
+            "comment should contain the consecutive_failures count formatted as '（3 回）', got: {:?}",
             comments[0]
         );
     }
