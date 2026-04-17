@@ -325,8 +325,16 @@ impl InitFileGenerator {
 
         for (relative_path, content) in CLAUDE_CODE_ASSETS {
             let path = self.base_dir.join(relative_path);
-            if path.exists() && !upgrade {
-                continue;
+            if path.exists() {
+                if !upgrade {
+                    continue;
+                }
+                // upgrade=true: skip if content is already identical
+                if let Ok(existing) = std::fs::read(&path)
+                    && existing == content.as_bytes()
+                {
+                    continue;
+                }
             }
 
             if let Some(parent) = path.parent() {
@@ -642,6 +650,23 @@ mod tests {
             fs::read_to_string(&spec_design).expect("read"),
             "old content",
             "managed file should be overwritten on upgrade"
+        );
+    }
+
+    #[test]
+    fn install_assets_upgrade_returns_false_when_all_content_identical() {
+        let (_, generator) = setup();
+        // 1回目: 通常インストール（全ファイルを埋め込みコンテンツで書き込む）
+        generator
+            .install_claude_code_assets(false)
+            .expect("first install");
+        // 2回目: upgrade=true だが内容が同一なのでスキップ
+        let result = generator
+            .install_claude_code_assets(true)
+            .expect("upgrade no-op");
+        assert!(
+            !result,
+            "upgrade should return false when all embedded content is already identical to disk"
         );
     }
 

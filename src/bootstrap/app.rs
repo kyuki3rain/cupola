@@ -131,7 +131,13 @@ pub async fn run(cli: Cli) -> Result<()> {
             );
             println!(
                 "  agent assets: {}",
-                if report.agent_assets_installed {
+                if upgrade {
+                    if report.agent_assets_installed {
+                        "upgraded"
+                    } else {
+                        "already up to date"
+                    }
+                } else if report.agent_assets_installed {
                     "installed"
                 } else {
                     "skipped"
@@ -139,7 +145,13 @@ pub async fn run(cli: Cli) -> Result<()> {
             );
             println!(
                 "  .gitignore: {}",
-                if report.gitignore_updated {
+                if upgrade {
+                    if report.gitignore_updated {
+                        "upgraded"
+                    } else {
+                        "already up to date"
+                    }
+                } else if report.gitignore_updated {
                     "updated"
                 } else {
                     "skipped (already has cupola entries)"
