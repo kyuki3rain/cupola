@@ -400,6 +400,13 @@ impl InitFileGenerator {
                 };
                 format!("{content}{separator}{entries}")
             };
+            if new_content == content {
+                tracing::info!(
+                    path = %gitignore_path.display(),
+                    "cupola entries already up to date in .gitignore, skipping"
+                );
+                return Ok(false);
+            }
             std::fs::write(&gitignore_path, new_content).with_context(|| {
                 format!("failed to write .gitignore at {}", gitignore_path.display())
             })?;
@@ -655,7 +662,7 @@ mod tests {
 
     #[test]
     fn install_assets_upgrade_returns_false_when_all_content_identical() {
-        let (_, generator) = setup();
+        let (_tmp, generator) = setup();
         // 1回目: 通常インストール（全ファイルを埋め込みコンテンツで書き込む）
         generator
             .install_claude_code_assets(false)
