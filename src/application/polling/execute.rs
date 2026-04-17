@@ -641,10 +641,10 @@ where
     clear_inputs_dir(wt_path)?;
     write_issue_input(wt_path, &detail)?;
 
-    // For fixing phases: fetch + merge, write review threads
+    // For fixing phases: fetch + merge (ImplFix only), write review threads
     let pr_number_opt = get_pr_number_for_type(process_repo, issue.id, type_).await?;
     let mut has_merge_conflict = false;
-    if matches!(type_, ProcessRunType::DesignFix | ProcessRunType::ImplFix) {
+    if matches!(type_, ProcessRunType::ImplFix) {
         // Fetch latest remote refs so the subsequent merge uses a current
         // origin/main rather than a potentially stale local copy.  Fetch
         // failure is non-fatal: log a warning and fall through to merge so
@@ -673,12 +673,13 @@ where
                 );
             }
         }
-
-        // Write review threads
-        if let Some(pr_number) = pr_number_opt {
-            let threads = github.list_unresolved_threads(pr_number).await?;
-            write_review_threads_input(wt_path, &threads, config)?;
-        }
+    }
+    // Write review threads for all fixing types (DesignFix + ImplFix)
+    if matches!(type_, ProcessRunType::DesignFix | ProcessRunType::ImplFix)
+        && let Some(pr_number) = pr_number_opt
+    {
+        let threads = github.list_unresolved_threads(pr_number).await?;
+        write_review_threads_input(wt_path, &threads, config)?;
     }
 
     // Build session config
@@ -1809,12 +1810,13 @@ mod tests {
         issue
     }
 
-    /// T-fix.1: DesignFix spawn で fetch → merge の順序が保証されること（要件 2.1）
+    /// T-fix.1: ImplFix spawn で fetch → merge の順序が保証されること（要件 2.1）
     #[tokio::test]
-    async fn fixing_spawn_calls_fetch_before_merge() {
+    async fn impl_fixing_spawn_calls_fetch_before_merge() {
         let dir = tempfile::tempdir().expect("tempdir");
         let wt_path = dir.path().to_str().expect("utf8");
-        let issue = make_fixing_issue(wt_path);
+        let mut issue = make_fixing_issue(wt_path);
+        issue.state = crate::domain::state::State::ImplementationFixing;
         let config = make_test_config(dir.path());
 
         let log: CallLog = Arc::new(Mutex::new(vec![]));
@@ -1829,7 +1831,7 @@ mod tests {
             &worktree,
             &config,
             &issue,
-            ProcessRunType::DesignFix,
+            ProcessRunType::ImplFix,
             &[],
             None,
         )
@@ -1841,12 +1843,12 @@ mod tests {
 
         assert!(
             fetch_pos.is_some(),
-            "fetch should be called in DesignFix spawn, calls: {:?}",
+            "fetch should be called in ImplFix spawn, calls: {:?}",
             calls
         );
         assert!(
             merge_pos.is_some(),
-            "merge should be called in DesignFix spawn, calls: {:?}",
+            "merge should be called in ImplFix spawn, calls: {:?}",
             calls
         );
         assert!(
@@ -1856,12 +1858,13 @@ mod tests {
         );
     }
 
-    /// T-fix.2: fetch が失敗しても merge が呼ばれること（要件 2.2）
+    /// T-fix.2: ImplFix で fetch が失敗しても merge が呼ばれること（要件 2.2）
     #[tokio::test]
-    async fn fixing_spawn_continues_to_merge_when_fetch_fails() {
+    async fn impl_fixing_spawn_continues_to_merge_when_fetch_fails() {
         let dir = tempfile::tempdir().expect("tempdir");
         let wt_path = dir.path().to_str().expect("utf8");
-        let issue = make_fixing_issue(wt_path);
+        let mut issue = make_fixing_issue(wt_path);
+        issue.state = crate::domain::state::State::ImplementationFixing;
         let config = make_test_config(dir.path());
 
         let log: CallLog = Arc::new(Mutex::new(vec![]));
@@ -1876,7 +1879,7 @@ mod tests {
             &worktree,
             &config,
             &issue,
-            ProcessRunType::DesignFix,
+            ProcessRunType::ImplFix,
             &[],
             None,
         )
@@ -1928,6 +1931,45 @@ mod tests {
         assert!(
             !calls.contains(&"fetch".to_string()),
             "fetch should NOT be called for non-fixing spawn types, calls: {:?}",
+            calls
+        );
+    }
+
+    /// T-fix.4: DesignFix spawn では fetch/merge が呼ばれないこと
+    #[tokio::test]
+    async fn design_fixing_spawn_does_not_call_fetch_or_merge() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wt_path = dir.path().to_str().expect("utf8");
+        let issue = make_fixing_issue(wt_path);
+        let config = make_test_config(dir.path());
+
+        let log: CallLog = Arc::new(Mutex::new(vec![]));
+        let worktree = MockGitWorktree::with_log(log.clone());
+        let github = MockGitHubForInit::new();
+        let proc_repo = MockProcRepo::new();
+
+        let _ = prepare_process_spawn(
+            &github,
+            &proc_repo,
+            &MockClaudeRunnerFailing,
+            &worktree,
+            &config,
+            &issue,
+            ProcessRunType::DesignFix,
+            &[],
+            None,
+        )
+        .await;
+
+        let calls = log.lock().expect("lock").clone();
+        assert!(
+            !calls.contains(&"fetch".to_string()),
+            "fetch should NOT be called for DesignFix spawn, calls: {:?}",
+            calls
+        );
+        assert!(
+            !calls.contains(&"merge".to_string()),
+            "merge should NOT be called for DesignFix spawn, calls: {:?}",
             calls
         );
     }

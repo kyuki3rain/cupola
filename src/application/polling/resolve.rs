@@ -275,7 +275,7 @@ where
         let (head_branch, base_branch) = if is_design {
             (
                 format!("cupola/{feature}/design"),
-                config.default_branch.clone(),
+                format!("cupola/{feature}/main"),
             )
         } else {
             // ImplementationRunning
@@ -724,6 +724,98 @@ mod tests {
         }
     }
 
+    // ── GitHub client mock: records branch arguments ───────────────────────
+
+    #[derive(Default)]
+    struct BranchCallLog {
+        find_pr_calls: Vec<(String, String)>, // (head, base)
+    }
+
+    struct GhBranchRecorder {
+        calls: Arc<Mutex<BranchCallLog>>,
+    }
+
+    impl GhBranchRecorder {
+        fn new() -> Self {
+            Self {
+                calls: Arc::new(Mutex::new(BranchCallLog::default())),
+            }
+        }
+    }
+
+    impl GitHubClient for GhBranchRecorder {
+        async fn list_open_issues(
+            &self,
+        ) -> Result<Vec<crate::application::port::github_client::OpenIssueInfo>> {
+            Ok(vec![])
+        }
+        async fn get_issue(&self, _n: u64) -> Result<GitHubIssueDetail> {
+            Ok(GitHubIssueDetail {
+                number: 1,
+                title: String::new(),
+                body: String::new(),
+                labels: vec![],
+            })
+        }
+        async fn find_pr_by_branches(&self, h: &str, b: &str) -> Result<Option<GitHubPr>> {
+            self.calls
+                .lock()
+                .unwrap()
+                .find_pr_calls
+                .push((h.to_string(), b.to_string()));
+            // Return existing PR to avoid create_pr call
+            Ok(Some(GitHubPr {
+                number: 99,
+                merged: false,
+            }))
+        }
+        async fn is_pr_merged(&self, _n: u64) -> Result<bool> {
+            Ok(false)
+        }
+        async fn list_unresolved_threads(&self, _n: u64) -> Result<Vec<ReviewThread>> {
+            Ok(vec![])
+        }
+        async fn create_pr(&self, _h: &str, _b: &str, _t: &str, _body: &str) -> Result<u64> {
+            Ok(1)
+        }
+        async fn reply_to_thread(&self, _id: &str, _body: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn resolve_thread(&self, _id: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn comment_on_issue(&self, _n: u64, _body: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn close_issue(&self, _n: u64) -> Result<()> {
+            Ok(())
+        }
+        async fn get_job_logs(&self, _id: u64) -> Result<String> {
+            Ok(String::new())
+        }
+        async fn get_pr_details(&self, _n: u64) -> Result<GitHubPrDetails> {
+            Ok(GitHubPrDetails {
+                merged: false,
+                mergeable: Some(true),
+            })
+        }
+        async fn fetch_label_actor_login(&self, _n: u64, _label: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+        async fn fetch_user_permission(&self, _username: &str) -> Result<RepositoryPermission> {
+            Ok(RepositoryPermission::Read)
+        }
+        async fn remove_label(&self, _n: u64, _label: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn observe_pr(
+            &self,
+            _n: u64,
+        ) -> Result<Option<crate::application::port::github_client::PrObservation>> {
+            Ok(None)
+        }
+    }
+
     // ── Test helpers ─────────────────────────────────────────────────────────
 
     fn success_exit_status() -> std::process::ExitStatus {
@@ -935,6 +1027,55 @@ mod tests {
             strip_closing_keywords("設計PR. Closes #42 完了"),
             "設計PR. 完了"
         );
+    }
+
+    // ── Unit tests: base_branch ────────────────────────────────────────────
+
+    /// T-2.base.1: Design PR の base は cupola/{feature}/main（impl branch）であること
+    #[tokio::test]
+    async fn design_pr_base_branch_is_impl_branch() {
+        let github = GhBranchRecorder::new();
+        let calls = github.calls.clone();
+        let issue_repo = MockIssueRepo {
+            issue: make_issue(State::DesignRunning),
+        };
+        let process_repo = MockProcessRepo::new();
+        let config = unit_config();
+        let session = make_session(1, State::DesignRunning);
+
+        let _ =
+            process_exited_session(&github, &issue_repo, &process_repo, &config, &session).await;
+
+        let log = calls.lock().unwrap();
+        assert_eq!(log.find_pr_calls.len(), 1, "find_pr should be called once");
+        let (head, base) = &log.find_pr_calls[0];
+        assert_eq!(head, "cupola/test-feature/design");
+        assert_eq!(
+            base, "cupola/test-feature/main",
+            "design PR base should be impl branch, not default_branch"
+        );
+    }
+
+    /// T-2.base.2: Impl PR の base は config.default_branch（main）であること（回帰）
+    #[tokio::test]
+    async fn impl_pr_base_branch_is_default_branch() {
+        let github = GhBranchRecorder::new();
+        let calls = github.calls.clone();
+        let issue_repo = MockIssueRepo {
+            issue: make_issue(State::ImplementationRunning),
+        };
+        let process_repo = MockProcessRepo::new();
+        let config = unit_config();
+        let session = make_session(1, State::ImplementationRunning);
+
+        let _ =
+            process_exited_session(&github, &issue_repo, &process_repo, &config, &session).await;
+
+        let log = calls.lock().unwrap();
+        assert_eq!(log.find_pr_calls.len(), 1, "find_pr should be called once");
+        let (head, base) = &log.find_pr_calls[0];
+        assert_eq!(head, "cupola/test-feature/main");
+        assert_eq!(base, "main", "impl PR base should be default_branch");
     }
 
     // ── Log verification tests: task 3.2 ─────────────────────────────────────

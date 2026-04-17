@@ -55,6 +55,8 @@ PrSnapshot {
 - `has_review_comments`: スレッド内のコメントが trust 判定（`trusted_associations` によるロール判定 **OR** `trusted_reviewers` によるユーザー名判定）を1件も通過しないスレッドは、存在自体を無視する（遷移トリガーにもならず、Claude Code にも渡さない）。GitHub のレビュー決定（REQUEST_CHANGES 等）はスレッドを伴わない場合は観測されない（レビュースレッドのみ対象）
 - `ci_status`: check-run の conclusion が `failure` または `timed_out` の場合に `failure`。`cancelled` は `unknown` 扱い（新しいコミット push による自動キャンセルが多く、次のランを待つ）。計算中（null）も `unknown`
 
+**Design phase での ci_status / has_conflict の扱い**: Collect は design PR に対しても `ci_status` / `has_conflict` を取得するが、Decide は `DesignReviewWaiting` でこれらを遷移条件として参照しない。Design PR は `.cupola/specs/` のマークダウンのみを変更するため、CI failure や conflict は遷移トリガーにならない（`has_review_comments` のみが `DesignFixing` への遷移トリガーとなる）。詳細は [state-machine.md](./state-machine.md) の遷移テーブルを参照。
+
 **GraphQL クエリの取得上限**:
 - `reviewThreads`: カーソルベースのページネーションで全件取得する（上限なし）
 - `comments(first: 100)`: 1 スレッドあたり最大 100 コメント。通常のレビュースレッドでこの上限に達するのは稀だが、100 コメントを超える長い議論スレッドでは一部のコメントが観測されず、古い返信を見逃す可能性がある。trust 判定は取得済みコメントのみで行われるため、trusted actor のコメントが 100 件以降にしかない場合、スレッド全体が無視される

@@ -284,9 +284,9 @@ fn decide_design_running(
 }
 
 fn decide_design_review_waiting(
-    prev: &Issue,
+    _prev: &Issue,
     snap: &WorldSnapshot,
-    cfg: &Config,
+    _cfg: &Config,
     effects: &mut Vec<Effect>,
     metadata_updates: &mut MetadataUpdates,
 ) -> State {
@@ -302,9 +302,7 @@ fn decide_design_review_waiting(
         }
     };
 
-    use crate::domain::world_snapshot::CiStatus;
-
-    // Priority: merge > close > review > ci > conflict
+    // Priority: merge > close > review (CI/conflict ignored for Design phase)
     if design_pr.state == PrState::Merged {
         metadata_updates.ci_fix_count = Some(0);
         emit_spawn_impl(snap, effects);
@@ -321,31 +319,8 @@ fn decide_design_review_waiting(
         emit_spawn_design_fix(snap, design_pr, effects);
         return State::DesignFixing;
     }
-    if design_pr.ci_status == CiStatus::Failure {
-        if snap.ci_fix_exhausted {
-            // Emit PostCiFixLimitComment only when ci_fix_count == max (not already max+1)
-            if prev.ci_fix_count == cfg.max_ci_fix_cycles {
-                effects.push(Effect::PostCiFixLimitComment);
-                metadata_updates.ci_fix_count = Some(prev.ci_fix_count + 1);
-            }
-            return State::DesignReviewWaiting;
-        }
-        metadata_updates.ci_fix_count = Some(prev.ci_fix_count + 1);
-        emit_spawn_design_fix(snap, design_pr, effects);
-        return State::DesignFixing;
-    }
-    if design_pr.has_conflict {
-        if snap.ci_fix_exhausted {
-            if prev.ci_fix_count == cfg.max_ci_fix_cycles {
-                effects.push(Effect::PostCiFixLimitComment);
-                metadata_updates.ci_fix_count = Some(prev.ci_fix_count + 1);
-            }
-            return State::DesignReviewWaiting;
-        }
-        metadata_updates.ci_fix_count = Some(prev.ci_fix_count + 1);
-        emit_spawn_design_fix(snap, design_pr, effects);
-        return State::DesignFixing;
-    }
+    // Design PR changes only markdown in .cupola/specs/, so CI failure
+    // and conflict are not actionable — ignore them.
 
     State::DesignReviewWaiting
 }
@@ -1282,12 +1257,32 @@ mod tests {
         assert_eq!(d.metadata_updates.ci_fix_count, Some(0));
     }
 
-    /// T-1.D.drw.6
+    /// T-1.D.drw.6: CI failure in DesignReviewWaiting is ignored (stays waiting, no effects)
     #[test]
-    fn drw_6_ci_failure_exhausted_stays_with_comment() {
+    fn drw_6_ci_failure_ignored_stays_waiting() {
+        let issue = make_issue(State::DesignReviewWaiting);
+        let mut snap = fixtures::idle();
+        let mut pr = fixtures::open_pr();
+        pr.ci_status = CiStatus::Failure;
+        snap.design_pr = Some(pr);
+        let d = decide(&issue, &snap, &cfg());
+        assert_eq!(d.next_state, State::DesignReviewWaiting);
+        assert!(
+            d.effects.is_empty(),
+            "CI failure should not trigger any effects in Design phase"
+        );
+        assert_eq!(
+            d.metadata_updates.ci_fix_count, None,
+            "ci_fix_count should not be modified"
+        );
+    }
+
+    /// T-1.D.drw.7: CI failure with exhausted count in DesignReviewWaiting is also ignored
+    #[test]
+    fn drw_7_ci_failure_exhausted_ignored_stays_waiting() {
         let cfg = cfg();
         let mut issue = make_issue(State::DesignReviewWaiting);
-        issue.ci_fix_count = cfg.max_ci_fix_cycles; // at max
+        issue.ci_fix_count = cfg.max_ci_fix_cycles;
         let mut snap = fixtures::idle();
         snap.ci_fix_exhausted = true;
         let mut pr = fixtures::open_pr();
@@ -1295,29 +1290,33 @@ mod tests {
         snap.design_pr = Some(pr);
         let d = decide(&issue, &snap, &cfg);
         assert_eq!(d.next_state, State::DesignReviewWaiting);
-        assert!(d.effects.contains(&Effect::PostCiFixLimitComment));
-        assert_eq!(
-            d.metadata_updates.ci_fix_count,
-            Some(cfg.max_ci_fix_cycles + 1)
+        assert!(
+            !d.effects.contains(&Effect::PostCiFixLimitComment),
+            "no limit comment in Design phase"
         );
+        assert_eq!(d.metadata_updates.ci_fix_count, None);
     }
 
-    /// T-1.D.drw.7
+    /// T-1.D.drw.8: Conflict in DesignReviewWaiting is ignored (stays waiting, no effects)
     #[test]
-    fn drw_7_ci_failure_under_cap_goes_design_fixing() {
+    fn drw_8_conflict_ignored_stays_waiting() {
         let issue = make_issue(State::DesignReviewWaiting);
         let mut snap = fixtures::idle();
         let mut pr = fixtures::open_pr();
-        pr.ci_status = CiStatus::Failure;
+        pr.has_conflict = true;
         snap.design_pr = Some(pr);
         let d = decide(&issue, &snap, &cfg());
-        assert_eq!(d.next_state, State::DesignFixing);
-        assert_eq!(d.metadata_updates.ci_fix_count, Some(1));
+        assert_eq!(d.next_state, State::DesignReviewWaiting);
+        assert!(
+            d.effects.is_empty(),
+            "conflict should not trigger any effects in Design phase"
+        );
+        assert_eq!(d.metadata_updates.ci_fix_count, None);
     }
 
-    /// T-1.D.drw.8
+    /// T-1.D.drw.9: Conflict with exhausted count in DesignReviewWaiting is also ignored
     #[test]
-    fn drw_8_conflict_exhausted_stays_with_comment() {
+    fn drw_9_conflict_exhausted_ignored_stays_waiting() {
         let cfg = cfg();
         let mut issue = make_issue(State::DesignReviewWaiting);
         issue.ci_fix_count = cfg.max_ci_fix_cycles;
@@ -1328,20 +1327,8 @@ mod tests {
         snap.design_pr = Some(pr);
         let d = decide(&issue, &snap, &cfg);
         assert_eq!(d.next_state, State::DesignReviewWaiting);
-        assert!(d.effects.contains(&Effect::PostCiFixLimitComment));
-    }
-
-    /// T-1.D.drw.9
-    #[test]
-    fn drw_9_conflict_under_cap_goes_design_fixing() {
-        let issue = make_issue(State::DesignReviewWaiting);
-        let mut snap = fixtures::idle();
-        let mut pr = fixtures::open_pr();
-        pr.has_conflict = true;
-        snap.design_pr = Some(pr);
-        let d = decide(&issue, &snap, &cfg());
-        assert_eq!(d.next_state, State::DesignFixing);
-        assert_eq!(d.metadata_updates.ci_fix_count, Some(1));
+        assert!(!d.effects.contains(&Effect::PostCiFixLimitComment));
+        assert_eq!(d.metadata_updates.ci_fix_count, None);
     }
 
     /// T-1.D.drw.10
@@ -1369,21 +1356,21 @@ mod tests {
         assert_eq!(d.next_state, State::ImplementationRunning);
     }
 
-    /// T-1.D.drw.12
+    /// T-1.D.drw.12: CI failure with already-exceeded count is still ignored in Design phase
     #[test]
-    fn drw_12_no_comment_when_ci_fix_count_already_max_plus_1() {
+    fn drw_12_ci_failure_always_ignored_in_design_phase() {
         let cfg = cfg();
         let mut issue = make_issue(State::DesignReviewWaiting);
-        issue.ci_fix_count = cfg.max_ci_fix_cycles + 1; // already max+1
+        issue.ci_fix_count = cfg.max_ci_fix_cycles + 1;
         let mut snap = fixtures::idle();
-        snap.ci_fix_exhausted = true; // still exhausted
+        snap.ci_fix_exhausted = true;
         let mut pr = fixtures::open_pr();
         pr.ci_status = CiStatus::Failure;
         snap.design_pr = Some(pr);
         let d = decide(&issue, &snap, &cfg);
         assert_eq!(d.next_state, State::DesignReviewWaiting);
-        // No PostCiFixLimitComment: trigger is == max, not >= max
         assert!(!d.effects.contains(&Effect::PostCiFixLimitComment));
+        assert_eq!(d.metadata_updates.ci_fix_count, None);
     }
 
     // === DesignFixing ===
@@ -1987,13 +1974,13 @@ mod tests {
     #[test]
     fn cross_4_post_ci_fix_limit_and_count_produced_together() {
         let cfg = cfg();
-        let mut issue = make_issue(State::DesignReviewWaiting);
+        let mut issue = make_issue(State::ImplementationReviewWaiting);
         issue.ci_fix_count = cfg.max_ci_fix_cycles;
         let mut snap = fixtures::idle();
         snap.ci_fix_exhausted = true;
         let mut pr = fixtures::open_pr();
         pr.ci_status = CiStatus::Failure;
-        snap.design_pr = Some(pr);
+        snap.impl_pr = Some(pr);
         let d = decide(&issue, &snap, &cfg);
         assert!(d.effects.contains(&Effect::PostCiFixLimitComment));
         assert_eq!(
