@@ -9,6 +9,7 @@ use crate::domain::state::State;
 use crate::domain::task_weight::TaskWeight;
 
 use super::sqlite_connection::SqliteConnection;
+use super::sqlite_helpers::{parse_sqlite_datetime, str_to_state};
 
 pub struct SqliteIssueRepository {
     db: SqliteConnection,
@@ -325,12 +326,6 @@ impl IssueRepository for SqliteIssueRepository {
     }
 }
 
-pub fn str_to_state(col_idx: usize, s: &str) -> rusqlite::Result<State> {
-    s.parse::<State>().map_err(|_| {
-        rusqlite::Error::InvalidColumnType(col_idx, s.to_owned(), rusqlite::types::Type::Text)
-    })
-}
-
 fn task_weight_to_str(weight: TaskWeight) -> &'static str {
     match weight {
         TaskWeight::Light => "light",
@@ -386,14 +381,6 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
         created_at: parse_sqlite_datetime(9, &created_str)?,
         updated_at: parse_sqlite_datetime(10, &updated_str)?,
     })
-}
-
-fn parse_sqlite_datetime(col_idx: usize, s: &str) -> rusqlite::Result<DateTime<Utc>> {
-    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-        .map(|naive| naive.and_utc())
-        .map_err(|_| {
-            rusqlite::Error::InvalidColumnType(col_idx, s.to_owned(), rusqlite::types::Type::Text)
-        })
 }
 
 fn parse_rfc3339_datetime(col_idx: usize, s: &str) -> rusqlite::Result<DateTime<Utc>> {
