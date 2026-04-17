@@ -1,0 +1,22 @@
+{
+  "feature_name": "issue-263",
+  "created_at": "2026-04-17T18:39:50Z",
+  "updated_at": "2026-04-18T00:00:00Z",
+  "language": "ja",
+  "phase": "tasks-generated",
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": true
+    },
+    "design": {
+      "generated": true,
+      "approved": true
+    },
+    "tasks": {
+      "generated": true,
+      "approved": true
+    }
+  },
+  "ready_for_implementation": true
+}
