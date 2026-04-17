@@ -21,11 +21,11 @@
 
 #### Acceptance Criteria
 
-1. When `CloseIssue` エフェクト実行中に GitHub `close_issue` API 呼び出しが成功した後で `update_state_and_metadata` が失敗した場合, the ポーリングエグゼキュータ shall 最大 3 回（遅延: 1 秒、2 秒、4 秒）の指数バックオフリトライで DB 更新を再試行する
-2. When `CleanupWorktree` エフェクト実行中にworktreeの削除が成功した後で `update_state_and_metadata` が失敗した場合, the ポーリングエグゼキュータ shall 最大 3 回（遅延: 1 秒、2 秒、4 秒）の指数バックオフリトライで DB 更新を再試行する
-3. If DB 更新が全リトライ回数を使い切った場合, the ポーリングエグゼキュータ shall エラーを返してインメモリ状態を変更せず、次のポーリングサイクルでエフェクト全体が再試行されるようにする
-4. The ポーリングエグゼキュータ shall リトライロジックを汎用ヘルパーとして実装し、`CloseIssue` と `CleanupWorktree` の両エフェクトから再利用できるようにする
-5. While DB 更新リトライ中, the ポーリングエグゼキュータ shall ポーリングループ全体をブロックせずにリトライを実行する（非同期スリープを使用する）
+1.1 When `CloseIssue` エフェクト実行中に GitHub `close_issue` API 呼び出しが成功した後で `update_state_and_metadata` が失敗した場合, the ポーリングエグゼキュータ shall 最大 3 回（遅延: 1 秒、2 秒、4 秒）の指数バックオフリトライで DB 更新を再試行する
+1.2 When `CleanupWorktree` エフェクト実行中に worktree の削除が成功した後で `update_state_and_metadata` が失敗した場合, the ポーリングエグゼキュータ shall 最大 3 回（遅延: 1 秒、2 秒、4 秒）の指数バックオフリトライで DB 更新を再試行する
+1.3 If DB 更新が全リトライ回数を使い切った場合, the ポーリングエグゼキュータ shall エラーを返してインメモリ状態を変更せず、次のポーリングサイクルでエフェクト全体が再試行されるようにする
+1.4 The ポーリングエグゼキュータ shall リトライロジックを汎用ヘルパーとして実装し、`CloseIssue` と `CleanupWorktree` の両エフェクトから再利用できるようにする
+1.5 While DB 更新リトライ中, the ポーリングエグゼキュータ shall ポーリングループ全体をブロックせずにリトライを実行する（非同期スリープを使用する）
 
 ### Requirement 2: 部分的失敗の観測可能性
 
@@ -33,9 +33,9 @@
 
 #### Acceptance Criteria
 
-1. When DB 更新が 1 回以上失敗してリトライが発生した場合, the ポーリングエグゼキュータ shall `warn` レベルで失敗したエフェクト種別・Issue 番号・試行回数・エラー内容をログ出力する
-2. If DB 更新が全リトライ回数を使い切って永続的に失敗した場合, the ポーリングエグゼキュータ shall `error` レベルで「API は成功したが DB 更新が永続的に失敗した」ことを示すログを出力する
-3. The ポーリングエグゼキュータ shall ログに Issue 番号とエフェクト種別（`CloseIssue` / `CleanupWorktree`）を構造化フィールドとして含める
+2.1 When DB 更新が 1 回以上失敗してリトライが発生した場合, the ポーリングエグゼキュータ shall `warn` レベルで失敗したエフェクト種別・Issue 番号・試行回数・エラー内容をログ出力する
+2.2 If DB 更新が全リトライ回数を使い切って永続的に失敗した場合, the ポーリングエグゼキュータ shall `error` レベルで「API は成功したが DB 更新が永続的に失敗した」ことを示すログを出力する
+2.3 The ポーリングエグゼキュータ shall ログに Issue 番号とエフェクト種別（`CloseIssue` / `CleanupWorktree`）を構造化フィールドとして含める
 
 ### Requirement 3: テストによる動作保証
 
@@ -43,7 +43,7 @@
 
 #### Acceptance Criteria
 
-1. When `update_state_and_metadata` が 1 回失敗した後に成功するようにモックされている場合, the `CloseIssue` ユニットテスト shall 2 回目の試行で `close_finished=true` がセットされることを検証する
-2. When `update_state_and_metadata` が永続的に失敗するようにモックされている場合, the `CleanupWorktree` ユニットテスト shall エフェクト実行がエラーを返しインメモリ状態が変更されないことを検証する
-3. The リトライヘルパーユニットテスト shall リトライ回数・バックオフ間隔・最終エラー伝播の各ロジックを個別に検証する
-4. If リトライが全回数を消費した場合, the ポーリングエグゼキュータ shall インメモリの `issue.close_finished` および `issue.worktree_path` が変更されないことをテストで確認できる
+3.1 When `update_state_and_metadata` が 1 回失敗した後に成功するようにモックされている場合, the `CloseIssue` ユニットテスト shall 2 回目の試行で `close_finished=true` がセットされることを検証する
+3.2 When `update_state_and_metadata` が永続的に失敗するようにモックされている場合, the `CleanupWorktree` ユニットテスト shall エフェクト実行がエラーを返しインメモリ状態が変更されないことを検証する
+3.3 The リトライヘルパーユニットテスト shall リトライ回数・バックオフ間隔・最終エラー伝播の各ロジックを個別に検証する
+3.4 If リトライが全回数を消費した場合, the ポーリングエグゼキュータ shall インメモリの `issue.close_finished` および `issue.worktree_path` が変更されないことをテストで確認できる
