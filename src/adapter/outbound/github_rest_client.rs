@@ -13,18 +13,24 @@ const TIMELINE_MAX_PAGES: usize = 10;
 /// # 例
 /// ```text
 /// <https://api.github.com/issues/1/timeline?page=2>; rel="next", <...>; rel="last"
+/// <https://api.github.com/issues/1/timeline?page=2>; rel="next"; type="application/json"
 /// ```
 /// `rel = "next"` を指定すると最初の URL を返す。
+/// RFC 5988 に従い、`;` 区切りの追加パラメータが存在する場合でも正しく処理する。
 fn parse_link_header(header: &str, rel: &str) -> Option<String> {
     let target_rel = format!(r#"rel="{rel}""#);
 
     header.split(',').find_map(|part| {
         let part = part.trim();
-        let mut segments = part.splitn(2, ';');
+        let mut segments = part.split(';');
         let url_part = segments.next()?.trim();
-        let rel_part = segments.next()?.trim();
 
-        if url_part.starts_with('<') && url_part.ends_with('>') && rel_part == target_rel {
+        if !url_part.starts_with('<') || !url_part.ends_with('>') {
+            return None;
+        }
+
+        let has_rel = segments.any(|seg| seg.trim() == target_rel);
+        if has_rel {
             Some(url_part[1..url_part.len() - 1].to_string())
         } else {
             None
@@ -261,11 +267,14 @@ impl OctocrabRestClient {
         Ok(())
     }
 
-    /// Issue の timeline から、指定ラベルを最後に付与した actor の login を返す。
+    /// Issue の timeline から、指定ラベルを付与した actor の login を返す。
     ///
     /// `GET /repos/{owner}/{repo}/issues/{issue_number}/timeline` を呼び出し、
-    /// Link ヘッダーの `rel="next"` を辿って全ページのイベントを収集する。
-    /// 最大 `TIMELINE_MAX_PAGES` ページまで取得し、逆順で `labeled` イベントを検索する。
+    /// Link ヘッダーの `rel="next"` を辿ってページを順に取得する。
+    /// 各ページのイベントを先頭から走査し、最初に一致した `labeled` イベントの actor を
+    /// 返すことで、早期 return による API 呼び出し回数の削減を実現する。
+    /// 最大 `TIMELINE_MAX_PAGES` ページまで取得し、上限到達時に次ページが存在する場合は
+    /// エラーを返す。
     pub async fn fetch_label_actor_login(
         &self,
         issue_number: u64,
@@ -276,13 +285,14 @@ impl OctocrabRestClient {
             self.api_base_url, self.owner, self.repo, issue_number
         );
 
-        let mut all_events: Vec<serde_json::Value> = Vec::new();
         let mut next_url: Option<String> = Some(initial_url);
         let mut page_count: usize = 0;
 
         while let Some(url) = next_url {
             if page_count >= TIMELINE_MAX_PAGES {
-                break;
+                return Err(anyhow!(
+                    "timeline pagination exceeded max pages ({TIMELINE_MAX_PAGES}) for issue #{issue_number}; next page still exists: {url}"
+                ));
             }
 
             let resp = self
@@ -315,25 +325,24 @@ impl OctocrabRestClient {
                 .await
                 .context("failed to parse timeline response")?;
 
-            if let Some(arr) = events.as_array() {
-                all_events.extend_from_slice(arr);
+            // 各ページのイベントを先頭から走査し、一致した時点で早期 return
+            if let Some(arr) = events.as_array()
+                && let Some(login) = arr
+                    .iter()
+                    .find(|e| {
+                        e["event"].as_str() == Some("labeled")
+                            && e["label"]["name"].as_str() == Some(label_name)
+                    })
+                    .and_then(|e| e["actor"]["login"].as_str().map(String::from))
+            {
+                return Ok(Some(login));
             }
 
             page_count += 1;
             next_url = link.as_deref().and_then(|h| parse_link_header(h, "next"));
         }
 
-        // 全ページのイベントを逆順で走査し、最新の labeled イベントを検索
-        let login = all_events
-            .iter()
-            .rev()
-            .find(|e| {
-                e["event"].as_str() == Some("labeled")
-                    && e["label"]["name"].as_str() == Some(label_name)
-            })
-            .and_then(|e| e["actor"]["login"].as_str().map(String::from));
-
-        Ok(login)
+        Ok(None)
     }
 
     /// ユーザーのリポジトリに対する permission level を返す。
@@ -503,6 +512,28 @@ mod tests {
         );
     }
 
+    /// RFC 5988 追加パラメータ（`; type="..."` 等）が後続する場合でも rel を正しく取得できることを検証する
+    #[test]
+    fn parse_link_header_handles_additional_params_after_rel() {
+        let header = r#"<https://api.github.com/issues/1/timeline?page=2>; rel="next"; type="application/json""#;
+        let result = parse_link_header(header, "next");
+        assert_eq!(
+            result,
+            Some("https://api.github.com/issues/1/timeline?page=2".to_string())
+        );
+    }
+
+    /// RFC 5988 追加パラメータが rel より前に現れる場合でも正しく取得できることを検証する
+    #[test]
+    fn parse_link_header_handles_additional_params_before_rel() {
+        let header = r#"<https://api.github.com/issues/1/timeline?page=2>; type="application/json"; rel="next""#;
+        let result = parse_link_header(header, "next");
+        assert_eq!(
+            result,
+            Some("https://api.github.com/issues/1/timeline?page=2".to_string())
+        );
+    }
+
     // ============================================================
     // ページネーション統合テスト（Tasks 5.1–5.4）
     // mock HTTP サーバー（wiremock）を使用する
@@ -637,7 +668,7 @@ mod tests {
             // server が drop されるときに expect(1) の検証が実行される
         }
 
-        /// 5.4: ページ上限に達した場合に超過リクエストが送信されないことを検証する
+        /// 5.4: ページ上限に達した場合に超過リクエストが送信されずエラーが返ることを検証する
         #[tokio::test]
         async fn test_page_limit_prevents_excess_requests() {
             let server = MockServer::start().await;
@@ -659,11 +690,15 @@ mod tests {
                 OctocrabRestClient::new_for_test(&server.uri(), OWNER, REPO).expect("client");
             let result = client
                 .fetch_label_actor_login(ISSUE, "agent:ready")
-                .await
-                .expect("fetch");
+                .await;
 
-            // イベントが見つからない → None
-            assert_eq!(result, None);
+            // ページ上限超過 → エラーが返る
+            assert!(result.is_err(), "should return error when page limit is exceeded with next page remaining");
+            let err = result.unwrap_err();
+            assert!(
+                err.to_string().contains("timeline pagination exceeded max pages"),
+                "error message should indicate page limit exceeded, got: {err}"
+            );
             // server drop 時に expect(TIMELINE_MAX_PAGES) の検証が実行される
         }
     }
