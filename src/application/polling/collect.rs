@@ -146,8 +146,15 @@ where
     let id = issue.id;
 
     // --- GithubIssueSnapshot ---
-    let github_issue =
-        observe_github_issue(github, config, issue.github_issue_number, issue.state, is_open, labels).await?;
+    let github_issue = observe_github_issue(
+        github,
+        config,
+        issue.github_issue_number,
+        issue.state,
+        is_open,
+        labels,
+    )
+    .await?;
 
     // --- PR observation ---
     // Always observe PRs for active issues (even if closed — merged impl PR → Completed).
