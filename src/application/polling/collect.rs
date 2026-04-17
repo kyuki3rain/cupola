@@ -12,6 +12,7 @@ use crate::application::port::process_run_repository::ProcessRunRepository;
 use crate::domain::config::Config;
 use crate::domain::issue::Issue;
 use crate::domain::process_run::ProcessRunType;
+use crate::domain::state::State;
 use crate::domain::world_snapshot::{
     CiStatus, GithubIssueSnapshot, PrSnapshot, PrState, ProcessSnapshot, ProcessesSnapshot,
     WorldSnapshot,
@@ -145,8 +146,15 @@ where
     let id = issue.id;
 
     // --- GithubIssueSnapshot ---
-    let github_issue =
-        observe_github_issue(github, config, issue.github_issue_number, is_open, labels).await?;
+    let github_issue = observe_github_issue(
+        github,
+        config,
+        issue.github_issue_number,
+        issue.state,
+        is_open,
+        labels,
+    )
+    .await?;
 
     // --- PR observation ---
     // Always observe PRs for active issues (even if closed — merged impl PR → Completed).
@@ -183,11 +191,12 @@ where
 /// Build a GithubIssueSnapshot from pre-fetched open-set membership and labels.
 ///
 /// No per-issue GitHub API calls are made here (except `check_label_actor`
-/// for open issues with the ready label).
+/// for open Idle issues with the ready label).
 async fn observe_github_issue<G: GitHubClient>(
     github: &G,
     config: &Config,
     issue_number: u64,
+    issue_state: State,
     is_open: bool,
     labels: Option<&[String]>,
 ) -> Result<GithubIssueSnapshot> {
@@ -200,7 +209,10 @@ async fn observe_github_issue<G: GitHubClient>(
     const READY_LABEL: &str = "agent:ready";
     let has_ready_label = labels.iter().any(|l| l == READY_LABEL);
 
-    let ready_label_trusted = if !has_ready_label {
+    let ready_label_trusted = if !has_ready_label || issue_state != State::Idle {
+        // Non-Idle issues skip check_label_actor: the result is only consumed by
+        // decide_idle, so calling the API for active/terminal issues wastes 2 API
+        // calls per cycle with no effect on behaviour.
         false
     } else {
         use crate::application::association_guard::{AssociationCheckResult, check_label_actor};
@@ -471,7 +483,7 @@ mod tests {
         config
     }
 
-    /// closed issue → Closed snapshot, API 未呼び出し
+    /// closed issue → Closed snapshot, API 未呼び出し（issue_state は任意の値でよい）
     #[tokio::test]
     async fn closed_issue_returns_closed_snapshot() {
         let tracker = Arc::new(AtomicBool::new(false));
@@ -479,7 +491,7 @@ mod tests {
         let config = test_config();
 
         // Closed issue: is_open=false, labels=None
-        let snapshot = observe_github_issue(&github, &config, 1, false, None)
+        let snapshot = observe_github_issue(&github, &config, 1, State::Idle, false, None)
             .await
             .unwrap();
 
@@ -490,7 +502,7 @@ mod tests {
         );
     }
 
-    /// open issue + ready label → API 呼び出しあり（既存動作の回帰）
+    /// Idle + ready label → API 呼び出しあり（既存動作の回帰）
     #[tokio::test]
     async fn open_issue_with_ready_label_calls_permission_api() {
         let tracker = Arc::new(AtomicBool::new(false));
@@ -503,7 +515,7 @@ mod tests {
             ]);
 
         let labels = vec!["agent:ready".to_string()];
-        let snapshot = observe_github_issue(&github, &config, 1, true, Some(&labels))
+        let snapshot = observe_github_issue(&github, &config, 1, State::Idle, true, Some(&labels))
             .await
             .unwrap();
 
@@ -517,11 +529,11 @@ mod tests {
         ));
         assert!(
             tracker.load(Ordering::SeqCst),
-            "fetch_label_actor_login MUST be called for open issues with ready label"
+            "fetch_label_actor_login MUST be called for Idle open issues with ready label"
         );
     }
 
-    /// open issue + ラベルなし → ready_label_trusted == false, API 未呼び出し
+    /// Idle + ラベルなし → ready_label_trusted == false, API 未呼び出し
     #[tokio::test]
     async fn open_issue_without_ready_label_is_not_trusted() {
         let tracker = Arc::new(AtomicBool::new(false));
@@ -529,7 +541,7 @@ mod tests {
         let config = test_config();
 
         let labels: Vec<String> = vec![];
-        let snapshot = observe_github_issue(&github, &config, 1, true, Some(&labels))
+        let snapshot = observe_github_issue(&github, &config, 1, State::Idle, true, Some(&labels))
             .await
             .unwrap();
 
@@ -545,6 +557,50 @@ mod tests {
             !tracker.load(Ordering::SeqCst),
             "fetch_label_actor_login must NOT be called when no ready label"
         );
+    }
+
+    /// 非 Idle 全状態 + ready label → API 未呼び出し（Req 1.2, 3.1）
+    #[tokio::test]
+    async fn non_idle_states_with_ready_label_skip_api() {
+        use crate::domain::state::State;
+
+        let non_idle_states: Vec<State> = State::all()
+            .into_iter()
+            .filter(|s| *s != State::Idle)
+            .collect();
+
+        for issue_state in non_idle_states {
+            let tracker = Arc::new(AtomicBool::new(false));
+            let github = MockGithub::with_tracker(Arc::clone(&tracker));
+            let mut config = test_config();
+            // Use Specific so that if the API were called it would actually be invoked.
+            config.trusted_associations =
+                crate::domain::author_association::TrustedAssociations::Specific(vec![
+                    crate::domain::author_association::AuthorAssociation::Owner,
+                ]);
+
+            let labels = vec!["agent:ready".to_string()];
+            let snapshot =
+                observe_github_issue(&github, &config, 1, issue_state, true, Some(&labels))
+                    .await
+                    .unwrap();
+
+            assert!(
+                matches!(
+                    snapshot,
+                    GithubIssueSnapshot::Open {
+                        has_ready_label: true,
+                        ready_label_trusted: false,
+                        ..
+                    }
+                ),
+                "state {issue_state:?}: expected Open with ready_label_trusted=false"
+            );
+            assert!(
+                !tracker.load(Ordering::SeqCst),
+                "state {issue_state:?}: fetch_label_actor_login must NOT be called for non-Idle issues"
+            );
+        }
     }
 
     /// T-3.CO.1: derive_ci_status returns Failure on failure conclusion
