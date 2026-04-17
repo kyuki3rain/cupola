@@ -4,6 +4,7 @@
 /// the chain. Best-effort failures are logged and the chain continues.
 use std::path::Path;
 use std::process::Child;
+use std::time::Duration;
 
 use anyhow::Result;
 
@@ -24,6 +25,60 @@ use crate::domain::effect::Effect;
 use crate::domain::issue::Issue;
 use crate::domain::metadata_update::MetadataUpdates;
 use crate::domain::process_run::{ProcessRun, ProcessRunState, ProcessRunType};
+
+/// Backoff delays for DB update retries: [1s, 2s, 4s] — 3 retries after the
+/// initial attempt (4 total calls maximum).
+const RETRY_DELAYS: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+];
+
+/// Retry a DB update closure with exponential backoff on transient failures.
+///
+/// Calls `db_update()` up to `RETRY_DELAYS.len() + 1` times. On each failure
+/// (except the last), logs a `warn!` and sleeps the corresponding backoff
+/// duration. After all retries are exhausted, logs an `error!` and returns
+/// the last error.
+async fn retry_db_update<F, Fut>(
+    issue_number: u64,
+    effect_name: &str,
+    db_update: F,
+) -> anyhow::Result<()>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<()>>,
+{
+    for (attempt, &delay) in RETRY_DELAYS.iter().enumerate() {
+        match db_update().await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                tracing::warn!(
+                    issue_number,
+                    effect = effect_name,
+                    attempt = attempt + 1,
+                    error = %e,
+                    "DB update failed, retrying after backoff"
+                );
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
+    // Final attempt after last backoff
+    match db_update().await {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            tracing::error!(
+                issue_number,
+                effect = effect_name,
+                max_attempts = RETRY_DELAYS.len() + 1,
+                error = %e,
+                "DB update permanently failed after all retries"
+            );
+            Err(e)
+        }
+    }
+}
 
 /// Bound used anywhere SpawnInit needs to hand the worktree to a `tokio::spawn`
 /// task. `GitWorktreeManager` is a trivial wrapper around a `PathBuf` so `Clone`
@@ -257,14 +312,17 @@ where
                     }
                 }
 
-                // Clear worktree_path in DB
+                // Clear worktree_path in DB, retrying on transient failures so
+                // that in-memory state stays consistent with persisted state.
                 let updates = MetadataUpdates {
                     worktree_path: Some(None),
                     ..Default::default()
                 };
-                issue_repo
-                    .update_state_and_metadata(issue.id, &updates)
-                    .await?;
+                let issue_id = issue.id;
+                retry_db_update(n, "CleanupWorktree", || {
+                    issue_repo.update_state_and_metadata(issue_id, &updates)
+                })
+                .await?;
                 issue.worktree_path = None;
             }
         }
@@ -272,14 +330,17 @@ where
         Effect::CloseIssue => {
             github.close_issue(n).await?;
 
-            // Mark close_finished = true
+            // Mark close_finished = true, retrying on transient DB failures so
+            // that in-memory state stays consistent with the persisted state.
             let updates = MetadataUpdates {
                 close_finished: Some(true),
                 ..Default::default()
             };
-            issue_repo
-                .update_state_and_metadata(issue.id, &updates)
-                .await?;
+            let issue_id = issue.id;
+            retry_db_update(n, "CloseIssue", || {
+                issue_repo.update_state_and_metadata(issue_id, &updates)
+            })
+            .await?;
             issue.close_finished = true;
         }
     }
@@ -1868,6 +1929,269 @@ mod tests {
             !calls.contains(&"fetch".to_string()),
             "fetch should NOT be called for non-fixing spawn types, calls: {:?}",
             calls
+        );
+    }
+
+    // ── Mock IssueRepository for retry tests ────────────────────────────────
+
+    /// IssueRepository mock that fails `update_state_and_metadata` a configurable
+    /// number of times before succeeding. All other methods are unimplemented.
+    #[derive(Clone)]
+    struct MockIssueRepoForRetry {
+        call_count: Arc<Mutex<u32>>,
+        max_failures: u32,
+    }
+
+    impl MockIssueRepoForRetry {
+        /// Fails `max_failures` times, then succeeds.
+        fn fail_then_succeed(max_failures: u32) -> Self {
+            Self {
+                call_count: Arc::new(Mutex::new(0)),
+                max_failures,
+            }
+        }
+
+        /// Always fails (max_failures = u32::MAX).
+        fn always_fail() -> Self {
+            Self::fail_then_succeed(u32::MAX)
+        }
+
+        fn call_count(&self) -> u32 {
+            *self.call_count.lock().expect("lock")
+        }
+    }
+
+    impl crate::application::port::issue_repository::IssueRepository for MockIssueRepoForRetry {
+        async fn find_by_id(&self, _: i64) -> Result<Option<Issue>> {
+            unimplemented!()
+        }
+        async fn find_by_issue_number(&self, _: u64) -> Result<Option<Issue>> {
+            unimplemented!()
+        }
+        async fn find_active(&self) -> Result<Vec<Issue>> {
+            unimplemented!()
+        }
+        async fn find_all(&self) -> Result<Vec<Issue>> {
+            unimplemented!()
+        }
+        async fn save(&self, _: &Issue) -> Result<i64> {
+            unimplemented!()
+        }
+        async fn update_state(&self, _: i64, _: crate::domain::state::State) -> Result<()> {
+            unimplemented!()
+        }
+        async fn update(&self, _: &Issue) -> Result<()> {
+            unimplemented!()
+        }
+        async fn update_state_and_metadata(
+            &self,
+            _: i64,
+            _: &crate::domain::metadata_update::MetadataUpdates,
+        ) -> Result<()> {
+            let mut count = self.call_count.lock().expect("lock");
+            *count += 1;
+            let n = *count;
+            if n <= self.max_failures {
+                Err(anyhow::anyhow!("simulated DB failure (call {})", n))
+            } else {
+                Ok(())
+            }
+        }
+        async fn find_by_state(&self, _: crate::domain::state::State) -> Result<Vec<Issue>> {
+            unimplemented!()
+        }
+    }
+
+    // ── retry_db_update unit tests ───────────────────────────────────────────
+
+    /// T-4.1: 一時的失敗から回復するケース — 1回失敗後に成功する
+    ///
+    /// start_paused=true でトキオの時刻を一時停止し、sleep を即時完了させる。
+    #[tokio::test(start_paused = true)]
+    async fn retry_db_update_recovers_from_transient_failure() {
+        let call_count = Arc::new(Mutex::new(0u32));
+        let cc = call_count.clone();
+
+        let result = super::retry_db_update(42, "TestEffect", || {
+            let mut n = cc.lock().expect("lock");
+            *n += 1;
+            let attempt = *n;
+            async move {
+                if attempt == 1 {
+                    Err(anyhow::anyhow!("transient failure"))
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .await;
+
+        assert!(result.is_ok(), "should succeed after one transient failure");
+        assert_eq!(
+            *call_count.lock().expect("lock"),
+            2,
+            "should call db_update exactly twice (1 failure + 1 success)"
+        );
+    }
+
+    /// T-4.2: 回復不能な失敗のケース — 全試行で失敗する
+    ///
+    /// RETRY_DELAYS.len() + 1 = 4 回呼ばれることを検証する。
+    #[tokio::test(start_paused = true)]
+    async fn retry_db_update_exhausts_all_retries_and_returns_error() {
+        let call_count = Arc::new(Mutex::new(0u32));
+        let cc = call_count.clone();
+
+        let result = super::retry_db_update(42, "TestEffect", || {
+            let mut n = cc.lock().expect("lock");
+            *n += 1;
+            async move { Err::<(), _>(anyhow::anyhow!("permanent failure")) }
+        })
+        .await;
+
+        assert!(
+            result.is_err(),
+            "should return error after all retries exhausted"
+        );
+        assert_eq!(
+            *call_count.lock().expect("lock"),
+            super::RETRY_DELAYS.len() as u32 + 1,
+            "should call db_update exactly RETRY_DELAYS.len()+1 times"
+        );
+    }
+
+    // ── CloseIssue retry integration tests ─────────────────────────────────
+
+    /// T-3.1: CloseIssue で DB 更新が 1 回失敗後に成功したとき close_finished=true になる
+    #[tokio::test(start_paused = true)]
+    async fn close_issue_sets_close_finished_after_transient_db_failure() {
+        let issue_repo = MockIssueRepoForRetry::fail_then_succeed(1);
+        let github = MockGitHubForInit::new();
+        let proc_repo = MockProcRepo::new();
+        let worktree = MockGitWorktreeForCleanup::new().0;
+        let file_gen = MockFileGenerator::with_log(Arc::new(Mutex::new(vec![])));
+        let mut session_mgr = crate::application::session_manager::SessionManager::new();
+        let mut init_mgr = crate::application::init_task_manager::InitTaskManager::new();
+        let config =
+            Config::default_with_repo("owner".to_string(), "repo".to_string(), "main".to_string());
+        let mut issue = make_test_issue("issue-42");
+
+        let effects = [Effect::CloseIssue];
+        super::execute_effects(
+            &github,
+            &issue_repo,
+            &proc_repo,
+            &MockClaudeRunner,
+            &worktree,
+            &file_gen,
+            &mut session_mgr,
+            &mut init_mgr,
+            &config,
+            &mut issue,
+            &effects,
+        )
+        .await
+        .expect("execute_effects should succeed (CloseIssue is best-effort)");
+
+        assert!(
+            issue.close_finished,
+            "close_finished should be true after successful retry"
+        );
+        assert_eq!(
+            issue_repo.call_count(),
+            2,
+            "update_state_and_metadata should be called twice (1 failure + 1 success)"
+        );
+    }
+
+    /// T-3.4 (CloseIssue): DB 更新が永続的に失敗したとき close_finished は変更されない
+    #[tokio::test(start_paused = true)]
+    async fn close_issue_does_not_set_close_finished_on_permanent_db_failure() {
+        let issue_repo = MockIssueRepoForRetry::always_fail();
+        let github = MockGitHubForInit::new();
+        let proc_repo = MockProcRepo::new();
+        let worktree = MockGitWorktreeForCleanup::new().0;
+        let file_gen = MockFileGenerator::with_log(Arc::new(Mutex::new(vec![])));
+        let mut session_mgr = crate::application::session_manager::SessionManager::new();
+        let mut init_mgr = crate::application::init_task_manager::InitTaskManager::new();
+        let config =
+            Config::default_with_repo("owner".to_string(), "repo".to_string(), "main".to_string());
+        let mut issue = make_test_issue("issue-42");
+
+        // CloseIssue is best-effort, so execute_effects returns Ok even on DB failure.
+        let effects = [Effect::CloseIssue];
+        super::execute_effects(
+            &github,
+            &issue_repo,
+            &proc_repo,
+            &MockClaudeRunner,
+            &worktree,
+            &file_gen,
+            &mut session_mgr,
+            &mut init_mgr,
+            &config,
+            &mut issue,
+            &effects,
+        )
+        .await
+        .expect("execute_effects returns Ok for best-effort effect");
+
+        assert!(
+            !issue.close_finished,
+            "close_finished must remain false when DB update permanently fails"
+        );
+        assert_eq!(
+            issue_repo.call_count(),
+            super::RETRY_DELAYS.len() as u32 + 1,
+            "should exhaust all retries"
+        );
+    }
+
+    // ── CleanupWorktree retry integration tests ─────────────────────────────
+
+    /// T-3.2 / T-3.4 (CleanupWorktree): DB 更新が永続的に失敗したとき worktree_path は変更されない
+    #[tokio::test(start_paused = true)]
+    async fn cleanup_worktree_does_not_clear_worktree_path_on_permanent_db_failure() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let wt_path_str = tmp.path().to_string_lossy().to_string();
+        let mut issue = make_completed_issue_with_worktree("issue-42", &wt_path_str);
+
+        let issue_repo = MockIssueRepoForRetry::always_fail();
+        let github = MockGitHubForInit::new();
+        let proc_repo = MockProcRepo::new();
+        let worktree = MockGitWorktreeForCleanup::new().0;
+        let file_gen = MockFileGenerator::with_log(Arc::new(Mutex::new(vec![])));
+        let mut session_mgr = crate::application::session_manager::SessionManager::new();
+        let mut init_mgr = crate::application::init_task_manager::InitTaskManager::new();
+        let config =
+            Config::default_with_repo("owner".to_string(), "repo".to_string(), "main".to_string());
+
+        // CleanupWorktree is best-effort, so execute_effects returns Ok even on DB failure.
+        let effects = [Effect::CleanupWorktree];
+        super::execute_effects(
+            &github,
+            &issue_repo,
+            &proc_repo,
+            &MockClaudeRunner,
+            &worktree,
+            &file_gen,
+            &mut session_mgr,
+            &mut init_mgr,
+            &config,
+            &mut issue,
+            &effects,
+        )
+        .await
+        .expect("execute_effects returns Ok for best-effort effect");
+
+        assert!(
+            issue.worktree_path.is_some(),
+            "worktree_path must remain Some when DB update permanently fails"
+        );
+        assert_eq!(
+            issue_repo.call_count(),
+            super::RETRY_DELAYS.len() as u32 + 1,
+            "should exhaust all retries"
         );
     }
 }
