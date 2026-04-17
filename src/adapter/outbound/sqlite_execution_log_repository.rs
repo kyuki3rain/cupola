@@ -5,7 +5,7 @@ use crate::domain::execution_log::ExecutionLog;
 use crate::domain::state::State;
 
 use super::sqlite_connection::SqliteConnection;
-use super::sqlite_issue_repository::str_to_state;
+use super::sqlite_helpers::{parse_sqlite_datetime, str_to_state};
 
 pub struct SqliteExecutionLogRepository {
     db: SqliteConnection,
@@ -111,17 +111,6 @@ impl ExecutionLogRepository for SqliteExecutionLogRepository {
             anyhow::anyhow!("spawn_blocking task failed: {e}")
         })?
     }
-}
-
-fn parse_sqlite_datetime(
-    col_idx: usize,
-    s: &str,
-) -> rusqlite::Result<chrono::DateTime<chrono::Utc>> {
-    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-        .map(|naive| naive.and_utc())
-        .map_err(|_| {
-            rusqlite::Error::InvalidColumnType(col_idx, s.to_string(), rusqlite::types::Type::Text)
-        })
 }
 
 #[cfg(test)]
