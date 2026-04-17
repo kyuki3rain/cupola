@@ -435,27 +435,27 @@ fn t_7_it_pr_closed_design_review_waiting_goes_design_running() {
 fn t_7_it_ci_limit_posts_limit_comment_and_stays() {
     let config = default_config(); // max_ci_fix_cycles = 3
 
-    let mut issue = new_issue(1, 42, State::DesignReviewWaiting);
+    let mut issue = new_issue(1, 42, State::ImplementationReviewWaiting);
     issue.ci_fix_count = 3; // == max_ci_fix_cycles
 
     let snap = WorldSnapshot {
         github_issue: open_issue_snap(),
-        design_pr: Some(PrSnapshot {
+        design_pr: None,
+        impl_pr: Some(PrSnapshot {
             state: PrState::Open,
             has_review_comments: false,
             ci_status: CiStatus::Failure,
             has_conflict: false,
         }),
-        impl_pr: None,
         processes: no_processes(),
         ci_fix_exhausted: true, // ci_fix_count >= max
     };
     let decision = decide(&issue, &snap, &config);
-    // Should stay in DesignReviewWaiting and post limit comment
+    // Should stay in ImplementationReviewWaiting and post limit comment
     assert_eq!(
         decision.next_state,
-        State::DesignReviewWaiting,
-        "should stay in DesignReviewWaiting when CI fix limit reached"
+        State::ImplementationReviewWaiting,
+        "should stay in ImplementationReviewWaiting when CI fix limit reached"
     );
     assert!(
         decision
