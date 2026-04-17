@@ -37,5 +37,5 @@
 
 1. When all existing tests are executed after the refactoring, the system shall pass all tests that were passing before the change without modification to any test code.
 2. The system shall produce identical runtime behavior for `str_to_state` and `parse_sqlite_datetime` calls in both repositories, as verified by existing unit and integration tests.
-3. If `str_to_state` was previously exposed as `pub` and used in test modules via `use super::str_to_state`, the system shall keep it accessible to those tests (e.g., via `pub(super)` or by adjusting the import path in the test).
+3. The system shall preserve the visibility and module references needed for existing test modules to compile and run unchanged after the refactoring.
 4. When `devbox run test` is executed after the refactoring, the system shall complete with zero failures.

@@ -17,7 +17,7 @@
   - `use super::sqlite_helpers::{str_to_state, parse_sqlite_datetime};` の import を追加する
   - ファイル末尾に定義されている `pub fn str_to_state` と `fn parse_sqlite_datetime` の定義を削除する
   - `row_to_issue` 関数内の `parse_sqlite_datetime` 呼び出しがそのまま動作することを確認する（import 変更のみで動作不変）
-  - テストモジュール内の `use super::str_to_state` を `use super::sqlite_helpers::str_to_state` に更新する
+  - テストモジュールは現行どおり `use super::*;` を維持し、追加の import 書き換えは不要であることを確認する（`str_to_state(...)` 呼び出しは親モジュールが `use super::sqlite_helpers::str_to_state;` を通じて再エクスポートする形で解決される前提）
   - _Requirements: 2.1, 2.4, 3.1, 3.3_
 
 - [ ] 2.2 (P) `sqlite_execution_log_repository.rs` を更新する

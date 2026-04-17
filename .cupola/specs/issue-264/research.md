@@ -34,7 +34,7 @@
 - **文脈:** 新モジュールのヘルパー関数をどの可視性で公開するか
 - **知見:**
   - 現在の `str_to_state` は `pub` だが、`src/adapter/outbound/` 外から使われているかを確認
-  - `sqlite_issue_repository.rs` のテストコード内: `use super::str_to_state` → 同ファイル内の `super::` を参照しているため、新モジュールへの移動後は `use super::sqlite_helpers::str_to_state` 等に変更が必要
+  - `sqlite_issue_repository.rs` のテストコード内: `use super::*;` で親モジュールをまとめて参照している。したがって、新モジュール移動後の参照可否は、テスト自身が `use super::sqlite_helpers::str_to_state` を追加するかどうかではなく、親モジュール側で `use super::sqlite_helpers::str_to_state;` を通じて `super::*` で拾える形を維持するかに依存する
   - `sqlite_process_run_repository.rs` は `str_to_state` を使っていない
   - `src/` 内の他ファイルで `str_to_state` を参照している箇所なし（grep 確認）
   - → `pub(super)` とすることで `adapter/outbound` 内のみからアクセス可能とし、外部公開を最小化できる
@@ -64,11 +64,11 @@
 - **文脈:** ヘルパー関数を外部に公開する必要があるか
 - **採用アプローチ:** `pub(super)` を使い `adapter/outbound` 内のみからアクセス可能とする
 - **根拠:** 現在 `str_to_state` は `pub` だが、実際には `adapter/outbound` 外から使われていない。最小公開原則に従い可視性を絞る
-- **トレードオフ:** テストコードの import パス変更が必要（`use super::str_to_state` → `use super::sqlite_helpers::str_to_state`）
+- **トレードオフ:** テストコードは `use super::*;` を使用しているため、親モジュールが `use super::sqlite_helpers::str_to_state;` を通じて `str_to_state` を可視化する必要がある。テスト自体への変更は不要
 
 ## リスクと軽減策
 
-- テストコードの import パス更新漏れ → `cargo test` で即座に検出可能
+- 親モジュールで `use super::sqlite_helpers::str_to_state;` を再エクスポートし忘れた場合、テストが `use super::*;` で `str_to_state` を解決できなくなる → `cargo test` で即座に検出可能
 - `str_to_state` の `pub` が外部から参照されていた場合のコンパイルエラー → grep による事前確認済み（参照なし）
 
 ## 参考文献
