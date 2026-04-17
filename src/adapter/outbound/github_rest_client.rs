@@ -688,15 +688,17 @@ mod tests {
 
             let client =
                 OctocrabRestClient::new_for_test(&server.uri(), OWNER, REPO).expect("client");
-            let result = client
-                .fetch_label_actor_login(ISSUE, "agent:ready")
-                .await;
+            let result = client.fetch_label_actor_login(ISSUE, "agent:ready").await;
 
             // ページ上限超過 → エラーが返る
-            assert!(result.is_err(), "should return error when page limit is exceeded with next page remaining");
+            assert!(
+                result.is_err(),
+                "should return error when page limit is exceeded with next page remaining"
+            );
             let err = result.unwrap_err();
             assert!(
-                err.to_string().contains("timeline pagination exceeded max pages"),
+                err.to_string()
+                    .contains("timeline pagination exceeded max pages"),
                 "error message should indicate page limit exceeded, got: {err}"
             );
             // server drop 時に expect(TIMELINE_MAX_PAGES) の検証が実行される
