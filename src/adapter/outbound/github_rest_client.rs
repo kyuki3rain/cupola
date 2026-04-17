@@ -5,6 +5,33 @@ use crate::application::port::github_client::{
     GitHubIssueDetail, GitHubPr, GitHubPrDetails, OpenIssueInfo, RepositoryPermission,
 };
 
+/// Timeline API ページネーションの最大ページ数。無限ループ防止のための上限。
+const TIMELINE_MAX_PAGES: usize = 10;
+
+/// RFC 5988 形式の Link ヘッダー文字列から指定 rel の URL を抽出する。
+///
+/// # 例
+/// ```text
+/// <https://api.github.com/issues/1/timeline?page=2>; rel="next", <...>; rel="last"
+/// ```
+/// `rel = "next"` を指定すると最初の URL を返す。
+fn parse_link_header(header: &str, rel: &str) -> Option<String> {
+    let target_rel = format!(r#"rel="{rel}""#);
+
+    header.split(',').find_map(|part| {
+        let part = part.trim();
+        let mut segments = part.splitn(2, ';');
+        let url_part = segments.next()?.trim();
+        let rel_part = segments.next()?.trim();
+
+        if url_part.starts_with('<') && url_part.ends_with('>') && rel_part == target_rel {
+            Some(url_part[1..url_part.len() - 1].to_string())
+        } else {
+            None
+        }
+    })
+}
+
 /// 文字列を URL パスセグメントとして percent-encode する。
 /// 非予約文字（英数字・`-`・`_`・`.`・`~`）以外をすべて `%XX` 形式にエンコードする。
 fn percent_encode_path(s: &str) -> String {
@@ -25,6 +52,7 @@ pub struct OctocrabRestClient {
     repo: String,
     token: String,
     http_client: reqwest::Client,
+    api_base_url: String,
 }
 
 impl OctocrabRestClient {
@@ -43,6 +71,28 @@ impl OctocrabRestClient {
             repo,
             token,
             http_client,
+            api_base_url: "https://api.github.com".to_string(),
+        })
+    }
+
+    /// テスト用コンストラクタ。任意のベース URL を指定してモックサーバーと通信できる。
+    #[cfg(test)]
+    fn new_for_test(base_url: &str, owner: &str, repo: &str) -> Result<Self> {
+        let http_client = reqwest::Client::builder()
+            .user_agent("cupola/1.0")
+            .build()
+            .context("failed to build reqwest client")?;
+        let octocrab = Octocrab::builder()
+            .personal_token("test-token".to_string())
+            .build()
+            .context("failed to build octocrab client")?;
+        Ok(Self {
+            octocrab,
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            token: "test-token".to_string(),
+            http_client,
+            api_base_url: base_url.to_string(),
         })
     }
 
@@ -214,45 +264,68 @@ impl OctocrabRestClient {
     /// Issue の timeline から、指定ラベルを最後に付与した actor の login を返す。
     ///
     /// `GET /repos/{owner}/{repo}/issues/{issue_number}/timeline` を呼び出し、
-    /// `event == "labeled"` かつ `label.name == label_name` のイベントを逆順で検索する。
+    /// Link ヘッダーの `rel="next"` を辿って全ページのイベントを収集する。
+    /// 最大 `TIMELINE_MAX_PAGES` ページまで取得し、逆順で `labeled` イベントを検索する。
     pub async fn fetch_label_actor_login(
         &self,
         issue_number: u64,
         label_name: &str,
     ) -> Result<Option<String>> {
-        let url = format!(
-            "https://api.github.com/repos/{}/{}/issues/{}/timeline?per_page=100",
-            self.owner, self.repo, issue_number
+        let initial_url = format!(
+            "{}/repos/{}/{}/issues/{}/timeline?per_page=100",
+            self.api_base_url, self.owner, self.repo, issue_number
         );
 
-        let resp = self
-            .http_client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .send()
-            .await
-            .with_context(|| format!("failed to fetch timeline for issue #{issue_number}"))?;
+        let mut all_events: Vec<serde_json::Value> = Vec::new();
+        let mut next_url: Option<String> = Some(initial_url);
+        let mut page_count: usize = 0;
 
-        if !resp.status().is_success() {
-            return Err(anyhow!(
-                "timeline API returned {}: {}",
-                resp.status(),
-                resp.text().await.unwrap_or_default()
-            ));
+        while let Some(url) = next_url {
+            if page_count >= TIMELINE_MAX_PAGES {
+                break;
+            }
+
+            let resp = self
+                .http_client
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", self.token))
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .send()
+                .await
+                .with_context(|| format!("failed to fetch timeline for issue #{issue_number}"))?;
+
+            if !resp.status().is_success() {
+                return Err(anyhow!(
+                    "timeline API returned {}: {}",
+                    resp.status(),
+                    resp.text().await.unwrap_or_default()
+                ));
+            }
+
+            // Link ヘッダーは body 消費前に取得する（Rust の所有権制約を回避）
+            let link = resp
+                .headers()
+                .get("link")
+                .and_then(|v| v.to_str().ok())
+                .map(String::from);
+
+            let events: serde_json::Value = resp
+                .json()
+                .await
+                .context("failed to parse timeline response")?;
+
+            if let Some(arr) = events.as_array() {
+                all_events.extend_from_slice(arr);
+            }
+
+            page_count += 1;
+            next_url = link.as_deref().and_then(|h| parse_link_header(h, "next"));
         }
 
-        let events: serde_json::Value = resp
-            .json()
-            .await
-            .context("failed to parse timeline response")?;
-
-        // 逆順で最新の labeled イベントを検索
-        let login = events
-            .as_array()
-            .into_iter()
-            .flatten()
+        // 全ページのイベントを逆順で走査し、最新の labeled イベントを検索
+        let login = all_events
+            .iter()
             .rev()
             .find(|e| {
                 e["event"].as_str() == Some("labeled")
@@ -387,7 +460,217 @@ pub fn aggregate_check_run_conclusions(conclusions: &[Option<&str>]) -> Aggregat
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
     use super::*;
+
+    // ============================================================
+    // parse_link_header ユニットテスト（Task 1.2）
+    // ============================================================
+
+    /// rel="next" を含む Link ヘッダーから URL が正しく取得できることを検証する
+    #[test]
+    fn parse_link_header_extracts_next_url() {
+        let header = r#"<https://api.github.com/issues/1/timeline?page=2>; rel="next""#;
+        let result = parse_link_header(header, "next");
+        assert_eq!(
+            result,
+            Some("https://api.github.com/issues/1/timeline?page=2".to_string())
+        );
+    }
+
+    /// rel="next" が存在しない場合に None が返ることを検証する
+    #[test]
+    fn parse_link_header_returns_none_when_no_next() {
+        let header = r#"<https://api.github.com/issues/1/timeline?page=5>; rel="last""#;
+        let result = parse_link_header(header, "next");
+        assert_eq!(result, None);
+    }
+
+    /// rel="next" と rel="last" が混在する場合に対象の rel のみ取得できることを検証する
+    #[test]
+    fn parse_link_header_extracts_target_rel_from_mixed() {
+        let header = r#"<https://api.github.com/issues/1/timeline?page=2>; rel="next", <https://api.github.com/issues/1/timeline?page=5>; rel="last""#;
+        let next = parse_link_header(header, "next");
+        let last = parse_link_header(header, "last");
+        assert_eq!(
+            next,
+            Some("https://api.github.com/issues/1/timeline?page=2".to_string())
+        );
+        assert_eq!(
+            last,
+            Some("https://api.github.com/issues/1/timeline?page=5".to_string())
+        );
+    }
+
+    // ============================================================
+    // ページネーション統合テスト（Tasks 5.1–5.4）
+    // mock HTTP サーバー（wiremock）を使用する
+    // ============================================================
+
+    #[cfg(test)]
+    mod pagination_tests {
+        use super::*;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        const OWNER: &str = "owner";
+        const REPO: &str = "repo";
+        const ISSUE: u64 = 1;
+        const TIMELINE_PATH: &str = "/repos/owner/repo/issues/1/timeline";
+
+        fn page1_events() -> serde_json::Value {
+            serde_json::json!([
+                {"event": "labeled", "label": {"name": "other-label"}, "actor": {"login": "alice"}}
+            ])
+        }
+
+        fn page2_events() -> serde_json::Value {
+            serde_json::json!([
+                {"event": "labeled", "label": {"name": "agent:ready"}, "actor": {"login": "bob"}}
+            ])
+        }
+
+        /// 5.1: 複数ページにまたがるイベントをすべて取得できることを検証する
+        #[tokio::test]
+        async fn test_two_pages_all_events_collected() {
+            let server = MockServer::start().await;
+            let page2_link = format!("<{}{}>; rel=\"next\"", server.uri(), TIMELINE_PATH);
+
+            // ページ2用モック（先に登録 = 低優先度）
+            Mock::given(method("GET"))
+                .and(path(TIMELINE_PATH))
+                .respond_with(ResponseTemplate::new(200).set_body_json(page2_events()))
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+
+            // ページ1用モック（後に登録 = 高優先度、1回のみ）
+            Mock::given(method("GET"))
+                .and(path(TIMELINE_PATH))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("link", page2_link.as_str())
+                        .set_body_json(page1_events()),
+                )
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+
+            let client =
+                OctocrabRestClient::new_for_test(&server.uri(), OWNER, REPO).expect("client");
+            let result = client
+                .fetch_label_actor_login(ISSUE, "agent:ready")
+                .await
+                .expect("fetch");
+
+            // ページ2のイベント（agent:ready の labeled）が見つかる
+            assert_eq!(result, Some("bob".to_string()));
+        }
+
+        /// 5.2: 後続ページに存在するラベル付与イベントから actor を特定できることを検証する
+        #[tokio::test]
+        async fn test_actor_from_second_page() {
+            let server = MockServer::start().await;
+            let page2_link = format!("<{}{}>; rel=\"next\"", server.uri(), TIMELINE_PATH);
+
+            // ページ2: target ラベルの labeled イベントあり
+            let page2 = serde_json::json!([
+                {"event": "labeled", "label": {"name": "agent:ready"}, "actor": {"login": "carol"}}
+            ]);
+            Mock::given(method("GET"))
+                .and(path(TIMELINE_PATH))
+                .respond_with(ResponseTemplate::new(200).set_body_json(page2))
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+
+            // ページ1: target ラベルなし
+            let page1 = serde_json::json!([
+                {"event": "commented", "actor": {"login": "alice"}}
+            ]);
+            Mock::given(method("GET"))
+                .and(path(TIMELINE_PATH))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("link", page2_link.as_str())
+                        .set_body_json(page1),
+                )
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+
+            let client =
+                OctocrabRestClient::new_for_test(&server.uri(), OWNER, REPO).expect("client");
+            let result = client
+                .fetch_label_actor_login(ISSUE, "agent:ready")
+                .await
+                .expect("fetch");
+
+            assert_eq!(result, Some("carol".to_string()));
+        }
+
+        /// 5.3: 次ページが存在しない場合にループが終了することを検証する
+        #[tokio::test]
+        async fn test_single_page_loop_terminates() {
+            let server = MockServer::start().await;
+
+            // Link ヘッダーなし（単一ページ）
+            let events = serde_json::json!([
+                {"event": "labeled", "label": {"name": "agent:ready"}, "actor": {"login": "dave"}}
+            ]);
+            Mock::given(method("GET"))
+                .and(path(TIMELINE_PATH))
+                .respond_with(ResponseTemplate::new(200).set_body_json(events))
+                .expect(1) // 1回だけリクエストされることを検証
+                .mount(&server)
+                .await;
+
+            let client =
+                OctocrabRestClient::new_for_test(&server.uri(), OWNER, REPO).expect("client");
+            let result = client
+                .fetch_label_actor_login(ISSUE, "agent:ready")
+                .await
+                .expect("fetch");
+
+            assert_eq!(result, Some("dave".to_string()));
+            // server が drop されるときに expect(1) の検証が実行される
+        }
+
+        /// 5.4: ページ上限に達した場合に超過リクエストが送信されないことを検証する
+        #[tokio::test]
+        async fn test_page_limit_prevents_excess_requests() {
+            let server = MockServer::start().await;
+            // 自身を next として返す（無限ループの素）
+            let self_link = format!("<{}{}>; rel=\"next\"", server.uri(), TIMELINE_PATH);
+
+            Mock::given(method("GET"))
+                .and(path(TIMELINE_PATH))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("link", self_link.as_str())
+                        .set_body_json(serde_json::json!([])),
+                )
+                .expect(TIMELINE_MAX_PAGES as u64) // ちょうど上限回数だけ呼ばれる
+                .mount(&server)
+                .await;
+
+            let client =
+                OctocrabRestClient::new_for_test(&server.uri(), OWNER, REPO).expect("client");
+            let result = client
+                .fetch_label_actor_login(ISSUE, "agent:ready")
+                .await
+                .expect("fetch");
+
+            // イベントが見つからない → None
+            assert_eq!(result, None);
+            // server drop 時に expect(TIMELINE_MAX_PAGES) の検証が実行される
+        }
+    }
+
+    // ============================================================
+    // 既存テスト
+    // ============================================================
 
     /// T-4.GH.1: find_open_pr_by_head — PrStatus::Open のみ Some を返す
     /// 実際の HTTP 呼び出しなしで、percent_encode_path のロジックをテストする
