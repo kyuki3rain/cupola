@@ -64,11 +64,13 @@ sequenceDiagram
     GH-->>ORC: events[] (Link なし)
     ORC->>ORC: link_header を保存 → body 消費 → events 収集
 
-    ORC->>ORC: 全イベントを .rev() で逆順検索
+    ORC->>ORC: 全イベント（昇順）を .rev() で逆順走査し最新の labeled を検索
     ORC-->>AG: Ok(Some("actor_login"))
 ```
 
 ページ上限（10ページ）に達した場合、またはレスポンスに `rel="next"` が存在しない場合にループを終了する。
+
+GitHub Timeline API はイベントを**昇順（古い順）**で返すため、`.rev()` による逆順走査が最新の `labeled` イベントを先頭に返す正しい動作となる。
 
 ## Requirements Traceability
 
