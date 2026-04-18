@@ -56,8 +56,12 @@ Initialize a new spec directory for **$1** by creating `spec.json` and `requirem
 Determine the language to use (in priority order):
 
 1. If `$2` is provided and non-empty, use it as the language
-2. Otherwise, read `.cupola/cupola.toml` and extract the `language` setting if present (look for a line like `language = "ja"` — note it may be commented out with `#`)
+2. Otherwise, read `.cupola/cupola.toml` and extract the `language` setting if present, but ignore commented lines and only match an uncommented assignment (e.g., a line whose first non-whitespace character is not `#`, and that matches `^\s*language\s*=\s*"[^"]*"`)
 3. If still unresolved, use `"ja"` as the default
+
+**Validate resolved language**:
+- After resolving language, validate it matches a safe BCP-47-like pattern: only letters, digits, and hyphens (`[a-zA-Z0-9-]+`)
+- If the value does not match this pattern, fall back to `"ja"` (do not embed arbitrary strings into JSON)
 
 ### Step 3: Get Current Timestamp
 
