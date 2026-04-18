@@ -67,7 +67,21 @@ Run quality checks described in AGENTS.md / CLAUDE.md. Fix any issues before com
 ```bash
 git diff --name-only   # confirm changed files
 git add <changed_files>
-git commit -m "fix: address requested changes"
+```
+
+Craft a commit message based on the actual changes:
+- If `$1` is `design`: use prefix `docs:` (e.g., `docs: fix typo in requirements section`)
+- If `$1` is `impl`: use prefix `fix:` (e.g., `fix: resolve clippy warnings in prompt module`)
+
+Generate the message dynamically by reviewing the changed files and the review comments / CI errors addressed. Do not use a fixed string like "address requested changes".
+
+```bash
+# If $1 is design:
+git commit -m "docs: <dynamic message describing the actual changes>"
+
+# If $1 is impl:
+git commit -m "fix: <dynamic message describing the actual changes>"
+
 git push
 ```
 
