@@ -188,10 +188,11 @@ stateDiagram-v2
 |-----------|--------------|--------|--------------|------------------|-----------|
 | ShutdownMode | domain | shutdown 状態の型表現 | 1.1, 1.2, 2.2, 2.3, 5.4 | — | State |
 | Config (拡張) | domain | shutdown_timeout 追加 | 3.1–3.5 | — | State |
-| StopUseCase (拡張) | application | force フラグ対応 | 2.1, 2.3, 4.2–4.4, 5.1 | SignalPort, PidFilePort | Service |
-| PollingUseCase (拡張) | application | graceful wait ループ改修 | 1.1–1.5, 2.2, 5.2–5.4 | SessionManager | Service |
+| StopUseCase (拡張) | application | force フラグ対応・進捗表示 | 2.1, 2.3, 2.4, 4.2–4.4, 5.1 | SignalPort, PidFilePort | Service |
+| PollingUseCase (拡張) | application | graceful wait ループ改修 | 1.1–1.5, 2.2, 5.2–5.4 | SessionManager, PidFilePort | Service |
 | CLI Cli::Stop (拡張) | adapter/inbound | `--force` フラグ追加 | 4.1, 2.1 | StopUseCase | — |
 | CupolaToml (拡張) | bootstrap | shutdown_timeout_secs 追加 | 3.1, 3.4 | — | — |
+| PidFilePort (拡張) | application | セッション状態ファイル読み書き | 2.4, 5.1 | — | Port |
 
 ---
 
@@ -270,7 +271,12 @@ pub enum StopResult {
 
 **Implementation Notes**
 
-- `sessions_killed` カウントは StopUseCase 単独では取得できない（デーモン側のみ知る）ため、`ForceKilled` の `sessions_killed` はデーモン終了後に PID ファイルにカウントを書き込む方式、またはプロセス終了メッセージとして別途実装（初期実装では `0` とし、可視性は 5.2/5.3 のログで担保）
+- `sessions_killed` カウントはデーモン側のみ知るため、**セッション状態ファイル**（PID ファイルと同ディレクトリの `<pid_stem>.sessions`）を介してデーモン→CLI へ伝達する:
+  1. デーモン（PollingUseCase）は graceful shutdown 中および通常稼働中に、アクティブセッション数をセッション状態ファイルへ定期的に書き込む
+  2. `StopUseCase` は SIGKILL 送信**前**にセッション状態ファイルを読み取り、`ForceKilled.sessions_killed` を設定する（AC 2.4 を満たす）
+  3. graceful shutdown 中、`StopUseCase` はデーモン死活確認ループ内でセッション状態ファイルをポーリングし、残セッション数と経過秒数を端末へ定期出力する（AC 5.1 を満たす）
+  4. デーモン終了後はセッション状態ファイルも削除する
+- `PidFilePort` を拡張し、セッション状態ファイルの読み書きメソッドを追加する（`write_session_count(n: u32)` / `read_session_count() -> Option<u32>`）
 - 既存テストの `execute()` 呼び出しを `execute(false)` に更新する
 
 ---
@@ -310,15 +316,18 @@ impl PollingUseCase {
 
 ```
 ShutdownMode::Graceful { deadline } の場合:
+  shutdown_start = 現在時刻
   ループ (100ms インターバル):
     - セッション完了を回収 (collect_exited)
+    - アクティブセッション数をセッション状態ファイルへ書き込む
     - 残セッション数 = 0 → 正常終了ログ → break
     - deadline が Some(t) かつ現在時刻 >= t → SIGKILL → ログ → break
-    - 5 秒ごとに「完了待ち中 (残 N セッション)」ログ
+    - 5 秒ごとに「完了待ち中 (残 N セッション、shutdown 開始から M 秒経過)」ログ
 
 ShutdownMode::Force の場合:
   - session_mgr.kill_all()
   - 最大 5 秒待機して回収
+  - セッション状態ファイル削除
   - PID ファイル削除 → 終了
 ```
 
