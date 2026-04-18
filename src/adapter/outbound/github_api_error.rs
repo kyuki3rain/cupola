@@ -5,14 +5,17 @@ use reqwest::StatusCode;
 /// GitHub HTTP API エラーをバリアント別に型付けし、リトライ可否を判断できるようにする。
 #[derive(Debug, thiserror::Error)]
 pub enum GitHubApiError {
-    #[error("rate limit exceeded (retry after {retry_after:?})")]
-    RateLimit { retry_after: Option<Duration> },
-    #[error("unauthorized: check token")]
-    Unauthorized,
-    #[error("forbidden: {0}")]
-    Forbidden(String),
-    #[error("server error (5xx): {status}")]
-    ServerError { status: StatusCode },
+    #[error("rate limit exceeded (retry after {retry_after:?}) [{resource}]")]
+    RateLimit {
+        retry_after: Option<Duration>,
+        resource: String,
+    },
+    #[error("unauthorized: check token [{resource}]")]
+    Unauthorized { resource: String },
+    #[error("forbidden [{resource}]: {body}")]
+    Forbidden { body: String, resource: String },
+    #[error("server error (5xx): {status} [{resource}]")]
+    ServerError { status: StatusCode, resource: String },
     #[error("not found: {resource}")]
     NotFound { resource: String },
     #[error("other: {0}")]
@@ -37,17 +40,26 @@ pub fn classify_http_error(
     resource: &str,
 ) -> GitHubApiError {
     match status.as_u16() {
-        429 => GitHubApiError::RateLimit { retry_after },
-        401 => GitHubApiError::Unauthorized,
-        403 => GitHubApiError::Forbidden(body),
+        429 => GitHubApiError::RateLimit {
+            retry_after,
+            resource: resource.to_string(),
+        },
+        401 => GitHubApiError::Unauthorized {
+            resource: resource.to_string(),
+        },
+        403 => GitHubApiError::Forbidden {
+            body,
+            resource: resource.to_string(),
+        },
         404 => GitHubApiError::NotFound {
             resource: resource.to_string(),
         },
-        500..=599 => GitHubApiError::ServerError { status },
-        _ => GitHubApiError::Other(anyhow::anyhow!(
-            "unexpected HTTP status {}: {}",
+        500..=599 => GitHubApiError::ServerError {
             status,
-            body
+            resource: resource.to_string(),
+        },
+        _ => GitHubApiError::Other(anyhow::anyhow!(
+            "unexpected HTTP status {status} [{resource}]: {body}",
         )),
     }
 }
@@ -82,7 +94,7 @@ mod tests {
             "resource",
         );
         assert!(
-            matches!(err, GitHubApiError::RateLimit { retry_after: Some(d) } if d == Duration::from_secs(30)),
+            matches!(err, GitHubApiError::RateLimit { retry_after: Some(d), .. } if d == Duration::from_secs(30)),
             "expected RateLimit with 30s retry_after"
         );
     }
@@ -96,7 +108,7 @@ mod tests {
             "resource",
         );
         assert!(
-            matches!(err, GitHubApiError::RateLimit { retry_after: None }),
+            matches!(err, GitHubApiError::RateLimit { retry_after: None, .. }),
             "expected RateLimit with None retry_after"
         );
     }
@@ -105,17 +117,17 @@ mod tests {
     fn classify_401_returns_unauthorized() {
         let err = classify_http_error(StatusCode::UNAUTHORIZED, String::new(), None, "");
         assert!(
-            matches!(err, GitHubApiError::Unauthorized),
+            matches!(err, GitHubApiError::Unauthorized { .. }),
             "expected Unauthorized"
         );
     }
 
     #[test]
     fn classify_403_returns_forbidden_with_body() {
-        let body = "forbidden message".to_string();
-        let err = classify_http_error(StatusCode::FORBIDDEN, body.clone(), None, "");
+        let expected_body = "forbidden message".to_string();
+        let err = classify_http_error(StatusCode::FORBIDDEN, expected_body.clone(), None, "");
         assert!(
-            matches!(err, GitHubApiError::Forbidden(ref msg) if msg == &body),
+            matches!(&err, GitHubApiError::Forbidden { body: b, .. } if b == &expected_body),
             "expected Forbidden with message"
         );
     }
@@ -124,7 +136,7 @@ mod tests {
     fn classify_500_returns_server_error() {
         let err = classify_http_error(StatusCode::INTERNAL_SERVER_ERROR, String::new(), None, "");
         assert!(
-            matches!(err, GitHubApiError::ServerError { status } if status == StatusCode::INTERNAL_SERVER_ERROR),
+            matches!(err, GitHubApiError::ServerError { status, .. } if status == StatusCode::INTERNAL_SERVER_ERROR),
             "expected ServerError with 500"
         );
     }
@@ -133,7 +145,7 @@ mod tests {
     fn classify_503_returns_server_error() {
         let err = classify_http_error(StatusCode::SERVICE_UNAVAILABLE, String::new(), None, "");
         assert!(
-            matches!(err, GitHubApiError::ServerError { status } if status == StatusCode::SERVICE_UNAVAILABLE),
+            matches!(err, GitHubApiError::ServerError { status, .. } if status == StatusCode::SERVICE_UNAVAILABLE),
             "expected ServerError with 503"
         );
     }
@@ -158,7 +170,7 @@ mod tests {
 
     #[test]
     fn github_api_error_converts_to_anyhow_and_back() {
-        let err = classify_http_error(StatusCode::UNAUTHORIZED, String::new(), None, "");
+        let err = classify_http_error(StatusCode::UNAUTHORIZED, String::new(), None, "test-resource");
         let anyhow_err: anyhow::Error = err.into();
         assert!(
             anyhow_err.downcast_ref::<GitHubApiError>().is_some(),

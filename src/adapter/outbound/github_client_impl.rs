@@ -50,7 +50,7 @@ where
                 let wait_opt: Option<Duration> =
                     if let Some(gh_err) = err.downcast_ref::<GitHubApiError>() {
                         match gh_err {
-                            GitHubApiError::RateLimit { retry_after } => {
+                            GitHubApiError::RateLimit { retry_after, .. } => {
                                 Some(retry_after.unwrap_or(Duration::from_secs(60)))
                             }
                             GitHubApiError::ServerError { .. } => {
@@ -79,9 +79,9 @@ where
                     }
                     Some(_) => {
                         error!(op_name, %err, "retry exhausted");
-                        return Err(err);
+                        return Err(err.context(format!("{op_name}: retry exhausted")));
                     }
-                    None => return Err(err),
+                    None => return Err(err.context(op_name.to_string())),
                 }
             }
         }
@@ -200,6 +200,7 @@ mod tests {
                 if n < 2 {
                     Err(anyhow::Error::from(GitHubApiError::RateLimit {
                         retry_after: Some(Duration::from_secs(1)),
+                        resource: "test".to_string(),
                     }))
                 } else {
                     Ok(42i32)
@@ -225,6 +226,7 @@ mod tests {
                 if n < 1 {
                     Err(anyhow::Error::from(GitHubApiError::RateLimit {
                         retry_after: None, // デフォルト 60s
+                        resource: "test".to_string(),
                     }))
                 } else {
                     Ok(0i32)
@@ -248,6 +250,7 @@ mod tests {
                 cnt.fetch_add(1, Ordering::SeqCst);
                 Err::<i32, _>(anyhow::Error::from(GitHubApiError::ServerError {
                     status: StatusCode::INTERNAL_SERVER_ERROR,
+                    resource: "test".to_string(),
                 }))
             }
         })
@@ -267,7 +270,9 @@ mod tests {
             let cnt = count_c.clone();
             async move {
                 cnt.fetch_add(1, Ordering::SeqCst);
-                Err::<i32, _>(anyhow::Error::from(GitHubApiError::Unauthorized))
+                Err::<i32, _>(anyhow::Error::from(GitHubApiError::Unauthorized {
+                    resource: "test".to_string(),
+                }))
             }
         })
         .await;
@@ -286,9 +291,10 @@ mod tests {
             let cnt = count_c.clone();
             async move {
                 cnt.fetch_add(1, Ordering::SeqCst);
-                Err::<i32, _>(anyhow::Error::from(GitHubApiError::Forbidden(
-                    "denied".to_string(),
-                )))
+                Err::<i32, _>(anyhow::Error::from(GitHubApiError::Forbidden {
+                    body: "denied".to_string(),
+                    resource: "test".to_string(),
+                }))
             }
         })
         .await;
