@@ -143,13 +143,39 @@ impl PidFilePort for PidFileManager {
 
     fn write_session_count(&self, count: u32) -> Result<(), PidFileError> {
         let path = self.session_file_path();
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp_path = path.with_file_name(format!(
+            "{}.tmp.{}.{}",
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("session"),
+            std::process::id(),
+            unique_suffix
+        ));
+
         let mut file = OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)
+            .create_new(true)
+            .open(&tmp_path)
             .map_err(|e| PidFileError::Write(e.to_string()))?;
-        writeln!(file, "{count}").map_err(|e| PidFileError::Write(e.to_string()))
+
+        if let Err(e) = writeln!(file, "{count}") {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(PidFileError::Write(e.to_string()));
+        }
+
+        if let Err(e) = file.sync_all() {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(PidFileError::Write(e.to_string()));
+        }
+
+        std::fs::rename(&tmp_path, &path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            PidFileError::Write(e.to_string())
+        })
     }
 
     fn read_session_count(&self) -> Option<u32> {

@@ -317,6 +317,12 @@ where
             }
         }
 
+        // 通常ポーリング時にもアクティブセッション数を書き出す（force stop の可視性のため）
+        if let Some(ref pid_file) = self.pid_file {
+            let active = self.session_mgr.count() as u32;
+            let _ = pid_file.write_session_count(active);
+        }
+
         Ok(())
     }
 
@@ -341,23 +347,36 @@ where
                 }
 
                 let remaining = self.session_mgr.count();
-                tracing::info!(sessions_killed = remaining, "force shutdown complete");
+                tracing::info!(sessions_remaining = remaining, "force shutdown complete");
 
                 self.cleanup_and_exit().await;
             }
             ShutdownMode::Graceful { deadline } => {
+                // graceful 待機中に追加シグナルを受けて Force にエスカレートできるよう
+                // 独立したシグナルハンドラーを登録する（登録失敗時はエスカレート機能をスキップ）
+                let mut esc_sigint =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).ok();
+                let mut esc_sigterm =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
+
                 // 全セッション完了を待ち、タイムアウト時に強制終了
                 let shutdown_start = std::time::Instant::now();
                 let mut last_log = std::time::Instant::now();
+                let mut last_session_write = std::time::Instant::now();
 
-                loop {
+                'graceful: loop {
                     self.session_mgr.collect_exited();
 
-                    // セッション状態ファイルへアクティブセッション数を書き込む
-                    let active = self.session_mgr.count() as u32;
-                    if let Some(ref pid_file) = self.pid_file {
-                        let _ = pid_file.write_session_count(active);
+                    // セッション状態ファイルへの書き込みは 500ms 間隔に抑える
+                    if last_session_write.elapsed() >= Duration::from_millis(500) {
+                        let active = self.session_mgr.count() as u32;
+                        if let Some(ref pid_file) = self.pid_file {
+                            let _ = pid_file.write_session_count(active);
+                        }
+                        last_session_write = std::time::Instant::now();
                     }
+
+                    let active = self.session_mgr.count() as u32;
 
                     if active == 0 {
                         tracing::info!(
@@ -377,7 +396,6 @@ where
                             "graceful shutdown timeout, sending SIGKILL to remaining sessions"
                         );
                         self.session_mgr.kill_all();
-                        // kill 後に少し待って回収
                         tokio::time::sleep(Duration::from_millis(200)).await;
                         self.session_mgr.collect_exited();
                         break;
@@ -393,7 +411,37 @@ where
                         last_log = std::time::Instant::now();
                     }
 
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    // 100ms 待機しつつ追加シグナルを監視してエスカレート
+                    let mut force_escalate = false;
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                        _ = async {
+                            if let Some(ref mut si) = esc_sigint {
+                                si.recv().await;
+                            } else {
+                                std::future::pending::<()>().await;
+                            }
+                        } => {
+                            tracing::info!("received additional SIGINT during graceful shutdown, forcing...");
+                            force_escalate = true;
+                        }
+                        _ = async {
+                            if let Some(ref mut st) = esc_sigterm {
+                                st.recv().await;
+                            } else {
+                                std::future::pending::<()>().await;
+                            }
+                        } => {
+                            tracing::info!("received SIGTERM during graceful shutdown, forcing...");
+                            force_escalate = true;
+                        }
+                    }
+                    if force_escalate {
+                        self.session_mgr.kill_all();
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        self.session_mgr.collect_exited();
+                        break 'graceful;
+                    }
                 }
 
                 self.cleanup_and_exit().await;

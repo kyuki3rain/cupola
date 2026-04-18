@@ -31,7 +31,7 @@ pub trait PidFilePort: Send + Sync {
 
     /// セッション状態ファイルにアクティブセッション数を書き込む。
     ///
-    /// ファイルはアトミックに上書きされる（create/truncate）。
+    /// 一時ファイルへ書き込み後、rename でアトミックに置換する。
     /// PID ファイルと同ディレクトリの `<pid_stem>.sessions` に書き込む。
     fn write_session_count(&self, count: u32) -> Result<(), PidFileError>;
 

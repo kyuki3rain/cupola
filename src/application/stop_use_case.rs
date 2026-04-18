@@ -46,6 +46,7 @@ impl<P: PidFilePort, S: SignalPort> StopUseCase<P, S> {
 
         if !self.pid_file.is_process_alive(pid) {
             self.pid_file.delete_pid()?;
+            let _ = self.pid_file.delete_session_file();
             return Ok(StopResult::StalePidCleaned { pid });
         }
 
@@ -63,6 +64,7 @@ impl<P: PidFilePort, S: SignalPort> StopUseCase<P, S> {
 
             // PID ファイル削除（best-effort）
             let _ = self.pid_file.delete_pid();
+            let _ = self.pid_file.delete_session_file();
 
             return Ok(StopResult::ForceKilled {
                 pid,
@@ -86,6 +88,7 @@ impl<P: PidFilePort, S: SignalPort> StopUseCase<P, S> {
 
             if !self.pid_file.is_process_alive(pid) {
                 self.pid_file.delete_pid()?;
+                let _ = self.pid_file.delete_session_file();
                 return Ok(StopResult::Stopped { pid });
             }
 
@@ -93,10 +96,8 @@ impl<P: PidFilePort, S: SignalPort> StopUseCase<P, S> {
             if last_progress_report.elapsed() >= Duration::from_secs(5) {
                 let sessions = self.pid_file.read_session_count().unwrap_or(0);
                 let elapsed = start.elapsed().as_secs();
-                tracing::info!(
-                    sessions_remaining = sessions,
-                    elapsed_secs = elapsed,
-                    "waiting for daemon to stop..."
+                eprintln!(
+                    "waiting for daemon to stop... (sessions_remaining={sessions}, elapsed={elapsed}s)"
                 );
                 last_progress_report = std::time::Instant::now();
             }
@@ -105,7 +106,7 @@ impl<P: PidFilePort, S: SignalPort> StopUseCase<P, S> {
             if let Some(timeout) = self.shutdown_timeout
                 && start.elapsed() >= timeout
             {
-                tracing::warn!(pid, "shutdown timeout, sending SIGKILL");
+                eprintln!("shutdown timeout, sending SIGKILL to pid={pid}");
                 if let Err(e) = self.signal.send_sigkill(pid) {
                     self.cleanup_pid_file_if_dead(pid);
                     return Err(e);
@@ -120,6 +121,7 @@ impl<P: PidFilePort, S: SignalPort> StopUseCase<P, S> {
                 }
 
                 self.pid_file.delete_pid()?;
+                let _ = self.pid_file.delete_session_file();
                 return Ok(StopResult::ForceKilled {
                     pid,
                     sessions_killed: 0,
