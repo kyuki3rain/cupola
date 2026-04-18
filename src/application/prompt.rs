@@ -29,7 +29,6 @@ pub fn build_session_config(
     pr_number: Option<u64>,
     feature_name: &str,
     fixing_causes: &[FixingProblemKind],
-    has_merge_conflict: bool,
 ) -> anyhow::Result<SessionConfig> {
     match state {
         State::DesignRunning => Ok(SessionConfig {
@@ -44,8 +43,6 @@ pub fn build_session_config(
                     pr,
                     &config.language,
                     fixing_causes,
-                    has_merge_conflict,
-                    &config.default_branch,
                 ),
                 output_schema: OutputSchemaKind::Fixing,
             })
@@ -62,8 +59,6 @@ pub fn build_session_config(
                     pr,
                     &config.language,
                     fixing_causes,
-                    has_merge_conflict,
-                    &config.default_branch,
                 ),
                 output_schema: OutputSchemaKind::Fixing,
             })
@@ -161,57 +156,6 @@ The PR will be created by the system. Please output the following information.
     )
 }
 
-fn build_conflict_section(has_merge_conflict: bool, default_branch: &str) -> String {
-    if has_merge_conflict {
-        format!(
-            r#"## Merge Conflict Resolution Required
-
-The working tree is in the middle of a merge with origin/{default_branch}.
-Conflict markers (<<<<<<<, =======, >>>>>>>) remain in the files.
-
-1. Resolve all conflicts first
-2. Stage resolved files with `git add <resolved_files>`
-3. Complete the merge with `git commit --no-edit`
-4. Then proceed with the other fixes
-
-"#
-        )
-    } else {
-        String::new()
-    }
-}
-
-fn build_instructions_text(causes: &[FixingProblemKind]) -> String {
-    let mut instructions = Vec::new();
-
-    if causes.contains(&FixingProblemKind::ReviewComments) {
-        instructions.push(
-            "Refer to .cupola/inputs/review_threads.json and address the review comments."
-                .to_string(),
-        );
-    }
-
-    if causes.contains(&FixingProblemKind::CiFailure) {
-        instructions
-            .push("Refer to .cupola/inputs/ci_errors.txt and fix the CI failures.".to_string());
-    }
-
-    if causes.contains(&FixingProblemKind::Conflict) {
-        instructions.push("Resolve conflicts with the base branch.".to_string());
-    }
-
-    if instructions.is_empty() {
-        "Review the feedback and apply the necessary fixes.".to_string()
-    } else {
-        instructions
-            .iter()
-            .enumerate()
-            .map(|(i, s)| format!("{}. {s}", i + 1))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-}
-
 fn build_output_section(causes: &[FixingProblemKind], language: &str) -> String {
     if causes.contains(&FixingProblemKind::ReviewComments) {
         format!(
@@ -236,36 +180,13 @@ fn build_design_fixing_prompt(
     pr_number: u64,
     language: &str,
     causes: &[FixingProblemKind],
-    has_merge_conflict: bool,
-    default_branch: &str,
 ) -> String {
-    let conflict_section = build_conflict_section(has_merge_conflict, default_branch);
-    let instructions_text = build_instructions_text(causes);
     let output_section = build_output_section(causes, language);
 
     format!(
-        r#"{conflict_section}You are an automated review agent. Address the following issues.
+        r#"You are an automated review agent. Address the issues on PR #{pr_number} (Issue #{issue_number}).
 
-PR #{pr_number} (Issue #{issue_number})
-
-## Actions Required
-
-{instructions_text}
-
-## Steps
-
-1. Review the issues listed above
-
-2. Apply the necessary fixes to the design documents
-
-3. {quality_check}
-
-4. Commit and push the fixes
-   Run `git diff --name-only` to confirm the changed files, then stage only the relevant files.
-   Avoid staging temporary files or debug logs.
-   git add <changed_files>
-   git commit -m "docs: address requested changes"
-   git push
+Run /cupola:fix design
 
 ## Output to output-schema
 
@@ -275,8 +196,7 @@ PR #{pr_number} (Issue #{issue_number})
 
 - Do not use the GitHub API (including the gh command)
 - Do not reply to comments or resolve threads (the system will do it)
-- Write all replies in {language}"#,
-        quality_check = GENERIC_QUALITY_CHECK_INSTRUCTION,
+- Write all replies in {language}"#
     )
 }
 
@@ -285,36 +205,13 @@ fn build_implementation_fixing_prompt(
     pr_number: u64,
     language: &str,
     causes: &[FixingProblemKind],
-    has_merge_conflict: bool,
-    default_branch: &str,
 ) -> String {
-    let conflict_section = build_conflict_section(has_merge_conflict, default_branch);
-    let instructions_text = build_instructions_text(causes);
     let output_section = build_output_section(causes, language);
 
     format!(
-        r#"{conflict_section}You are an automated review agent. Address the following issues.
+        r#"You are an automated review agent. Address the issues on PR #{pr_number} (Issue #{issue_number}).
 
-PR #{pr_number} (Issue #{issue_number})
-
-## Actions Required
-
-{instructions_text}
-
-## Steps
-
-1. Review the issues listed above
-
-2. Apply the necessary fixes to the code
-
-3. {quality_check}
-
-4. Commit and push the fixes
-   Run `git diff --name-only` to confirm the changed files, then stage only the relevant files.
-   Avoid staging temporary files or debug logs.
-   git add <changed_files>
-   git commit -m "fix: address requested changes"
-   git push
+Run /cupola:fix impl
 
 ## Output to output-schema
 
@@ -324,8 +221,7 @@ PR #{pr_number} (Issue #{issue_number})
 
 - Do not use the GitHub API (including the gh command)
 - Do not reply to comments or resolve threads (the system will do it)
-- Write all replies in {language}"#,
-        quality_check = GENERIC_QUALITY_CHECK_INSTRUCTION,
+- Write all replies in {language}"#
     )
 }
 
@@ -343,7 +239,7 @@ mod tests {
     fn design_running_returns_pr_creation_schema() {
         let config = test_config();
         let session =
-            build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false).unwrap();
+            build_session_config(State::DesignRunning, 42, &config, None, FN, &[]).unwrap();
         assert_eq!(session.output_schema, OutputSchemaKind::PrCreation);
         assert!(session.prompt.contains("automated design agent"));
         assert!(session.prompt.contains("#42"));
@@ -353,16 +249,8 @@ mod tests {
     #[test]
     fn implementation_running_returns_pr_creation_schema() {
         let config = test_config();
-        let session = build_session_config(
-            State::ImplementationRunning,
-            42,
-            &config,
-            None,
-            FN,
-            &[],
-            false,
-        )
-        .unwrap();
+        let session =
+            build_session_config(State::ImplementationRunning, 42, &config, None, FN, &[]).unwrap();
         assert_eq!(session.output_schema, OutputSchemaKind::PrCreation);
         assert!(session.prompt.contains("automated implementation agent"));
         assert!(session.prompt.contains("/cupola:spec-impl issue-42"));
@@ -372,8 +260,7 @@ mod tests {
     fn design_fixing_returns_fixing_schema() {
         let config = test_config();
         let session =
-            build_session_config(State::DesignFixing, 42, &config, Some(85), FN, &[], false)
-                .unwrap();
+            build_session_config(State::DesignFixing, 42, &config, Some(85), FN, &[]).unwrap();
         assert_eq!(session.output_schema, OutputSchemaKind::Fixing);
         assert!(session.prompt.contains("automated review agent"));
     }
@@ -381,16 +268,9 @@ mod tests {
     #[test]
     fn implementation_fixing_returns_fixing_schema() {
         let config = test_config();
-        let session = build_session_config(
-            State::ImplementationFixing,
-            42,
-            &config,
-            Some(90),
-            FN,
-            &[],
-            false,
-        )
-        .unwrap();
+        let session =
+            build_session_config(State::ImplementationFixing, 42, &config, Some(90), FN, &[])
+                .unwrap();
         assert_eq!(session.output_schema, OutputSchemaKind::Fixing);
     }
 
@@ -433,7 +313,7 @@ mod tests {
     fn design_prompt_contains_related_instruction() {
         let config = test_config();
         let session =
-            build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false).unwrap();
+            build_session_config(State::DesignRunning, 42, &config, None, FN, &[]).unwrap();
         assert!(
             session.prompt.contains("Related: #42"),
             "design prompt should instruct to use 'Related: #N'"
@@ -444,7 +324,7 @@ mod tests {
     fn design_prompt_does_not_contain_closes() {
         let config = test_config();
         let session =
-            build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false).unwrap();
+            build_session_config(State::DesignRunning, 42, &config, None, FN, &[]).unwrap();
         assert!(
             !session.prompt.contains("Closes"),
             "design prompt should not contain 'Closes'"
@@ -455,7 +335,7 @@ mod tests {
     fn design_prompt_does_not_contain_legacy_namespace() {
         let config = test_config();
         let session =
-            build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false).unwrap();
+            build_session_config(State::DesignRunning, 42, &config, None, FN, &[]).unwrap();
         let legacy_namespace = ["/", "k", "i", "r", "o", ":"].concat();
         assert!(
             !session.prompt.contains(&legacy_namespace),
@@ -466,16 +346,8 @@ mod tests {
     #[test]
     fn implementation_prompt_contains_closes() {
         let config = test_config();
-        let session = build_session_config(
-            State::ImplementationRunning,
-            42,
-            &config,
-            None,
-            FN,
-            &[],
-            false,
-        )
-        .unwrap();
+        let session =
+            build_session_config(State::ImplementationRunning, 42, &config, None, FN, &[]).unwrap();
         assert!(
             session.prompt.contains("Closes #42"),
             "implementation prompt should contain 'Closes #42'"
@@ -485,16 +357,8 @@ mod tests {
     #[test]
     fn implementation_prompt_does_not_contain_legacy_namespace() {
         let config = test_config();
-        let session = build_session_config(
-            State::ImplementationRunning,
-            42,
-            &config,
-            None,
-            FN,
-            &[],
-            false,
-        )
-        .unwrap();
+        let session =
+            build_session_config(State::ImplementationRunning, 42, &config, None, FN, &[]).unwrap();
         let legacy_namespace = ["/", "k", "i", "r", "o", ":"].concat();
         assert!(
             !session.prompt.contains(&legacy_namespace),
@@ -502,77 +366,7 @@ mod tests {
         );
     }
 
-    // --- Task 5.1: DesignFixing-specific tests ---
-
-    #[test]
-    fn design_fixing_prompt_contains_docs_prefix() {
-        let config = test_config();
-        let session =
-            build_session_config(State::DesignFixing, 42, &config, Some(85), FN, &[], false)
-                .unwrap();
-        assert!(
-            session.prompt.contains("docs: address requested changes"),
-            "DesignFixing prompt should contain 'docs:' commit prefix"
-        );
-    }
-
-    #[test]
-    fn design_fixing_prompt_does_not_contain_code_wording() {
-        let config = test_config();
-        let session =
-            build_session_config(State::DesignFixing, 42, &config, Some(85), FN, &[], false)
-                .unwrap();
-        assert!(
-            !session.prompt.contains("fixes to the code"),
-            "DesignFixing prompt should not contain 'fixes to the code'"
-        );
-        assert!(
-            !session.prompt.contains("fix to the code"),
-            "DesignFixing prompt should not contain 'fix to the code'"
-        );
-    }
-
-    // --- Task 5.2: ImplementationFixing-specific tests ---
-
-    #[test]
-    fn implementation_fixing_prompt_contains_fix_prefix() {
-        let config = test_config();
-        let session = build_session_config(
-            State::ImplementationFixing,
-            42,
-            &config,
-            Some(90),
-            FN,
-            &[],
-            false,
-        )
-        .unwrap();
-        assert!(
-            session.prompt.contains("fix: address requested changes"),
-            "ImplementationFixing prompt should contain 'fix:' commit prefix"
-        );
-    }
-
-    #[test]
-    fn implementation_fixing_prompt_contains_code_wording() {
-        let config = test_config();
-        let session = build_session_config(
-            State::ImplementationFixing,
-            42,
-            &config,
-            Some(90),
-            FN,
-            &[],
-            false,
-        )
-        .unwrap();
-        assert!(
-            session.prompt.contains("fixes to the code"),
-            "ImplementationFixing prompt should contain code-fix wording"
-        );
-    }
-
-    // --- Existing fixing_prompt_* tests (Task 5.3: also run for ImplementationFixing) ---
+    // --- Existing fixing_prompt_* tests ---
 
     #[test]
     fn fixing_prompt_review_comments_only() {
@@ -585,12 +379,8 @@ mod tests {
                 Some(85),
                 FN,
                 &[FixingProblemKind::ReviewComments],
-                false,
             )
             .unwrap();
-            assert!(session.prompt.contains("review_threads.json"));
-            assert!(!session.prompt.contains("ci_errors.txt"));
-            assert!(!session.prompt.contains("conflict"));
             assert!(session.prompt.contains("PR #85"));
             assert!(session.prompt.contains("Issue #42"));
         }
@@ -607,12 +397,8 @@ mod tests {
                 Some(85),
                 FN,
                 &[FixingProblemKind::CiFailure],
-                false,
             )
             .unwrap();
-            assert!(!session.prompt.contains("review_threads.json"));
-            assert!(session.prompt.contains("ci_errors.txt"));
-            assert!(!session.prompt.contains("conflict"));
             assert!(session.prompt.contains("PR #85"));
             assert!(session.prompt.contains("Issue #42"));
             assert!(session.prompt.contains(r#"{"threads": []}"#));
@@ -631,14 +417,8 @@ mod tests {
                 Some(85),
                 FN,
                 &[FixingProblemKind::Conflict],
-                false,
             )
             .unwrap();
-            assert!(!session.prompt.contains("review_threads.json"));
-            assert!(!session.prompt.contains("ci_errors.txt"));
-            assert!(!session.prompt.contains("origin/main"));
-            assert!(session.prompt.contains("base branch"));
-            assert!(session.prompt.contains("conflict"));
             assert!(session.prompt.contains("PR #85"));
             assert!(session.prompt.contains("Issue #42"));
             assert!(session.prompt.contains(r#"{"threads": []}"#));
@@ -655,12 +435,7 @@ mod tests {
             FixingProblemKind::ReviewComments,
         ];
         for state in [State::DesignFixing, State::ImplementationFixing] {
-            let session =
-                build_session_config(state, 42, &config, Some(85), FN, &causes, false).unwrap();
-            assert!(session.prompt.contains("review_threads.json"));
-            assert!(session.prompt.contains("ci_errors.txt"));
-            assert!(!session.prompt.contains("origin/main"));
-            assert!(session.prompt.contains("base branch"));
+            let session = build_session_config(state, 42, &config, Some(85), FN, &causes).unwrap();
             assert!(session.prompt.contains("PR #85"));
             assert!(session.prompt.contains("Issue #42"));
             assert!(session.prompt.contains("thread_id"));
@@ -684,7 +459,7 @@ mod tests {
                 ],
             ] {
                 let session =
-                    build_session_config(state, 42, &config, Some(85), FN, &cause, false).unwrap();
+                    build_session_config(state, 42, &config, Some(85), FN, &cause).unwrap();
                 assert!(
                     !session.prompt.contains("git add -A"),
                     "prompt should not contain 'git add -A'"
@@ -696,7 +471,7 @@ mod tests {
     #[test]
     fn design_fixing_without_pr_number_returns_err() {
         let config = test_config();
-        let result = build_session_config(State::DesignFixing, 42, &config, None, FN, &[], false);
+        let result = build_session_config(State::DesignFixing, 42, &config, None, FN, &[]);
         assert!(result.is_err());
         assert!(
             result
@@ -709,15 +484,7 @@ mod tests {
     #[test]
     fn implementation_fixing_without_pr_number_returns_err() {
         let config = test_config();
-        let result = build_session_config(
-            State::ImplementationFixing,
-            42,
-            &config,
-            None,
-            FN,
-            &[],
-            false,
-        );
+        let result = build_session_config(State::ImplementationFixing, 42, &config, None, FN, &[]);
         assert!(result.is_err());
         assert!(
             result
@@ -730,7 +497,7 @@ mod tests {
     #[test]
     fn design_running_without_pr_number_returns_ok() {
         let config = test_config();
-        let result = build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false);
+        let result = build_session_config(State::DesignRunning, 42, &config, None, FN, &[]);
         assert!(result.is_ok());
     }
 
@@ -741,118 +508,19 @@ mod tests {
     }
 
     #[test]
-    fn fixing_prompt_has_merge_conflict_true_inserts_section_at_top() {
-        let config = test_config();
-        for state in [State::DesignFixing, State::ImplementationFixing] {
-            let session =
-                build_session_config(state, 42, &config, Some(85), FN, &[], true).unwrap();
-            assert!(
-                session
-                    .prompt
-                    .contains("## Merge Conflict Resolution Required")
-            );
-            assert!(session.prompt.contains("git commit --no-edit"));
-            let conflict_pos = session
-                .prompt
-                .find("## Merge Conflict Resolution Required")
-                .unwrap();
-            let actions_pos = session.prompt.find("## Actions Required").unwrap();
-            assert!(conflict_pos < actions_pos);
-        }
-    }
-
-    #[test]
-    fn fixing_prompt_has_merge_conflict_false_is_unchanged() {
-        let config = test_config();
-        for state in [State::DesignFixing, State::ImplementationFixing] {
-            let without =
-                build_session_config(state, 42, &config, Some(85), FN, &[], false).unwrap();
-            let with = build_session_config(state, 42, &config, Some(85), FN, &[], true).unwrap();
-            assert!(
-                !without
-                    .prompt
-                    .contains("## Merge Conflict Resolution Required")
-            );
-            assert!(
-                with.prompt
-                    .contains("## Merge Conflict Resolution Required")
-            );
-            assert_ne!(without.prompt, with.prompt);
-        }
-    }
-
-    #[test]
     fn design_prompt_generic_quality_check() {
         let config = test_config();
         let session =
-            build_session_config(State::DesignRunning, 42, &config, None, FN, &[], false).unwrap();
+            build_session_config(State::DesignRunning, 42, &config, None, FN, &[]).unwrap();
         assert!(session.prompt.contains(GENERIC_QUALITY_CHECK_INSTRUCTION));
     }
 
     #[test]
     fn implementation_prompt_generic_quality_check() {
         let config = test_config();
-        let session = build_session_config(
-            State::ImplementationRunning,
-            42,
-            &config,
-            None,
-            FN,
-            &[],
-            false,
-        )
-        .unwrap();
+        let session =
+            build_session_config(State::ImplementationRunning, 42, &config, None, FN, &[]).unwrap();
         assert!(session.prompt.contains(GENERIC_QUALITY_CHECK_INSTRUCTION));
-    }
-
-    #[test]
-    fn fixing_prompt_generic_quality_check() {
-        let config = test_config();
-        for state in [State::DesignFixing, State::ImplementationFixing] {
-            let session =
-                build_session_config(state, 42, &config, Some(85), FN, &[], false).unwrap();
-            assert!(session.prompt.contains(GENERIC_QUALITY_CHECK_INSTRUCTION));
-        }
-    }
-
-    // --- Task 5.4: DesignFixing causes handling tests ---
-
-    #[test]
-    fn design_fixing_review_comments() {
-        let config = test_config();
-        let session = build_session_config(
-            State::DesignFixing,
-            42,
-            &config,
-            Some(85),
-            FN,
-            &[FixingProblemKind::ReviewComments],
-            false,
-        )
-        .unwrap();
-        assert!(
-            session.prompt.contains("review_threads.json"),
-            "DesignFixing with ReviewComments should reference review_threads.json"
-        );
-    }
-
-    #[test]
-    fn design_fixing_ci_failure() {
-        let config = test_config();
-        let session = build_session_config(
-            State::DesignFixing,
-            42,
-            &config,
-            Some(85),
-            FN,
-            &[FixingProblemKind::CiFailure],
-            false,
-        )
-        .unwrap();
-        assert!(
-            session.prompt.contains("ci_errors.txt"),
-            "DesignFixing with CiFailure should reference ci_errors.txt"
-        );
     }
 
     #[test]
@@ -863,20 +531,69 @@ mod tests {
             vec![FixingProblemKind::CiFailure],
             vec![FixingProblemKind::Conflict],
         ] {
-            let session = build_session_config(
-                State::DesignFixing,
-                42,
-                &config,
-                Some(85),
-                FN,
-                &cause,
-                false,
-            )
-            .unwrap();
+            let session =
+                build_session_config(State::DesignFixing, 42, &config, Some(85), FN, &cause)
+                    .unwrap();
             assert!(
                 !session.prompt.contains("git add -A"),
                 "DesignFixing prompt should not contain 'git add -A'"
             );
         }
+    }
+
+    // --- Task 4.2: スキル委譲テスト ---
+
+    #[test]
+    fn design_fixing_prompt_delegates_to_fix_skill() {
+        let config = test_config();
+        let session =
+            build_session_config(State::DesignFixing, 42, &config, Some(85), FN, &[]).unwrap();
+        assert!(
+            session.prompt.contains("Run /cupola:fix design"),
+            "DesignFixing prompt should delegate to /cupola:fix design"
+        );
+    }
+
+    #[test]
+    fn implementation_fixing_prompt_delegates_to_fix_skill() {
+        let config = test_config();
+        let session =
+            build_session_config(State::ImplementationFixing, 42, &config, Some(90), FN, &[])
+                .unwrap();
+        assert!(
+            session.prompt.contains("Run /cupola:fix impl"),
+            "ImplementationFixing prompt should delegate to /cupola:fix impl"
+        );
+    }
+
+    #[test]
+    fn design_fixing_prompt_has_no_inline_steps() {
+        let config = test_config();
+        let session =
+            build_session_config(State::DesignFixing, 42, &config, Some(85), FN, &[]).unwrap();
+        assert!(
+            !session.prompt.contains("git commit -m"),
+            "DesignFixing prompt should not contain inline git commit instructions"
+        );
+        assert!(
+            !session.prompt.contains("git add "),
+            "DesignFixing prompt should not contain inline git add instructions"
+        );
+    }
+
+    #[test]
+    fn implementation_fixing_prompt_has_no_inline_steps() {
+        let config = test_config();
+        let session =
+            build_session_config(State::ImplementationFixing, 42, &config, Some(90), FN, &[])
+                .unwrap();
+        assert!(
+            !session.prompt.contains("git commit -m"),
+            "ImplementationFixing prompt should not contain inline git commit instructions"
+        );
+        assert!(
+            !session.prompt.contains("git add "),
+            "ImplementationFixing prompt should not contain inline git add instructions"
+        );
     }
 }

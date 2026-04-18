@@ -643,7 +643,6 @@ where
 
     // For fixing phases: fetch + merge (ImplFix only), write review threads
     let pr_number_opt = get_pr_number_for_type(process_repo, issue.id, type_).await?;
-    let mut has_merge_conflict = false;
     if matches!(type_, ProcessRunType::ImplFix) {
         // Fetch latest remote refs so the subsequent merge uses a current
         // origin/main rather than a potentially stale local copy.  Fetch
@@ -661,7 +660,6 @@ where
         // can delegate).
         if let Err(e) = worktree.merge(wt_path, &config.default_branch) {
             if e.downcast_ref::<MergeConflictError>().is_some() {
-                has_merge_conflict = true;
                 tracing::warn!(
                     error = %e,
                     "merge conflict detected before fixing spawn, delegating resolution to Claude Code"
@@ -694,7 +692,6 @@ where
         pr_number_opt,
         &issue.feature_name,
         causes,
-        has_merge_conflict,
     )?;
 
     let schema = match session_config.output_schema {
