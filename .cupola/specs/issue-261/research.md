@@ -32,7 +32,7 @@
 - **Findings**:
   - `GitHubApiError` はアダプター内部での分類に使用し、ポートトレイト境界では `anyhow::Error` に変換する設計のため、clean architecture の境界は維持される
   - アダプター層でも `thiserror` を使うことで型安全な match が可能になり、内部リトライロジックの実装が明確になる
-  - `From<GitHubApiError> for anyhow::Error` は `thiserror` + `std::error::Error` の derive によって自動生成される
+  - `From<GitHubApiError> for anyhow::Error` は、anyhow の汎用 `From<E: Error + Send + Sync + 'static>` 実装によってラップ可能となる。`thiserror` の役割は `GitHubApiError` 自体の `std::error::Error` 実装を提供することであり、anyhow への変換の実体は anyhow 側にある
 - **Implications**: tech.md の「thiserror は domain/app 向け」という記述は strict ではなく、アダプター内部の型付きエラーにも問題なく採用できる
 
 ### RetryPolicy の利用範囲
@@ -67,7 +67,7 @@
 |--------|-------------|-----------|---------------------|-------|
 | A: アダプター内型付きエラー (採用) | `GitHubApiError` をアダプター層に定義し、ポート境界で anyhow に変換 | clean architecture を維持、ポートトレイト変更不要 | ポートトレイト越しに型情報が消える | #166 でポートレベルの型付きエラーに昇格可能 |
 | B: ポートトレイトの型変更 | `GitHubClient` の戻り値を `Result<T, GitHubClientError>` に変更 | アプリケーション層から型付きエラーを扱える | ユースケースの全修正が必要、#166 の範囲 | #166 に委ねる |
-| C: anyhow downcast | anyhow::Error として伝播し、呼び出し側で downcast | 最小変更 | 下流の全呼び出し元に downcast コードが必要で危脆弱 | アンチパターン |
+| C: anyhow downcast | anyhow::Error として伝播し、呼び出し側で downcast | 最小変更 | 下流の全呼び出し元に downcast コードが必要で危険かつ脆弱 | アンチパターン |
 
 ## Design Decisions
 

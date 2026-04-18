@@ -1,18 +1,16 @@
 # Implementation Plan
 
 - [ ] 1. GitHubApiError enum を定義する
-- [ ] 1.1 `github_api_error.rs` を新規作成し、GitHubApiError enum を定義する
-  - `src/adapter/outbound/github_api_error.rs` を新規作成する
-  - `RateLimit { retry_after: Option<Duration> }`、`Unauthorized`、`Forbidden(String)`、`ServerError { status: StatusCode }`、`NotFound { resource: String }`、`Other(#[from] anyhow::Error)` の 6 バリアントを定義する
-  - `thiserror::Error` を derive し、各バリアントに意味のある `#[error(...)]` メッセージを付与する
-  - `src/adapter/outbound/mod.rs` に `pub mod github_api_error;` を追加して再エクスポートする
+- [ ] 1.1 GitHub API の HTTP エラーを型安全に表現できるエラー型を作成する
+  - HTTP ステータスに対応する各エラー種別（レートリミット・認証エラー・権限エラー・サーバーエラー・リソース未発見・その他）をバリアントとして網羅する
+  - 各バリアントに人間が読めるエラーメッセージを持たせる
+  - アダプター層の他モジュールから参照できるよう公開する
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7_
 
-- [ ] 1.2 `classify_http_error` 変換関数を実装する
-  - `github_api_error.rs` 内に `pub fn classify_http_error(status: StatusCode, body: String, retry_after: Option<Duration>, resource: &str) -> GitHubApiError` を実装する
-  - 429 → `RateLimit { retry_after }`、401 → `Unauthorized`、403 → `Forbidden(body)`、5xx → `ServerError { status }`、404 → `NotFound { resource }` の分岐を実装する
-  - `Retry-After` ヘッダーの値が数値でない場合または欠損の場合は `None` として扱う
-  - `anyhow::Error` への `From` 変換が自動導出されることを確認する
+- [ ] 1.2 HTTP ステータス等からエラー種別を分類できる変換ロジックを実装する
+  - ステータスコード・レスポンスボディ・ヘッダーを受け取り、適切なエラー種別を返すロジックを実装する
+  - レートリミット時の待機時間をヘッダーから解析し、取得できない場合は `None` として扱う
+  - このエラー型が anyhow::Error に包める（`?` 演算子で伝播できる）ことを確認する
   - _Requirements: 1.8, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6_
 
 - [ ] 2. `github_rest_client.rs` のエラーサイトを置き換える

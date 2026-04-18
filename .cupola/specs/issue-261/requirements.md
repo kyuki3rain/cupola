@@ -45,7 +45,7 @@
 2. When GitHubApiError::RateLimit で `retry_after` が None のとき, the github_client_impl.rs shall デフォルト待機時間 (60秒) を使用してリトライする。
 3. When GitHubApiError::ServerError を受け取ったとき, the github_client_impl.rs shall 指数バックオフ (初期 1 秒、最大 3 回) でリトライする。
 4. When GitHubApiError::Unauthorized または GitHubApiError::Forbidden を受け取ったとき, the github_client_impl.rs shall リトライせずに即座にエラーを伝播する。
-5. The retry_policy.rs shall リトライ回数と待機時間を計算するヘルパーとして利用可能であり、アダプター層から呼び出せる。
+5. The github_client_impl.rs shall リトライ回数と待機時間の計算をアダプター層で独自実装し、application 層の RetryPolicy には依存しない。
 6. The github_client_impl.rs shall リトライ試行のたびに `tracing::warn!` でエラー種別・試行回数・次回待機時間をログ出力する。
 
 ### Requirement 4: 既存インターフェースとの後方互換性

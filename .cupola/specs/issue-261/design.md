@@ -141,7 +141,7 @@ sequenceDiagram
 
 **Responsibilities & Constraints**
 - `thiserror::Error` を derive し、各バリアントに `#[error(...)]` メッセージを定義する
-- `From<GitHubApiError> for anyhow::Error` が自動導出されるため、`?` 演算子で `anyhow::Result` に変換可能
+- `GitHubApiError` は `std::error::Error` を実装するため、anyhow の汎用 `From<E: Error>` 実装によって `anyhow::Error` に包むことができ、`?` 演算子で `anyhow::Result` に変換可能
 - HTTP ステータスコードと必要なヘッダー (Retry-After) を受け取り適切なバリアントを返す変換関数を公開する
 
 **Dependencies**
