@@ -121,6 +121,33 @@ PID ファイルは 2 行フォーマット。
 5. Claude Code runner と Git worktree manager を組み立てる（`claude` CLI が見つからなければエラー終了）
 6. `PollingUseCase` を起動する
 
+## シグナルハンドリング
+
+cupola daemon は以下のシグナルを明示的にハンドリングし、グレースフルシャットダウンを実行する。
+
+| シグナル | 送信方法の例 | 挙動 |
+|---------|------------|------|
+| `SIGTERM` | `kill <pid>` | グレースフルシャットダウンを開始する |
+| `SIGINT` | `Ctrl-C` | グレースフルシャットダウンを開始する |
+| `SIGHUP` | `kill -HUP <pid>` | グレースフルシャットダウンを開始する |
+
+### SIGHUP について
+
+`SIGHUP` を受信した場合、cupola は **config reload を行わず**、グレースフルシャットダウンを開始する。
+
+> **注意**: `cupola.toml` の設定を変更した場合は、daemon の**完全な再起動**が必要です。
+> `kill -HUP <pid>` では設定は再読込されません。
+
+```bash
+# 設定変更後の正しい手順
+devbox run cupola stop   # daemon を停止（グレースフルシャットダウン）
+devbox run cupola start  # 新しい設定で起動
+```
+
+SIGHUP による config reload は現時点では実装されておらず、将来の Issue で対応予定です。
+
+グレースフルシャットダウンは、実行中のセッション（Claude Code プロセス）をすべて kill し、最大 10 秒間の完了待機を行ってから daemon を終了する。
+
 ## ログ
 
 - logging は `init_logging()` で初期化される

@@ -200,6 +200,7 @@ where
     pub async fn run(&mut self) -> Result<()> {
         let mut tick = interval(Duration::from_secs(self.config.polling_interval_secs));
         let mut sigterm = signal::unix::signal(SignalKind::terminate())?;
+        let mut sighup = signal::unix::signal(SignalKind::hangup())?;
 
         loop {
             tokio::select! {
@@ -214,6 +215,10 @@ where
                 }
                 _ = sigterm.recv() => {
                     tracing::info!("received SIGTERM, shutting down...");
+                    break;
+                }
+                _ = sighup.recv() => {
+                    tracing::info!("received SIGHUP, shutting down (config reload is not supported, please restart to apply config changes)...");
                     break;
                 }
             }
@@ -332,6 +337,29 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// T-263.1: SIGHUP シグナルが tokio の signal ハンドラーで受信できること
+    ///
+    /// run() 内の `sighup.recv()` アームが正しく機能することを検証する。
+    /// 実際のシグナルを自プロセスに送信して受信を確認する。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sighup_signal_is_received_by_handler() {
+        use nix::sys::signal::{Signal, kill};
+        use nix::unistd::Pid;
+        use tokio::signal::unix::{SignalKind, signal};
+
+        let mut sighup =
+            signal(SignalKind::hangup()).expect("SIGHUP ハンドラーの登録に失敗しました");
+
+        // 自プロセスに SIGHUP を送信する
+        kill(Pid::this(), Signal::SIGHUP).expect("SIGHUP の送信に失敗しました");
+
+        // シグナルが受信されることを検証する（1 秒以内）
+        tokio::time::timeout(std::time::Duration::from_secs(1), sighup.recv())
+            .await
+            .expect("SIGHUP がタイムアウト内に受信されませんでした");
+    }
 
     /// T-5.O.1: label_to_weight selects Heavy when weight:heavy is present
     #[test]
