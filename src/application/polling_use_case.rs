@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use tokio::signal;
 use tokio::signal::unix::SignalKind;
 use tokio::time::interval;
 
@@ -18,6 +17,7 @@ use crate::application::port::process_run_repository::ProcessRunRepository;
 use crate::application::session_manager::SessionManager;
 use crate::domain::config::Config;
 use crate::domain::decide::decide;
+use crate::domain::shutdown_mode::ShutdownMode;
 use crate::domain::task_weight::TaskWeight;
 
 /// Convert GitHub issue labels to a TaskWeight.
@@ -123,6 +123,8 @@ where
     config: Config,
     pid_file: Option<Box<dyn PidFilePort>>,
     process_repo: P,
+    /// Graceful shutdown タイムアウト（`None` = 無限待機）。
+    shutdown_timeout: Option<Duration>,
 }
 
 impl<G, I, E, C, W, F> PollingUseCase<G, I, E, C, W, F, NoopProcessRunRepository>
@@ -143,6 +145,7 @@ where
         file_gen: F,
         config: Config,
     ) -> Self {
+        let shutdown_timeout = config.shutdown_timeout;
         Self {
             github,
             issue_repo,
@@ -155,6 +158,7 @@ where
             config,
             pid_file: None,
             process_repo: NoopProcessRunRepository,
+            shutdown_timeout,
         }
     }
 }
@@ -188,6 +192,7 @@ where
             config: self.config,
             pid_file: self.pid_file,
             process_repo,
+            shutdown_timeout: self.shutdown_timeout,
         }
     }
 
@@ -199,8 +204,10 @@ where
     /// Main polling loop — 5-phase cycle.
     pub async fn run(&mut self) -> Result<()> {
         let mut tick = interval(Duration::from_secs(self.config.polling_interval_secs));
-        let mut sigterm = signal::unix::signal(SignalKind::terminate())?;
-        let mut sighup = signal::unix::signal(SignalKind::hangup())?;
+        let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())?;
+        let mut sighup = tokio::signal::unix::signal(SignalKind::hangup())?;
+        let mut sigint = tokio::signal::unix::signal(SignalKind::interrupt())?;
+        let mut sigint_count: u32 = 0;
 
         loop {
             tokio::select! {
@@ -209,23 +216,33 @@ where
                         tracing::error!(error = %e, "polling cycle error");
                     }
                 }
-                _ = signal::ctrl_c() => {
-                    tracing::info!("received SIGINT, shutting down...");
-                    break;
+                _ = sigint.recv() => {
+                    sigint_count += 1;
+                    if sigint_count == 1 {
+                        tracing::info!("received SIGINT, graceful shutdown started...");
+                        let deadline = self.shutdown_timeout.map(|d| std::time::Instant::now() + d);
+                        self.graceful_shutdown(ShutdownMode::Graceful { deadline }).await;
+                        return Ok(());
+                    } else {
+                        tracing::info!("received SIGINT (2nd), forcing shutdown...");
+                        self.graceful_shutdown(ShutdownMode::Force).await;
+                        return Ok(());
+                    }
                 }
                 _ = sigterm.recv() => {
-                    tracing::info!("received SIGTERM, shutting down...");
-                    break;
+                    tracing::info!("received SIGTERM, graceful shutdown started...");
+                    let deadline = self.shutdown_timeout.map(|d| std::time::Instant::now() + d);
+                    self.graceful_shutdown(ShutdownMode::Graceful { deadline }).await;
+                    return Ok(());
                 }
                 _ = sighup.recv() => {
                     tracing::info!("received SIGHUP, shutting down (config reload is not supported, please restart to apply config changes)...");
-                    break;
+                    let deadline = self.shutdown_timeout.map(|d| std::time::Instant::now() + d);
+                    self.graceful_shutdown(ShutdownMode::Graceful { deadline }).await;
+                    return Ok(());
                 }
             }
         }
-
-        self.graceful_shutdown().await;
-        Ok(())
     }
 
     /// Execute one 5-phase polling cycle.
@@ -303,25 +320,92 @@ where
         Ok(())
     }
 
-    async fn graceful_shutdown(&mut self) {
-        self.session_mgr.kill_all();
+    /// ShutdownMode に応じてシャットダウン処理を実行する。
+    async fn graceful_shutdown(&mut self, mode: ShutdownMode) {
+        match mode {
+            ShutdownMode::None => {
+                // 通常終了（現在この分岐は呼ばれない）
+                self.cleanup_and_exit().await;
+            }
+            ShutdownMode::Force => {
+                // 即座に全セッションを強制終了
+                tracing::info!("force shutdown: killing all sessions");
+                self.session_mgr.kill_all();
 
-        // Bounded wait for child processes to exit
-        let timeout = std::time::Duration::from_secs(10);
-        let start = std::time::Instant::now();
-        while self.session_mgr.count() > 0 && start.elapsed() < timeout {
-            self.session_mgr.collect_exited();
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-        let remaining = self.session_mgr.count();
-        if remaining > 0 {
-            tracing::warn!(
-                remaining_sessions = remaining,
-                elapsed_ms = start.elapsed().as_millis(),
-                "graceful shutdown timed out with sessions still running"
-            );
-        }
+                // 最大 5 秒待機して回収
+                let start = std::time::Instant::now();
+                let force_timeout = Duration::from_secs(5);
+                while self.session_mgr.count() > 0 && start.elapsed() < force_timeout {
+                    self.session_mgr.collect_exited();
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
 
+                let remaining = self.session_mgr.count();
+                tracing::info!(
+                    sessions_killed = remaining,
+                    "force shutdown complete"
+                );
+
+                self.cleanup_and_exit().await;
+            }
+            ShutdownMode::Graceful { deadline } => {
+                // 全セッション完了を待ち、タイムアウト時に強制終了
+                let shutdown_start = std::time::Instant::now();
+                let mut last_log = std::time::Instant::now();
+
+                loop {
+                    self.session_mgr.collect_exited();
+
+                    // セッション状態ファイルへアクティブセッション数を書き込む
+                    let active = self.session_mgr.count() as u32;
+                    if let Some(ref pid_file) = self.pid_file {
+                        let _ = pid_file.write_session_count(active);
+                    }
+
+                    if active == 0 {
+                        tracing::info!(
+                            elapsed_secs = shutdown_start.elapsed().as_secs(),
+                            "all sessions completed, shutting down gracefully"
+                        );
+                        break;
+                    }
+
+                    // タイムアウトチェック
+                    if let Some(t) = deadline
+                        && std::time::Instant::now() >= t
+                    {
+                        tracing::warn!(
+                            remaining_sessions = active,
+                            elapsed_secs = shutdown_start.elapsed().as_secs(),
+                            "graceful shutdown timeout, sending SIGKILL to remaining sessions"
+                        );
+                        self.session_mgr.kill_all();
+                        // kill 後に少し待って回収
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        self.session_mgr.collect_exited();
+                        break;
+                    }
+
+                    // 5 秒ごとにログ出力
+                    if last_log.elapsed() >= Duration::from_secs(5) {
+                        tracing::info!(
+                            remaining_sessions = active,
+                            elapsed_secs = shutdown_start.elapsed().as_secs(),
+                            "waiting for sessions to complete (graceful shutdown)..."
+                        );
+                        last_log = std::time::Instant::now();
+                    }
+
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+
+                self.cleanup_and_exit().await;
+            }
+        }
+    }
+
+    /// 共通クリーンアップ処理（init タスク abort、PID ファイル削除）。
+    async fn cleanup_and_exit(&mut self) {
         // Abort pending init tasks.  Note: tasks that are already inside
         // `spawn_blocking` (running a `git` subprocess via
         // `std::process::Command`) cannot be interrupted by `abort()`; the
@@ -329,6 +413,7 @@ where
         // cancellation of git subprocesses is out of scope for this fix.
         self.init_mgr.abort_all();
         if let Some(ref pid_file) = self.pid_file {
+            let _ = pid_file.delete_session_file();
             let _ = pid_file.delete_pid();
         }
     }

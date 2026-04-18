@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::domain::author_association::TrustedAssociations;
 use crate::domain::model_config::ModelConfig;
@@ -28,6 +29,10 @@ pub struct Config {
     pub models: ModelConfig,
     pub trusted_associations: TrustedAssociations,
     pub trusted_reviewers: Vec<String>,
+    /// Graceful shutdown のタイムアウト。
+    /// `None` = 全セッション完了まで無限待機（shutdown_timeout_secs = 0 の場合）。
+    /// `Some(d)` = 指定秒数後に強制終了。デフォルト 300 秒。
+    pub shutdown_timeout: Option<Duration>,
 }
 
 impl Config {
@@ -47,6 +52,7 @@ impl Config {
             models: ModelConfig::new_default("sonnet".to_string()),
             trusted_associations: TrustedAssociations::default(),
             trusted_reviewers: vec!["copilot-pull-request-reviewer".to_string()],
+            shutdown_timeout: Some(Duration::from_secs(300)),
         }
     }
 

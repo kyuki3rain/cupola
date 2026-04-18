@@ -58,6 +58,11 @@ pub struct CupolaToml {
     pub log: Option<LogToml>,
     pub trusted_associations: Option<Vec<String>>,
     pub trusted_reviewers: Option<Vec<String>>,
+    /// Graceful shutdown タイムアウト（秒）。
+    /// 未設定: デフォルト 300 秒。
+    /// 0: 無限待機。
+    /// 正の整数: n 秒タイムアウト。
+    pub shutdown_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -118,6 +123,12 @@ impl CupolaToml {
             }
         };
 
+        let shutdown_timeout = match self.shutdown_timeout_secs {
+            None => Some(std::time::Duration::from_secs(300)), // デフォルト 300 秒
+            Some(0) => None,                                    // 無限待機
+            Some(n) => Some(std::time::Duration::from_secs(n)), // n 秒タイムアウト
+        };
+
         Ok(Config {
             owner: self.owner,
             repo: self.repo,
@@ -138,6 +149,7 @@ impl CupolaToml {
             trusted_reviewers: self
                 .trusted_reviewers
                 .unwrap_or_else(|| vec!["copilot-pull-request-reviewer".to_string()]),
+            shutdown_timeout,
         })
     }
 }
@@ -705,6 +717,66 @@ trusted_associations = ["owner", "member"]
             config
                 .trusted_associations
                 .is_trusted(&AuthorAssociation::Member)
+        );
+    }
+
+    // --- shutdown_timeout_secs 変換テスト ---
+
+    #[test]
+    fn shutdown_timeout_secs_unset_defaults_to_300s() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides).expect("should succeed");
+        assert_eq!(
+            config.shutdown_timeout,
+            Some(std::time::Duration::from_secs(300)),
+            "未設定時はデフォルト 300 秒"
+        );
+    }
+
+    #[test]
+    fn shutdown_timeout_secs_zero_means_infinite_wait() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+shutdown_timeout_secs = 0
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides).expect("should succeed");
+        assert_eq!(config.shutdown_timeout, None, "0 は無限待機 (None)");
+    }
+
+    #[test]
+    fn shutdown_timeout_secs_positive_value_used() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+shutdown_timeout_secs = 120
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides).expect("should succeed");
+        assert_eq!(
+            config.shutdown_timeout,
+            Some(std::time::Duration::from_secs(120)),
+            "正の整数は指定秒数タイムアウト"
         );
     }
 }

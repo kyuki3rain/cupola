@@ -1,6 +1,7 @@
 pub mod author_association;
 pub mod config;
 pub mod decide;
+pub mod shutdown_mode;
 pub mod decision;
 pub mod effect;
 pub mod execution_log;
