@@ -356,9 +356,10 @@ mod tests {
         kill(Pid::this(), Signal::SIGHUP).expect("SIGHUP の送信に失敗しました");
 
         // シグナルが受信されることを検証する（1 秒以内）
-        tokio::time::timeout(std::time::Duration::from_secs(1), sighup.recv())
+        let received = tokio::time::timeout(std::time::Duration::from_secs(1), sighup.recv())
             .await
             .expect("SIGHUP がタイムアウト内に受信されませんでした");
+        assert_eq!(received, Some(()), "SIGHUP を受信できませんでした");
     }
 
     /// T-5.O.1: label_to_weight selects Heavy when weight:heavy is present
