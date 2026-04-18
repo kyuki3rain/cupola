@@ -73,10 +73,15 @@ Craft a commit message based on the actual changes:
 - If `$1` is `design`: use prefix `docs:` (e.g., `docs: fix typo in requirements section`)
 - If `$1` is `impl`: use prefix `fix:` (e.g., `fix: resolve clippy warnings in prompt module`)
 
-Generate the message body dynamically by reviewing the changed files and the review comments / CI errors addressed. Do not use a fixed string like "address requested changes".
+Generate the message dynamically by reviewing the changed files and the review comments / CI errors addressed. Do not use a fixed string like "address requested changes".
 
 ```bash
-git commit -m "<docs:|fix:> <dynamic message describing the actual changes>"
+# If $1 is design:
+git commit -m "docs: <dynamic message describing the actual changes>"
+
+# If $1 is impl:
+git commit -m "fix: <dynamic message describing the actual changes>"
+
 git push
 ```
 
