@@ -20,6 +20,13 @@ const CLAUDE_CODE_ASSETS: &[(&str, &str)] = &[
         )),
     ),
     (
+        ".claude/commands/cupola/spec-init.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.claude/commands/cupola/spec-init.md"
+        )),
+    ),
+    (
         ".claude/commands/cupola/spec-impl.md",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
