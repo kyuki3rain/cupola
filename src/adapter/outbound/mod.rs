@@ -1,5 +1,6 @@
 pub mod claude_code_process;
 pub mod git_worktree_manager;
+pub mod github_api_error;
 pub mod github_client_impl;
 pub mod github_graphql_client;
 pub mod github_rest_client;

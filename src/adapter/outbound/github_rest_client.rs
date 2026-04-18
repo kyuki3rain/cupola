@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use octocrab::Octocrab;
 
+use crate::adapter::outbound::github_api_error::{classify_http_error, parse_retry_after};
 use crate::application::port::github_client::{
     GitHubIssueDetail, GitHubPr, GitHubPrDetails, OpenIssueInfo, RepositoryPermission,
 };
@@ -119,11 +120,10 @@ impl OctocrabRestClient {
             .with_context(|| format!("failed to get logs for job {job_id}"))?;
 
         if !resp.status().is_success() {
-            return Err(anyhow!(
-                "job logs API returned {}: {}",
-                resp.status(),
-                resp.text().await.unwrap_or_default()
-            ));
+            let status = resp.status();
+            let retry_after = parse_retry_after(resp.headers());
+            let body = resp.text().await.unwrap_or_default();
+            return Err(classify_http_error(status, body, retry_after, "job-logs").into());
         }
 
         resp.text().await.context("failed to read job logs body")
@@ -306,11 +306,16 @@ impl OctocrabRestClient {
                 .with_context(|| format!("failed to fetch timeline for issue #{issue_number}"))?;
 
             if !resp.status().is_success() {
-                return Err(anyhow!(
-                    "timeline API returned {}: {}",
-                    resp.status(),
-                    resp.text().await.unwrap_or_default()
-                ));
+                let status = resp.status();
+                let retry_after = parse_retry_after(resp.headers());
+                let body = resp.text().await.unwrap_or_default();
+                return Err(classify_http_error(
+                    status,
+                    body,
+                    retry_after,
+                    &format!("timeline for issue #{issue_number}"),
+                )
+                .into());
             }
 
             // Link ヘッダーは body 消費前に取得する（Rust の所有権制約を回避）
@@ -370,11 +375,10 @@ impl OctocrabRestClient {
         }
 
         if !resp.status().is_success() {
-            return Err(anyhow!(
-                "permission API returned {}: {}",
-                resp.status(),
-                resp.text().await.unwrap_or_default()
-            ));
+            let status = resp.status();
+            let retry_after = parse_retry_after(resp.headers());
+            let body = resp.text().await.unwrap_or_default();
+            return Err(classify_http_error(status, body, retry_after, username).into());
         }
 
         let body: serde_json::Value = resp
@@ -420,11 +424,10 @@ impl OctocrabRestClient {
         }
 
         if !resp.status().is_success() {
-            return Err(anyhow!(
-                "remove label API returned {}: {}",
-                resp.status(),
-                resp.text().await.unwrap_or_default()
-            ));
+            let status = resp.status();
+            let retry_after = parse_retry_after(resp.headers());
+            let body = resp.text().await.unwrap_or_default();
+            return Err(classify_http_error(status, body, retry_after, label_name).into());
         }
 
         Ok(())
