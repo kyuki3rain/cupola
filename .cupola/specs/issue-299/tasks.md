@@ -1,10 +1,9 @@
 # Implementation Plan
 
 - [ ] 1. `/cupola:fix` スキルの design/impl 対応
-- [ ] 1.1 スキルに `design`/`impl` 引数の分岐とコミットメッセージ動的生成を追加する
-  - `fix.md` の Step 6（Commit and Push）を更新する
-  - `$1 == design` の場合は `docs:` プレフィックス、`impl` の場合は `fix:` プレフィックスを使用する
-  - 固定文字列 "address requested changes" を削除し、変更内容に基づいて AI が動的にメッセージ本文を生成するよう指示する
+- [ ] 1.1 design/impl で適切なコミットプレフィックスと動的メッセージを生成できるようにする
+  - `design` 引数時は `docs:` プレフィックス、`impl` 引数時は `fix:` プレフィックスを付与する
+  - 固定文字列のコミットメッセージ本文を廃止し、変更内容に基づいて AI が動的にメッセージを生成するよう指示する
   - _Requirements: 2.1, 2.2, 2.3_
 
 - [ ] 2. `prompt.rs` の fixing プロンプト簡略化
@@ -23,7 +22,7 @@
   - `build_output_section` の呼び出しを維持する
   - _Requirements: 1.1, 1.3, 1.4, 1.5, 1.6, 1.7_
 
-- [ ] 2.3 (P) `build_implementation_fixing_prompt` をスキル委譲形式に書き換える
+- [ ] 2.3 `build_implementation_fixing_prompt` をスキル委譲形式に書き換える
   - 2.2 と同じ手順で `impl` 向けに実装する（`Run /cupola:fix impl`）
   - _Requirements: 1.2, 1.3, 1.4, 1.5, 1.6, 1.7_
 
@@ -50,14 +49,14 @@
   - `fixing_prompt_review_comments_only` / `fixing_prompt_ci_failure_only` から `review_threads.json` / `ci_errors.txt` アサーションを削除する（スキルが対応するため prompt には含まれない）
   - _Requirements: 3.2, 3.3_
 
-- [ ] 4.2 (P) スキル委譲を検証する新規テストを追加する
+- [ ] 4.2 スキル委譲を検証する新規テストを追加する
   - `design_fixing_prompt_delegates_to_fix_skill`: `Run /cupola:fix design` がプロンプトに含まれることを検証する
   - `implementation_fixing_prompt_delegates_to_fix_skill`: `Run /cupola:fix impl` がプロンプトに含まれることを検証する
   - `design_fixing_prompt_has_no_inline_steps`: `git commit -m` / `git add` 等のインライン手順がプロンプトに含まれないことを検証する
   - `implementation_fixing_prompt_has_no_inline_steps`: 同上
   - _Requirements: 3.1, 3.2_
 
-- [ ] 4.3 (P) output-schema セクションの検証テストを維持・更新する
+- [ ] 4.3 output-schema セクションの検証テストを維持・更新する
   - `thread_id`・`response`・`resolved` の出力仕様が ReviewComments 時に含まれることを確認する
   - `{"threads": []}` が ReviewComments なし時に含まれることを確認する
   - `build_session_config` のシグネチャ変更に合わせてテスト呼び出しから `has_merge_conflict` 引数を除去する

@@ -55,7 +55,7 @@
   - マージ処理自体（`worktree.merge`）は引き続き execute.rs で行われ、コンフリクトの有無をログ出力する
   - `has_merge_conflict` フラグを除去しても、マージ処理ロジックの変更は最小限
 - **Implications**:
-  - `build_session_config` シグネチャから `has_merge_conflict` と `default_branch` を除去できる
+  - `build_session_config` シグネチャから除去できるのは `has_merge_conflict` であり、`default_branch` は fixing prompt 生成関数側の引数から除去し、`build_session_config` からの転送も不要になる
   - `execute.rs` の `has_merge_conflict` 変数宣言と代入も不要になる
 
 ### テストスイートの依存関係調査
@@ -99,10 +99,10 @@
 - **Alternatives Considered**:
   1. パラメータのみ残し将来の利用に備える
   2. 使用箇所がなくなったため即時除去（採用）
-- **Selected Approach**: 両パラメータを `build_design_fixing_prompt`・`build_implementation_fixing_prompt`・`build_session_config` から除去する
-- **Rationale**: 未使用パラメータは `clippy` に警告され、コードの意図を曖昧にする。スキルがコンフリクト検出を担うことが明確なので除去が適切
-- **Trade-offs**: `execute.rs` の呼び出し側も更新が必要
-- **Follow-up**: `execute.rs` の `has_merge_conflict` 変数（宣言・代入）も不要になるため合わせて削除
+- **Selected Approach**: `build_design_fixing_prompt`・`build_implementation_fixing_prompt` から `has_merge_conflict` と `default_branch` を除去し、`build_session_config` では `has_merge_conflict` を受け取らないようにする。`default_branch` は `config` 経由で参照されるため、fixing prompt 関数へ転送しない形に整理する
+- **Rationale**: 未使用パラメータは `clippy` に警告され、コードの意図を曖昧にする。あわせて、`build_session_config` の責務と `config` 経由の値参照を区別して記述することで、設計上のデータ受け渡しが明確になる
+- **Trade-offs**: `execute.rs` の呼び出し側と、fixing prompt 関数への引数受け渡しの整理が必要
+- **Follow-up**: `execute.rs` の `has_merge_conflict` 変数（宣言・代入）を削除し、`default_branch` は fixing prompt 関数の引数から外したうえで `config` 経由のみで扱うことを確認する
 
 ### Decision: コミットメッセージの動的生成を fix.md スキル側で実装
 
