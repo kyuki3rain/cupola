@@ -51,6 +51,7 @@ fn new_issue(id: i64, number: u64, state: State) -> Issue {
         ci_fix_count: 0,
         close_finished: false,
         consecutive_failures_epoch: None,
+        last_pr_review_submitted_at: None,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     }
@@ -82,6 +83,7 @@ fn open_pr_snap() -> PrSnapshot {
         has_review_comments: false,
         ci_status: CiStatus::Unknown,
         has_conflict: false,
+        newest_pr_review_submitted_at: None,
     }
 }
 
@@ -91,6 +93,7 @@ fn merged_pr_snap() -> PrSnapshot {
         has_review_comments: false,
         ci_status: CiStatus::Unknown,
         has_conflict: false,
+        newest_pr_review_submitted_at: None,
     }
 }
 
@@ -417,6 +420,7 @@ fn t_7_it_pr_closed_design_review_waiting_goes_design_running() {
             has_review_comments: false,
             ci_status: CiStatus::Unknown,
             has_conflict: false,
+            newest_pr_review_submitted_at: None,
         }),
         impl_pr: None,
         processes: no_processes(),
@@ -446,6 +450,7 @@ fn t_7_it_ci_limit_posts_limit_comment_and_stays() {
             has_review_comments: false,
             ci_status: CiStatus::Failure,
             has_conflict: false,
+            newest_pr_review_submitted_at: None,
         }),
         processes: no_processes(),
         ci_fix_exhausted: true, // ci_fix_count >= max
@@ -482,6 +487,7 @@ fn t_7_it_review_resets_ci_trusted_review_resets_count() {
             has_review_comments: true, // trusted reviewer added comment
             ci_status: CiStatus::Failure,
             has_conflict: false,
+            newest_pr_review_submitted_at: None,
         }),
         impl_pr: None,
         processes: no_processes(),

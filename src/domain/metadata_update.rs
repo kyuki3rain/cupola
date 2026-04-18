@@ -14,6 +14,9 @@ pub struct MetadataUpdates {
     pub feature_name: Option<String>,
     pub consecutive_failures_epoch: Option<Option<DateTime<Utc>>>,
     pub worktree_path: Option<Option<String>>,
+    /// fixing トリガーとして採用した PR レベルレビューの最新 submittedAt。
+    /// Some の場合のみ DB に書き込む。
+    pub last_pr_review_submitted_at: Option<DateTime<Utc>>,
 }
 
 impl MetadataUpdates {
@@ -40,6 +43,9 @@ impl MetadataUpdates {
         if let Some(ref worktree_path) = self.worktree_path {
             issue.worktree_path = worktree_path.clone();
         }
+        if let Some(ts) = self.last_pr_review_submitted_at {
+            issue.last_pr_review_submitted_at = Some(ts);
+        }
     }
 }
 
@@ -62,6 +68,7 @@ mod tests {
             feature_name: Some("feat".to_string()),
             consecutive_failures_epoch: Some(Some(Utc::now())),
             worktree_path: Some(Some("/tmp/wt".to_string())),
+            last_pr_review_submitted_at: None,
         };
         assert!(m.state.is_some());
         assert!(m.weight.is_some());

@@ -129,6 +129,7 @@ mod tests {
             ci_fix_count: 0,
             close_finished: false,
             consecutive_failures_epoch: None,
+            last_pr_review_submitted_at: None,
             feature_name: "issue-42".to_string(),
             weight: crate::domain::task_weight::TaskWeight::Medium,
             created_at: chrono::Utc::now(),

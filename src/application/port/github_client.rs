@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 
 use crate::domain::author_association::AuthorAssociation;
 
@@ -70,6 +71,24 @@ pub struct ReviewComment {
     pub author_association: AuthorAssociation,
 }
 
+/// PRレベルレビューの状態（COMMENTED / CHANGES_REQUESTED のみ）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrReviewState {
+    Commented,
+    ChangesRequested,
+}
+
+/// PRレベルレビュー1件を表す値オブジェクト（コード行に紐づかないレビュー）
+#[derive(Debug, Clone)]
+pub struct PrLevelReview {
+    pub id: String,
+    pub submitted_at: DateTime<Utc>,
+    pub body: String,
+    pub state: PrReviewState,
+    pub author: String,
+    pub author_association: AuthorAssociation,
+}
+
 /// Unified PR observation returned by a single GraphQL query.
 /// Replaces separate calls to get_pr_status, list_unresolved_threads,
 /// get_ci_check_runs, and get_pr_mergeable.
@@ -79,6 +98,7 @@ pub struct PrObservation {
     pub mergeable: Option<bool>,
     pub unresolved_threads: Vec<ReviewThread>,
     pub check_runs: Vec<GitHubCheckRun>,
+    pub pr_level_reviews: Vec<PrLevelReview>,
 }
 
 /// GitHub のリポジトリ permission level。

@@ -111,6 +111,7 @@ impl SqliteConnection {
         Self::run_add_column_migration(&conn, "ci_fix_count INTEGER NOT NULL DEFAULT 0")?;
         Self::run_add_column_migration(&conn, "close_finished INTEGER NOT NULL DEFAULT 0")?;
         Self::run_add_column_migration(&conn, "consecutive_failures_epoch TEXT")?;
+        Self::run_add_column_migration(&conn, "last_pr_review_submitted_at TEXT")?;
 
         // Migration: rename 'initialized' state to 'initialize_running'
         conn.execute_batch(

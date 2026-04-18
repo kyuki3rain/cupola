@@ -29,7 +29,7 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
-                        created_at, updated_at
+                        created_at, updated_at, last_pr_review_submitted_at
                  FROM issues WHERE id = ?1",
             )?;
             let issue = stmt
@@ -54,7 +54,7 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
-                        created_at, updated_at
+                        created_at, updated_at, last_pr_review_submitted_at
                  FROM issues WHERE github_issue_number = ?1",
             )?;
             let issue = stmt
@@ -79,7 +79,7 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
-                        created_at, updated_at
+                        created_at, updated_at, last_pr_review_submitted_at
                  FROM issues WHERE state NOT IN ('completed', 'cancelled')",
             )?;
             let issues = stmt
@@ -104,7 +104,7 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
-                        created_at, updated_at
+                        created_at, updated_at, last_pr_review_submitted_at
                  FROM issues",
             )?;
             let issues = stmt
@@ -271,6 +271,15 @@ impl IssueRepository for SqliteIssueRepository {
                 param_values.push(v);
                 set_clauses.push(format!("worktree_path = ?{}", param_values.len()));
             }
+            if let Some(ts) = updates.last_pr_review_submitted_at {
+                param_values.push(rusqlite::types::Value::Text(
+                    ts.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string(),
+                ));
+                set_clauses.push(format!(
+                    "last_pr_review_submitted_at = ?{}",
+                    param_values.len()
+                ));
+            }
 
             // WHERE id comes after all SET params; index is len+1 before pushing.
             let where_idx = param_values.len() + 1;
@@ -307,7 +316,7 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
-                        created_at, updated_at
+                        created_at, updated_at, last_pr_review_submitted_at
                  FROM issues WHERE state = ?1",
             )?;
             let issues = stmt
@@ -360,6 +369,11 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
         .map(|s| parse_rfc3339_datetime(8, &s))
         .transpose()?;
 
+    let last_pr_review_submitted_at: Option<String> = row.get(11)?;
+    let last_pr_review_submitted_at = last_pr_review_submitted_at
+        .map(|s| parse_rfc3339_datetime(11, &s))
+        .transpose()?;
+
     Ok(Issue {
         id: row.get(0)?,
         github_issue_number,
@@ -378,6 +392,7 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
             v != 0
         },
         consecutive_failures_epoch,
+        last_pr_review_submitted_at,
         created_at: parse_sqlite_datetime(9, &created_str)?,
         updated_at: parse_sqlite_datetime(10, &updated_str)?,
     })
@@ -663,6 +678,7 @@ mod tests {
                 chrono::Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap(),
             )),
             worktree_path: Some(Some("/tmp/wt".to_string())),
+            last_pr_review_submitted_at: None,
         };
         repo.update_state_and_metadata(id2, &updates)
             .await

@@ -1,9 +1,11 @@
 use anyhow::{Context, Result, anyhow};
+use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde_json::{Value, json};
 
 use crate::application::port::github_client::{
-    GitHubCheckRun, PrObservation, PrStatus, ReviewComment, ReviewThread,
+    GitHubCheckRun, PrLevelReview, PrObservation, PrReviewState, PrStatus, ReviewComment,
+    ReviewThread,
 };
 use crate::domain::author_association::AuthorAssociation;
 
@@ -49,6 +51,16 @@ const OBSERVE_PR_QUERY: &str = r#"query($owner: String!, $repo: String!, $pr: In
               authorAssociation
             }
           }
+        }
+      }
+      reviews(last: 100, states: [COMMENTED, CHANGES_REQUESTED]) {
+        nodes {
+          id
+          submittedAt
+          body
+          state
+          author { login }
+          authorAssociation
         }
       }
       commits(last: 1) {
@@ -368,12 +380,110 @@ fn parse_pr_observation(pr_data: &Value) -> Option<PrObservation> {
         }
     }
 
+    // Parse PR-level reviews (COMMENTED / CHANGES_REQUESTED with non-empty body)
+    let pr_level_reviews = parse_pr_level_reviews(pr_data);
+
     Some(PrObservation {
         state,
         mergeable,
         unresolved_threads: threads,
         check_runs,
+        pr_level_reviews,
     })
+}
+
+/// GraphQL レスポンスの reviews ノードを走査し、PRレベルレビューのリストを返す。
+///
+/// - `body` が空文字・空白のみのノードはスキップ
+/// - `submittedAt` のパース失敗はスキップしログ出力
+/// - `reviews` フィールド自体が存在しない場合は空リストを返し警告ログを出力
+fn parse_pr_level_reviews(pr_data: &Value) -> Vec<PrLevelReview> {
+    let reviews = &pr_data["reviews"];
+    if reviews.is_null() {
+        tracing::warn!(
+            "GraphQL response missing 'reviews' field; skipping PR-level review detection"
+        );
+        return Vec::new();
+    }
+
+    let nodes = match reviews["nodes"].as_array() {
+        Some(n) => n,
+        None => {
+            tracing::warn!(
+                "GraphQL 'reviews.nodes' is not an array; skipping PR-level review detection"
+            );
+            return Vec::new();
+        }
+    };
+
+    let mut result = Vec::new();
+    for node in nodes {
+        // body が空文字・空白のみのノードをスキップ
+        let body = node["body"].as_str().unwrap_or("").to_string();
+        if body.trim().is_empty() {
+            continue;
+        }
+
+        // state フィルタ（クエリ側で COMMENTED / CHANGES_REQUESTED に絞っているが念のため）
+        let state = match node["state"].as_str() {
+            Some("COMMENTED") => PrReviewState::Commented,
+            Some("CHANGES_REQUESTED") => PrReviewState::ChangesRequested,
+            other => {
+                tracing::debug!(
+                    "Skipping PR-level review with unexpected state: {:?}",
+                    other
+                );
+                continue;
+            }
+        };
+
+        // submittedAt パース
+        let submitted_at_str = match node["submittedAt"].as_str() {
+            Some(s) => s,
+            None => {
+                tracing::warn!("PR-level review node missing 'submittedAt', skipping");
+                continue;
+            }
+        };
+        let submitted_at: DateTime<Utc> = match DateTime::parse_from_rfc3339(submitted_at_str) {
+            Ok(dt) => dt.with_timezone(&Utc),
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to parse PR-level review submittedAt '{}': {}; skipping",
+                    submitted_at_str,
+                    e
+                );
+                continue;
+            }
+        };
+
+        let id = node["id"].as_str().unwrap_or("").to_string();
+        let author = match node["author"]["login"].as_str() {
+            Some(login) => login.to_string(),
+            None => {
+                tracing::warn!(
+                    "PR-level review '{}' has no author login (deleted user?); skipping",
+                    id
+                );
+                continue;
+            }
+        };
+        let author_association = node["authorAssociation"]
+            .as_str()
+            .and_then(|s| s.parse::<AuthorAssociation>().ok())
+            .unwrap_or(AuthorAssociation::None);
+
+        result.push(PrLevelReview {
+            id,
+            submitted_at,
+            body,
+            state,
+            author,
+            author_association,
+        });
+    }
+
+    result
 }
 
 fn check_graphql_errors(resp: &Value) -> Result<()> {
@@ -687,5 +797,149 @@ mod tests {
         });
         let obs = parse_pr_observation(&data).expect("should parse");
         assert_eq!(obs.mergeable, Some(false));
+    }
+
+    // ── parse_pr_level_reviews tests ─────────────────────────────────────
+
+    #[test]
+    fn parse_pr_level_reviews_normal_commented() {
+        let data = json!({
+            "reviews": {
+                "nodes": [{
+                    "id": "PRR_1",
+                    "submittedAt": "2026-01-01T10:00:00Z",
+                    "body": "Please fix this",
+                    "state": "COMMENTED",
+                    "author": { "login": "reviewer" },
+                    "authorAssociation": "COLLABORATOR"
+                }]
+            }
+        });
+        let reviews = parse_pr_level_reviews(&data);
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].id, "PRR_1");
+        assert_eq!(reviews[0].body, "Please fix this");
+        assert_eq!(reviews[0].state, PrReviewState::Commented);
+        assert_eq!(reviews[0].author, "reviewer");
+        assert_eq!(
+            reviews[0].author_association,
+            AuthorAssociation::Collaborator
+        );
+    }
+
+    #[test]
+    fn parse_pr_level_reviews_normal_changes_requested() {
+        let data = json!({
+            "reviews": {
+                "nodes": [{
+                    "id": "PRR_2",
+                    "submittedAt": "2026-01-02T10:00:00Z",
+                    "body": "Needs changes",
+                    "state": "CHANGES_REQUESTED",
+                    "author": { "login": "owner" },
+                    "authorAssociation": "OWNER"
+                }]
+            }
+        });
+        let reviews = parse_pr_level_reviews(&data);
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].state, PrReviewState::ChangesRequested);
+        assert_eq!(reviews[0].author_association, AuthorAssociation::Owner);
+    }
+
+    #[test]
+    fn parse_pr_level_reviews_skips_empty_body() {
+        let data = json!({
+            "reviews": {
+                "nodes": [
+                    {
+                        "id": "PRR_3",
+                        "submittedAt": "2026-01-03T10:00:00Z",
+                        "body": "",
+                        "state": "COMMENTED",
+                        "author": { "login": "user" },
+                        "authorAssociation": "COLLABORATOR"
+                    },
+                    {
+                        "id": "PRR_4",
+                        "submittedAt": "2026-01-03T10:00:00Z",
+                        "body": "   ",
+                        "state": "COMMENTED",
+                        "author": { "login": "user" },
+                        "authorAssociation": "COLLABORATOR"
+                    }
+                ]
+            }
+        });
+        let reviews = parse_pr_level_reviews(&data);
+        assert!(
+            reviews.is_empty(),
+            "empty/whitespace-only body must be skipped"
+        );
+    }
+
+    #[test]
+    fn parse_pr_level_reviews_skips_invalid_timestamp() {
+        let data = json!({
+            "reviews": {
+                "nodes": [{
+                    "id": "PRR_5",
+                    "submittedAt": "not-a-date",
+                    "body": "Some review",
+                    "state": "COMMENTED",
+                    "author": { "login": "user" },
+                    "authorAssociation": "NONE"
+                }]
+            }
+        });
+        let reviews = parse_pr_level_reviews(&data);
+        assert!(reviews.is_empty(), "invalid timestamp must be skipped");
+    }
+
+    #[test]
+    fn parse_pr_level_reviews_missing_reviews_field_returns_empty() {
+        let data = json!({
+            "state": "OPEN"
+            // reviews フィールドなし
+        });
+        let reviews = parse_pr_level_reviews(&data);
+        assert!(reviews.is_empty());
+    }
+
+    #[test]
+    fn parse_pr_level_reviews_skips_null_author() {
+        let data = json!({
+            "reviews": {
+                "nodes": [{
+                    "id": "PRR_null_author",
+                    "submittedAt": "2026-01-05T10:00:00Z",
+                    "body": "Some review",
+                    "state": "COMMENTED",
+                    "author": null,
+                    "authorAssociation": "COLLABORATOR"
+                }]
+            }
+        });
+        let reviews = parse_pr_level_reviews(&data);
+        assert!(reviews.is_empty(), "null author must be skipped");
+    }
+
+    #[test]
+    fn parse_pr_level_reviews_unknown_association_defaults_to_none() {
+        let data = json!({
+            "reviews": {
+                "nodes": [{
+                    "id": "PRR_6",
+                    "submittedAt": "2026-01-06T10:00:00Z",
+                    "body": "Review body",
+                    "state": "COMMENTED",
+                    "author": { "login": "user" },
+                    "authorAssociation": "UNKNOWN_VALUE"
+                }]
+            }
+        });
+        let reviews = parse_pr_level_reviews(&data);
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].author_association, AuthorAssociation::None);
     }
 }
