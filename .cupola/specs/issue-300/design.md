@@ -6,7 +6,7 @@
 
 **Purpose**: spec-driven workflow の手動実行における入口を提供し、`spec-init → spec-design → spec-impl` の完全な手動ワークフローを実現する。  
 **Users**: Cupola デーモンを使わずに手動で spec-driven workflow を実行する開発者が利用する。  
-**Impact**: `.claude/commands/cupola/spec-init.md` を新規追加し、`init_file_generator.rs` に1エントリを追加する。既存の動作・API への変更はない。
+**Impact（将来実装予定）**: 実装フェーズにて `.claude/commands/cupola/spec-init.md` を新規追加し、`init_file_generator.rs` に1エントリを追加する予定。この PR は設計ドキュメントのみを対象としており、実ファイルの追加・Rust 側の変更は含まない。既存の動作・API への変更はない。
 
 ### Goals
 

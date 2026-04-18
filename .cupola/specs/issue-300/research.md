@@ -56,7 +56,7 @@
   - `cupola.toml` は `language = "ja"` のようなフィールドを持つ可能性がある
   - スキル（Markdown）から TOML を解析するのは複雑なため、Bash の `grep` で簡易的に抽出するか、引数を優先する
   - Rust デーモンは `language` を設定から渡しているが、スキルではデフォルト `ja` が適切
-- **Implications**: 引数 `$2` > `cupola.toml` の grep 抽出 > デフォルト `ja` の優先順位で解決する。
+- **Implications**: 引数 `$2` > `cupola.toml` の grep 抽出 > デフォルト `ja` の優先順位で解決する。grep 抽出の際は、`cupola.toml` にはテンプレートとして `# language = "ja"` のようなコメント行が含まれる場合があるため、行頭の `#` を含む行を除外し `^\s*language\s*=` のように厳密にマッチさせる必要がある。
 
 ## Architecture Pattern Evaluation
 

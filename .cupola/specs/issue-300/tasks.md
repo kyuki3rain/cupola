@@ -1,10 +1,10 @@
 # Implementation Plan
 
 - [ ] 1. spec-init スキルファイルの実装
-- [ ] 1.1 スキルのフロントマターと基本構造を定義する
-  - `.claude/commands/cupola/spec-init.md` を新規作成する
-  - `description`, `allowed-tools`, `argument-hint` を既存スキルのパターンに従って設定する
-  - `allowed-tools` に `Bash, Read, Write, Glob` を含める
+- [ ] 1.1 spec-init スキルを追加し、必要なメタデータを設定する
+  - 既存スキル群と一貫したフォーマットでスキルを定義する
+  - スキルの説明・引数ヒントを他スキルと統一された形式で記述する
+  - ファイル操作に必要なツールアクセスを許可する
   - _Requirements: 1.1, 1.3_
 
 - [ ] 1.2 前提条件チェックと引数バリデーションを実装する
@@ -35,9 +35,9 @@
   - _Requirements: 2.1, 2.3, 2.5, 3.7, 1.5_
 
 - [ ] 2. Rust デーモンへのスキル登録
-- [ ] 2.1 init_file_generator.rs に spec-init.md を登録する
-  - `CLAUDE_CODE_ASSETS` 配列に `(".claude/commands/cupola/spec-init.md", include_str!(...))` エントリを追加する
-  - `include_str!()` のパスは他のスキルエントリと同一パターンに従う
+- [ ] 2.1 cupola init 後に spec-init スキルが利用可能になるよう登録する
+  - 他の既存スキルと同様のパターンで新スキルをインストール対象に追加する
+  - 既存のインストールロジックは変更せず、エントリ追加のみで対応する
   - _Requirements: 5.1, 5.2, 5.3_
 
 - [ ] 2.2 ビルドと既存テストの通過を確認する (P)
