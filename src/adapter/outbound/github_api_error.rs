@@ -89,8 +89,12 @@ mod tests {
 
     #[test]
     fn classify_429_without_retry_after_returns_rate_limit_none() {
-        let err =
-            classify_http_error(StatusCode::TOO_MANY_REQUESTS, String::new(), None, "resource");
+        let err = classify_http_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            String::new(),
+            None,
+            "resource",
+        );
         assert!(
             matches!(err, GitHubApiError::RateLimit { retry_after: None }),
             "expected RateLimit with None retry_after"
@@ -118,8 +122,7 @@ mod tests {
 
     #[test]
     fn classify_500_returns_server_error() {
-        let err =
-            classify_http_error(StatusCode::INTERNAL_SERVER_ERROR, String::new(), None, "");
+        let err = classify_http_error(StatusCode::INTERNAL_SERVER_ERROR, String::new(), None, "");
         assert!(
             matches!(err, GitHubApiError::ServerError { status } if status == StatusCode::INTERNAL_SERVER_ERROR),
             "expected ServerError with 500"
@@ -137,8 +140,7 @@ mod tests {
 
     #[test]
     fn classify_404_returns_not_found_with_resource() {
-        let err =
-            classify_http_error(StatusCode::NOT_FOUND, String::new(), None, "my-resource");
+        let err = classify_http_error(StatusCode::NOT_FOUND, String::new(), None, "my-resource");
         assert!(
             matches!(err, GitHubApiError::NotFound { ref resource } if resource == "my-resource"),
             "expected NotFound with resource name"
@@ -187,7 +189,9 @@ mod tests {
         let mut map = reqwest::header::HeaderMap::new();
         map.insert(
             "retry-after",
-            "Fri, 01 Jan 2027 00:00:00 GMT".parse().expect("valid header"),
+            "Fri, 01 Jan 2027 00:00:00 GMT"
+                .parse()
+                .expect("valid header"),
         );
         assert_eq!(parse_retry_after(&map), None);
     }
