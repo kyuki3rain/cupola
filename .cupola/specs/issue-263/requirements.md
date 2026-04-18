@@ -17,10 +17,10 @@ cupola daemon は現在 SIGTERM / SIGINT をハンドリングしているが、
 
 #### Acceptance Criteria
 
-1.1. When SIGHUP シグナルを受信した時、the cupola daemon shall グレースフルシャットダウン処理を開始し、ログにシグナル受信と対応を記録する
-1.2. While polling loop が実行中に SIGHUP を受信した場合、the cupola daemon shall SIGTERM と同一のグレースフルシャットダウン手順を実行する（実行中セッションの kill → 最大 10 秒の完了待機）
+1.1. When SIGHUP シグナルを受信した時、The cupola daemon shall グレースフルシャットダウン処理を開始し、ログにシグナル受信と対応を記録する
+1.2. While polling loop が実行中に SIGHUP を受信した場合、The cupola daemon shall SIGTERM と同一のグレースフルシャットダウン手順を実行する（実行中セッションの kill → 最大 10 秒の完了待機）
 1.3. The cupola daemon shall デフォルト動作（OS によるプロセス即時終了）をオーバーライドし、SIGHUP を明示的にハンドリングする
-1.4. If SIGHUP 受信時に config reload を試みた場合、the cupola daemon shall reload は行わずにシャットダウンし、ログにその旨を記録する
+1.4. When SIGHUP シグナルを受信した時、the cupola daemon shall config reload を行わず、reload は未サポートである旨をログに記録したうえでシャットダウンする
 
 ### Requirement 2: ドキュメント更新
 
