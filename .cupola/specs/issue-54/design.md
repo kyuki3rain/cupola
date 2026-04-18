@@ -251,7 +251,7 @@ PrSnapshot {
 
 ```
 new_pr_reviews = observation.pr_level_reviews
-    .filter(|r| r.submitted_at > issue.last_pr_review_submitted_at.unwrap_or(UNIX_EPOCH))
+    .filter(|r| r.submitted_at > issue.last_pr_review_submitted_at.unwrap_or(DateTime::<Utc>::MIN))
     .filter(|r| config.is_comment_trusted(&r.author_association, &r.author))
 
 has_review_comments = !unresolved_threads.is_empty() || !new_pr_reviews.is_empty()
