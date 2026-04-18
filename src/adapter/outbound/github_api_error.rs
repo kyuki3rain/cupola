@@ -15,7 +15,10 @@ pub enum GitHubApiError {
     #[error("forbidden [{resource}]: {body}")]
     Forbidden { body: String, resource: String },
     #[error("server error (5xx): {status} [{resource}]")]
-    ServerError { status: StatusCode, resource: String },
+    ServerError {
+        status: StatusCode,
+        resource: String,
+    },
     #[error("not found: {resource}")]
     NotFound { resource: String },
     #[error("other: {0}")]
@@ -108,7 +111,13 @@ mod tests {
             "resource",
         );
         assert!(
-            matches!(err, GitHubApiError::RateLimit { retry_after: None, .. }),
+            matches!(
+                err,
+                GitHubApiError::RateLimit {
+                    retry_after: None,
+                    ..
+                }
+            ),
             "expected RateLimit with None retry_after"
         );
     }
@@ -170,7 +179,12 @@ mod tests {
 
     #[test]
     fn github_api_error_converts_to_anyhow_and_back() {
-        let err = classify_http_error(StatusCode::UNAUTHORIZED, String::new(), None, "test-resource");
+        let err = classify_http_error(
+            StatusCode::UNAUTHORIZED,
+            String::new(),
+            None,
+            "test-resource",
+        );
         let anyhow_err: anyhow::Error = err.into();
         assert!(
             anyhow_err.downcast_ref::<GitHubApiError>().is_some(),
