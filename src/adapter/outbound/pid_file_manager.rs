@@ -12,6 +12,23 @@ pub struct PidFileManager {
 }
 
 impl PidFileManager {
+    /// セッション状態ファイルのパスを返す。
+    /// PID ファイルのステム（拡張子なし）に `.sessions` を付加する。
+    fn session_file_path(&self) -> PathBuf {
+        let stem = self
+            .pid_file_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("cupola");
+        let parent = self
+            .pid_file_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        parent.join(format!("{stem}.sessions"))
+    }
+}
+
+impl PidFileManager {
     pub fn new(pid_file_path: PathBuf) -> Self {
         Self { pid_file_path }
     }
@@ -122,6 +139,60 @@ impl PidFilePort for PidFileManager {
             }
         };
         Ok(Some((pid, mode)))
+    }
+
+    fn write_session_count(&self, count: u32) -> Result<(), PidFileError> {
+        let path = self.session_file_path();
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp_path = path.with_file_name(format!(
+            "{}.tmp.{}.{}",
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("session"),
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+            .map_err(|e| PidFileError::Write(e.to_string()))?;
+
+        if let Err(e) = writeln!(file, "{count}") {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(PidFileError::Write(e.to_string()));
+        }
+
+        if let Err(e) = file.sync_all() {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(PidFileError::Write(e.to_string()));
+        }
+
+        std::fs::rename(&tmp_path, &path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            PidFileError::Write(e.to_string())
+        })
+    }
+
+    fn read_session_count(&self) -> Option<u32> {
+        let path = self.session_file_path();
+        if !path.exists() {
+            return None;
+        }
+        let content = std::fs::read_to_string(&path).ok()?;
+        content.lines().next()?.trim().parse::<u32>().ok()
+    }
+
+    fn delete_session_file(&self) -> Result<(), PidFileError> {
+        let path = self.session_file_path();
+        if !path.exists() {
+            return Ok(());
+        }
+        std::fs::remove_file(&path).map_err(|e| PidFileError::Delete(e.to_string()))
     }
 }
 

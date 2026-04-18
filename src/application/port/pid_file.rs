@@ -28,6 +28,22 @@ pub trait PidFilePort: Send + Sync {
     /// - 1 行レガシーフォーマットの場合は `Ok(Some((pid, None)))`。
     /// - 2 行フォーマットの場合は `Ok(Some((pid, Some(mode))))`。
     fn read_pid_and_mode(&self) -> Result<Option<(u32, Option<ProcessMode>)>, PidFileError>;
+
+    /// セッション状態ファイルにアクティブセッション数を書き込む。
+    ///
+    /// 一時ファイルへ書き込み後、rename でアトミックに置換する。
+    /// PID ファイルと同ディレクトリの `<pid_stem>.sessions` に書き込む。
+    fn write_session_count(&self, count: u32) -> Result<(), PidFileError>;
+
+    /// セッション状態ファイルからアクティブセッション数を読み取る。
+    ///
+    /// ファイルが存在しない場合は `None` を返す。
+    fn read_session_count(&self) -> Option<u32>;
+
+    /// セッション状態ファイルを削除する。
+    ///
+    /// ファイルが存在しない場合でも `Ok(())` を返す。
+    fn delete_session_file(&self) -> Result<(), PidFileError>;
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -58,6 +58,9 @@ pub enum Command {
         /// Config file path (default: .cupola/cupola.toml)
         #[arg(long, default_value = ".cupola/cupola.toml")]
         config: PathBuf,
+        /// 実行中セッションを待たずに即座に強制終了する
+        #[arg(long, default_value_t = false)]
+        force: bool,
     },
     /// Bootstrap Cupola into the current repository
     Init {
@@ -177,8 +180,9 @@ mod tests {
     fn parse_stop_with_defaults() {
         let cli = Cli::parse_from(["cupola", "stop"]);
         match cli.command {
-            Command::Stop { config } => {
+            Command::Stop { config, force } => {
                 assert_eq!(config, PathBuf::from(".cupola/cupola.toml"));
+                assert!(!force);
             }
             _ => panic!("expected Stop command"),
         }
@@ -188,8 +192,21 @@ mod tests {
     fn parse_stop_with_custom_config() {
         let cli = Cli::parse_from(["cupola", "stop", "--config", "/custom/path.toml"]);
         match cli.command {
-            Command::Stop { config } => {
+            Command::Stop { config, force } => {
                 assert_eq!(config, PathBuf::from("/custom/path.toml"));
+                assert!(!force);
+            }
+            _ => panic!("expected Stop command"),
+        }
+    }
+
+    #[test]
+    fn parse_stop_with_force_flag() {
+        let cli = Cli::parse_from(["cupola", "stop", "--force"]);
+        match cli.command {
+            Command::Stop { config, force } => {
+                assert_eq!(config, PathBuf::from(".cupola/cupola.toml"));
+                assert!(force);
             }
             _ => panic!("expected Stop command"),
         }

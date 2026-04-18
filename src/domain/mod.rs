@@ -10,6 +10,7 @@ pub mod metadata_update;
 pub mod model_config;
 pub mod phase;
 pub mod process_run;
+pub mod shutdown_mode;
 pub mod state;
 pub mod task_weight;
 pub mod world_snapshot;

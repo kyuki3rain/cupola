@@ -62,19 +62,38 @@ pub async fn run(cli: Cli) -> Result<()> {
             }
         }
 
-        Command::Stop { config } => {
+        Command::Stop { config, force } => {
             let config_dir = config
                 .parent()
                 .unwrap_or_else(|| Path::new("."))
                 .to_path_buf();
+
+            // 設定ファイルから shutdown_timeout を読み込む（存在しない場合はデフォルト 300 秒）
+            let shutdown_timeout = if config.exists() {
+                match load_toml(&config) {
+                    Ok(toml) => {
+                        let overrides = CliOverrides {
+                            polling_interval_secs: None,
+                            log_level: None,
+                        };
+                        toml.into_config(&overrides)
+                            .map(|c| c.shutdown_timeout)
+                            .unwrap_or(Some(Duration::from_secs(300)))
+                    }
+                    Err(_) => Some(Duration::from_secs(300)),
+                }
+            } else {
+                Some(Duration::from_secs(300))
+            };
+
             let pid_file_manager = PidFileManager::new(config_dir.join("cupola.pid"));
             let stop_use_case = StopUseCase::with_signal_sender(
                 pid_file_manager,
                 NixSignalSender,
-                Duration::from_secs(30),
+                shutdown_timeout,
             );
 
-            match stop_use_case.execute().await? {
+            match stop_use_case.execute(force).await? {
                 crate::application::stop_use_case::StopResult::NotRunning => {
                     println!("cupola is not running");
                 }
@@ -84,8 +103,11 @@ pub async fn run(cli: Cli) -> Result<()> {
                 crate::application::stop_use_case::StopResult::Stopped { pid } => {
                     println!("stopped cupola (pid={pid})");
                 }
-                crate::application::stop_use_case::StopResult::ForceKilled { pid } => {
-                    println!("force killed cupola (pid={pid})");
+                crate::application::stop_use_case::StopResult::ForceKilled {
+                    pid,
+                    sessions_killed,
+                } => {
+                    println!("force killed cupola (pid={pid}, sessions_killed={sessions_killed})");
                 }
             }
             Ok(())
@@ -980,6 +1002,18 @@ mod tests {
 
         fn read_pid_and_mode(&self) -> Result<Option<(u32, Option<ProcessMode>)>, PidFileError> {
             Ok(self.pid.map(|p| (p, self.mode)))
+        }
+
+        fn write_session_count(&self, _count: u32) -> Result<(), PidFileError> {
+            Ok(())
+        }
+
+        fn read_session_count(&self) -> Option<u32> {
+            None
+        }
+
+        fn delete_session_file(&self) -> Result<(), PidFileError> {
+            Ok(())
         }
     }
 
