@@ -125,7 +125,7 @@ impl CupolaToml {
 
         let shutdown_timeout = match self.shutdown_timeout_secs {
             None => Some(std::time::Duration::from_secs(300)), // デフォルト 300 秒
-            Some(0) => None,                                    // 無限待機
+            Some(0) => None,                                   // 無限待機
             Some(n) => Some(std::time::Duration::from_secs(n)), // n 秒タイムアウト
         };
 

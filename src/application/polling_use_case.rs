@@ -341,10 +341,7 @@ where
                 }
 
                 let remaining = self.session_mgr.count();
-                tracing::info!(
-                    sessions_killed = remaining,
-                    "force shutdown complete"
-                );
+                tracing::info!(sessions_killed = remaining, "force shutdown complete");
 
                 self.cleanup_and_exit().await;
             }

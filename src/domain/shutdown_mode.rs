@@ -39,10 +39,7 @@ mod tests {
         let mode = ShutdownMode::Graceful {
             deadline: Some(deadline),
         };
-        assert!(matches!(
-            mode,
-            ShutdownMode::Graceful { deadline: Some(_) }
-        ));
+        assert!(matches!(mode, ShutdownMode::Graceful { deadline: Some(_) }));
     }
 
     #[test]
