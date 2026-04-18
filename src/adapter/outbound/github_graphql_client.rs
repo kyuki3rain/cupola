@@ -53,7 +53,7 @@ const OBSERVE_PR_QUERY: &str = r#"query($owner: String!, $repo: String!, $pr: In
           }
         }
       }
-      reviews(first: 100, states: [COMMENTED, CHANGES_REQUESTED]) {
+      reviews(last: 100, states: [COMMENTED, CHANGES_REQUESTED]) {
         nodes {
           id
           submittedAt
@@ -458,7 +458,16 @@ fn parse_pr_level_reviews(pr_data: &Value) -> Vec<PrLevelReview> {
         };
 
         let id = node["id"].as_str().unwrap_or("").to_string();
-        let author = node["author"]["login"].as_str().unwrap_or("").to_string();
+        let author = match node["author"]["login"].as_str() {
+            Some(login) => login.to_string(),
+            None => {
+                tracing::warn!(
+                    "PR-level review '{}' has no author login (deleted user?); skipping",
+                    id
+                );
+                continue;
+            }
+        };
         let author_association = node["authorAssociation"]
             .as_str()
             .and_then(|s| s.parse::<AuthorAssociation>().ok())
@@ -790,7 +799,7 @@ mod tests {
         assert_eq!(obs.mergeable, Some(false));
     }
 
-    // ── parse_pr_level_reviews tests ──────────────────────��───────────────
+    // ── parse_pr_level_reviews tests ─────────────────────────────────────
 
     #[test]
     fn parse_pr_level_reviews_normal_commented() {
@@ -895,6 +904,24 @@ mod tests {
         });
         let reviews = parse_pr_level_reviews(&data);
         assert!(reviews.is_empty());
+    }
+
+    #[test]
+    fn parse_pr_level_reviews_skips_null_author() {
+        let data = json!({
+            "reviews": {
+                "nodes": [{
+                    "id": "PRR_null_author",
+                    "submittedAt": "2026-01-05T10:00:00Z",
+                    "body": "Some review",
+                    "state": "COMMENTED",
+                    "author": null,
+                    "authorAssociation": "COLLABORATOR"
+                }]
+            }
+        });
+        let reviews = parse_pr_level_reviews(&data);
+        assert!(reviews.is_empty(), "null author must be skipped");
     }
 
     #[test]
