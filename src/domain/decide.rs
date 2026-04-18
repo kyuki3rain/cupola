@@ -316,6 +316,10 @@ fn decide_design_review_waiting(
     if design_pr.has_review_comments {
         // review resets ci_fix_count
         metadata_updates.ci_fix_count = Some(0);
+        // PR レベルレビューが含まれる場合はタイムスタンプを記録
+        if let Some(ts) = design_pr.newest_pr_review_submitted_at {
+            metadata_updates.last_pr_review_submitted_at = Some(ts);
+        }
         emit_spawn_design_fix(snap, design_pr, effects);
         return State::DesignFixing;
     }
@@ -665,6 +669,10 @@ fn decide_implementation_review_waiting(
     }
     if impl_pr.has_review_comments {
         metadata_updates.ci_fix_count = Some(0);
+        // PR レベルレビューが含まれる場合はタイムスタンプを記録
+        if let Some(ts) = impl_pr.newest_pr_review_submitted_at {
+            metadata_updates.last_pr_review_submitted_at = Some(ts);
+        }
         emit_spawn_impl_fix(snap, impl_pr, effects);
         return State::ImplementationFixing;
     }

@@ -143,8 +143,6 @@ where
     G: GitHubClient,
     P: ProcessRunRepository,
 {
-    let id = issue.id;
-
     // --- GithubIssueSnapshot ---
     let github_issue = observe_github_issue(
         github,
@@ -165,9 +163,10 @@ where
     let should_observe_prs = !is_terminal || !is_converged;
 
     let (design_pr, impl_pr) = if should_observe_prs {
-        let d =
-            observe_pr_for_type(github, process_repo, config, id, ProcessRunType::Design).await?;
-        let i = observe_pr_for_type(github, process_repo, config, id, ProcessRunType::Impl).await?;
+        let d = observe_pr_for_type(github, process_repo, config, issue, ProcessRunType::Design)
+            .await?;
+        let i =
+            observe_pr_for_type(github, process_repo, config, issue, ProcessRunType::Impl).await?;
         (d, i)
     } else {
         (None, None)
@@ -251,7 +250,7 @@ async fn observe_pr_for_type<G, P>(
     github: &G,
     process_repo: &P,
     config: &Config,
-    issue_id: i64,
+    issue: &Issue,
     type_: ProcessRunType,
 ) -> Result<Option<PrSnapshot>>
 where
@@ -260,7 +259,7 @@ where
 {
     // Find latest process run with a pr_number (SQL-level filter ensures non-NULL)
     let run = match process_repo
-        .find_latest_with_pr_number(issue_id, type_)
+        .find_latest_with_pr_number(issue.id, type_)
         .await?
     {
         Some(r) => r,
@@ -286,27 +285,58 @@ where
     };
 
     // For open PRs, derive review comments, CI status, and conflict from the observation
-    let (has_review_comments, ci_status, has_conflict) = if pr_state == PrState::Open {
-        let has_review_comments = observation.unresolved_threads.iter().any(|t| {
-            t.comments
+    let (has_review_comments, ci_status, has_conflict, newest_pr_review_submitted_at) =
+        if pr_state == PrState::Open {
+            let has_thread_comments = observation.unresolved_threads.iter().any(|t| {
+                t.comments
+                    .iter()
+                    .any(|c| config.is_comment_trusted(&c.author_association, &c.author))
+            });
+
+            // PR レベルレビューをフィルタリング
+            // - issue.last_pr_review_submitted_at より新しいもののみ
+            // - 信頼済み author のみ
+            let threshold = issue
+                .last_pr_review_submitted_at
+                .unwrap_or(DateTime::<Utc>::MIN_UTC);
+            let new_pr_reviews: Vec<_> = observation
+                .pr_level_reviews
                 .iter()
-                .any(|c| config.is_comment_trusted(&c.author_association, &c.author))
-        });
+                .filter(|r| r.submitted_at > threshold)
+                .filter(|r| config.is_comment_trusted(&r.author_association, &r.author))
+                .collect();
 
-        let ci = derive_ci_status(&observation.check_runs);
+            let newest_pr_review_submitted_at = new_pr_reviews.iter().map(|r| r.submitted_at).max();
 
-        let has_conflict = observation.mergeable == Some(false);
+            if !new_pr_reviews.is_empty() {
+                tracing::info!(
+                    pr_number,
+                    count = new_pr_reviews.len(),
+                    newest = ?newest_pr_review_submitted_at,
+                    "detected new PR-level reviews"
+                );
+            }
 
-        (has_review_comments, ci, has_conflict)
-    } else {
-        (false, CiStatus::Unknown, false)
-    };
+            let has_review_comments = has_thread_comments || !new_pr_reviews.is_empty();
+            let ci = derive_ci_status(&observation.check_runs);
+            let has_conflict = observation.mergeable == Some(false);
+
+            (
+                has_review_comments,
+                ci,
+                has_conflict,
+                newest_pr_review_submitted_at,
+            )
+        } else {
+            (false, CiStatus::Unknown, false, None)
+        };
 
     Ok(Some(PrSnapshot {
         state: pr_state,
         has_review_comments,
         ci_status,
         has_conflict,
+        newest_pr_review_submitted_at,
     }))
 }
 
@@ -779,6 +809,12 @@ mod tests {
         run
     }
 
+    fn make_test_issue(id: i64) -> crate::domain::issue::Issue {
+        let mut issue = crate::domain::issue::Issue::new(1, "test".to_string());
+        issue.id = id;
+        issue
+    }
+
     /// T-4.CO.1: find_latest_with_pr_number が None を返す場合、
     /// observe_pr_for_type は Ok(None) を返す
     #[tokio::test]
@@ -786,9 +822,10 @@ mod tests {
         let tracker = Arc::new(AtomicBool::new(false));
         let github = MockGithub::with_tracker(Arc::clone(&tracker));
         let repo = MockProcessRunRepository::returning_none();
+        let issue = make_test_issue(1);
 
         let config = test_config();
-        let result = observe_pr_for_type(&github, &repo, &config, 1, ProcessRunType::Design)
+        let result = observe_pr_for_type(&github, &repo, &config, &issue, ProcessRunType::Design)
             .await
             .expect("should not error");
 
@@ -807,9 +844,10 @@ mod tests {
 
         let github = MockGithubWithPrTracking::new(Arc::clone(&observe_pr_calls));
         let repo = MockProcessRunRepository::returning_run(run);
+        let issue = make_test_issue(1);
 
         let config = test_config();
-        let result = observe_pr_for_type(&github, &repo, &config, 1, ProcessRunType::Design)
+        let result = observe_pr_for_type(&github, &repo, &config, &issue, ProcessRunType::Design)
             .await
             .expect("should not error");
 
@@ -834,9 +872,10 @@ mod tests {
 
         let github = MockGithubWith404::new(Arc::clone(&observe_pr_calls));
         let repo = MockProcessRunRepository::returning_run(run);
+        let issue = make_test_issue(1);
 
         let config = test_config();
-        let result = observe_pr_for_type(&github, &repo, &config, 1, ProcessRunType::Design)
+        let result = observe_pr_for_type(&github, &repo, &config, &issue, ProcessRunType::Design)
             .await
             .expect("should not error when PR not found");
 
@@ -929,6 +968,7 @@ mod tests {
                     mergeable: Some(true),
                     unresolved_threads: vec![],
                     check_runs: vec![],
+                    pr_level_reviews: vec![],
                 },
             ))
         }

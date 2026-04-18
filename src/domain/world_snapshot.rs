@@ -1,3 +1,5 @@
+use chrono::{DateTime, Utc};
+
 use crate::domain::process_run::ProcessRunState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +32,9 @@ pub struct PrSnapshot {
     pub has_review_comments: bool,
     pub ci_status: CiStatus,
     pub has_conflict: bool,
+    /// フィルタ後の PR レベルレビューのうち最新の submittedAt。
+    /// PR レベルレビューがない（またはコード行コメントスレッドのみ）の場合は None。
+    pub newest_pr_review_submitted_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +81,7 @@ pub mod fixtures {
             has_review_comments: false,
             ci_status: CiStatus::Ok,
             has_conflict: false,
+            newest_pr_review_submitted_at: None,
         }
     }
 
@@ -85,6 +91,7 @@ pub mod fixtures {
             has_review_comments: false,
             ci_status: CiStatus::Ok,
             has_conflict: false,
+            newest_pr_review_submitted_at: None,
         }
     }
 
@@ -94,6 +101,7 @@ pub mod fixtures {
             has_review_comments: false,
             ci_status: CiStatus::Ok,
             has_conflict: false,
+            newest_pr_review_submitted_at: None,
         }
     }
 
@@ -204,6 +212,7 @@ mod tests {
             has_review_comments: false,
             ci_status: CiStatus::Ok,
             has_conflict: false,
+            newest_pr_review_submitted_at: None,
         };
         assert_eq!(pr.state, PrState::Open);
         assert!(!pr.has_review_comments);

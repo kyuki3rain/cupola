@@ -14,6 +14,9 @@ pub struct Issue {
     pub ci_fix_count: u32,
     pub close_finished: bool,
     pub consecutive_failures_epoch: Option<DateTime<Utc>>,
+    /// 最後に fixing トリガーとして採用した PR レベルレビューの submittedAt タイムスタンプ。
+    /// NULL の場合は未処理（すべての PR レベルレビューを新規として扱う）。
+    pub last_pr_review_submitted_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -31,6 +34,7 @@ impl Issue {
             ci_fix_count: 0,
             close_finished: false,
             consecutive_failures_epoch: None,
+            last_pr_review_submitted_at: None,
             created_at: now,
             updated_at: now,
         }
@@ -55,6 +59,7 @@ mod tests {
             ci_fix_count: 0,
             close_finished: false,
             consecutive_failures_epoch: None,
+            last_pr_review_submitted_at: None,
             created_at: now,
             updated_at: now,
         };
