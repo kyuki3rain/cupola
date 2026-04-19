@@ -73,6 +73,8 @@ fn start_reader_thread<R: std::io::Read + Send + 'static>(
                     error = %e,
                     "failed to write process output to log file"
                 );
+                // Keep draining the pipe so the child process cannot block on a full buffer.
+                let _ = std::io::copy(&mut reader, &mut std::io::sink());
             }
         })
     })
@@ -138,8 +140,22 @@ impl SessionManager {
             );
         }
 
-        let stdout_path = self.log_dir.join(format!("run-{run_id}-stdout.log"));
-        let stderr_path = self.log_dir.join(format!("run-{run_id}-stderr.log"));
+        let (stdout_path, stderr_path) = if run_id > 0 {
+            (
+                self.log_dir.join(format!("run-{run_id}-stdout.log")),
+                self.log_dir.join(format!("run-{run_id}-stderr.log")),
+            )
+        } else {
+            tracing::warn!(
+                issue_id,
+                run_id,
+                "non-positive run_id; using issue_id-based log paths to avoid collisions"
+            );
+            (
+                self.log_dir.join(format!("issue-{issue_id}-stdout.log")),
+                self.log_dir.join(format!("issue-{issue_id}-stderr.log")),
+            )
+        };
 
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
@@ -271,9 +287,8 @@ impl Default for SessionManager {
     }
 }
 
-#[cfg(test)]
 impl SessionManager {
-    pub(crate) fn with_log_dir(log_dir: PathBuf) -> Self {
+    pub fn with_log_dir(log_dir: PathBuf) -> Self {
         Self {
             sessions: HashMap::new(),
             pending: 0,

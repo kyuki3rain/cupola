@@ -202,9 +202,29 @@ where
         };
 
         if run_id > 0 {
-            let stderr = match std::fs::read_to_string(&session.stderr_path) {
-                Ok(s) => s,
-                Err(e) => {
+            let stderr = {
+                use std::io::Read as _;
+                let file = match std::fs::File::open(&session.stderr_path) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        tracing::error!(
+                            path = %session.stderr_path.display(),
+                            error = %e,
+                            "failed to read stderr log"
+                        );
+                        process_repo
+                            .mark_failed(run_id, Some(format!("stderr log unavailable: {e}")))
+                            .await?;
+                        return Ok(());
+                    }
+                };
+                // Limit read to avoid OOM on large log files; only a snippet is needed.
+                let byte_limit = (STDERR_SNIPPET_MAX as u64).saturating_mul(4).saturating_add(1);
+                let mut buf = String::new();
+                if let Err(e) = std::io::BufReader::new(file)
+                    .take(byte_limit)
+                    .read_to_string(&mut buf)
+                {
                     tracing::error!(
                         path = %session.stderr_path.display(),
                         error = %e,
@@ -215,6 +235,7 @@ where
                         .await?;
                     return Ok(());
                 }
+                buf
             };
             let stderr_trimmed = stderr.trim();
             let stderr_snippet = if stderr_trimmed.is_empty() {
@@ -878,27 +899,41 @@ mod tests {
         }
     }
 
-    fn make_session_missing_files(run_id: i64, state: State) -> ExitedSession {
-        ExitedSession {
-            issue_id: 1,
-            exit_status: success_exit_status(),
-            stdout_path: PathBuf::from("/tmp/nonexistent-cupola-test-12345-stdout.log"),
-            stderr_path: PathBuf::from("/tmp/nonexistent-cupola-test-12345-stderr.log"),
-            log_id: 0,
-            run_id,
-            registered_state: state,
+    fn make_session_missing_files(run_id: i64, state: State) -> SessionFixture {
+        let tmpdir = tempfile::tempdir().expect("temp dir");
+        // Paths within the tmpdir that are guaranteed unique and never created.
+        let stdout_path = tmpdir.path().join("nonexistent-stdout.log");
+        let stderr_path = tmpdir.path().join("nonexistent-stderr.log");
+        SessionFixture {
+            _tmpdir: tmpdir,
+            session: ExitedSession {
+                issue_id: 1,
+                exit_status: success_exit_status(),
+                stdout_path,
+                stderr_path,
+                log_id: 0,
+                run_id,
+                registered_state: state,
+            },
         }
     }
 
-    fn make_failed_session_missing_stderr(run_id: i64, state: State) -> ExitedSession {
-        ExitedSession {
-            issue_id: 1,
-            exit_status: failure_exit_status(),
-            stdout_path: PathBuf::from("/tmp/nonexistent-cupola-test-12345-stdout.log"),
-            stderr_path: PathBuf::from("/tmp/nonexistent-cupola-test-12345-stderr.log"),
-            log_id: 0,
-            run_id,
-            registered_state: state,
+    fn make_failed_session_missing_stderr(run_id: i64, state: State) -> SessionFixture {
+        let tmpdir = tempfile::tempdir().expect("temp dir");
+        // Paths within the tmpdir that are guaranteed unique and never created.
+        let stdout_path = tmpdir.path().join("nonexistent-stdout.log");
+        let stderr_path = tmpdir.path().join("nonexistent-stderr.log");
+        SessionFixture {
+            _tmpdir: tmpdir,
+            session: ExitedSession {
+                issue_id: 1,
+                exit_status: failure_exit_status(),
+                stdout_path,
+                stderr_path,
+                log_id: 0,
+                run_id,
+                registered_state: state,
+            },
         }
     }
 
@@ -1337,10 +1372,11 @@ mod tests {
         let process_repo = MockProcessRepo::new();
         let calls = process_repo.calls.clone();
         let config = unit_config();
-        let session = make_session_missing_files(55, State::DesignRunning);
+        let fixture = make_session_missing_files(55, State::DesignRunning);
 
         let result =
-            process_exited_session(&github, &issue_repo, &process_repo, &config, &session).await;
+            process_exited_session(&github, &issue_repo, &process_repo, &config, &fixture.session)
+                .await;
 
         assert!(result.is_ok(), "expected Ok(()), got {result:?}");
         let log = calls.lock().unwrap();
@@ -1374,10 +1410,11 @@ mod tests {
         let process_repo = MockProcessRepo::new();
         let calls = process_repo.calls.clone();
         let config = unit_config();
-        let session = make_failed_session_missing_stderr(66, State::DesignRunning);
+        let fixture = make_failed_session_missing_stderr(66, State::DesignRunning);
 
         let result =
-            process_exited_session(&github, &issue_repo, &process_repo, &config, &session).await;
+            process_exited_session(&github, &issue_repo, &process_repo, &config, &fixture.session)
+                .await;
 
         assert!(result.is_ok(), "expected Ok(()), got {result:?}");
         let log = calls.lock().unwrap();

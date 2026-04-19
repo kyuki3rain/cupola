@@ -295,7 +295,8 @@ async fn session_manager_lifecycle() {
     use std::process::{Command, Stdio};
     use std::time::Duration;
 
-    let mut mgr = SessionManager::new();
+    let tmpdir = tempfile::tempdir().expect("temp dir");
+    let mut mgr = SessionManager::with_log_dir(tmpdir.path().to_path_buf());
 
     // Spawn a short-lived process
     let child = Command::new("echo")
@@ -326,7 +327,8 @@ async fn session_manager_stall_detection() {
     use std::process::{Command, Stdio};
     use std::time::Duration;
 
-    let mut mgr = SessionManager::new();
+    let tmpdir = tempfile::tempdir().expect("temp dir");
+    let mut mgr = SessionManager::with_log_dir(tmpdir.path().to_path_buf());
 
     let child = Command::new("sleep")
         .arg("60")
