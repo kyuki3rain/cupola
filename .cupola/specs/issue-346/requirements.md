@@ -16,7 +16,7 @@
 
 1. When Cupola が Claude Code プロセスを起動するとき、the Cupola shall `--dangerously-skip-permissions` フラグを渡さずにプロセスを起動する。
 2. When `cupola init` の steering bootstrap 処理が実行されるとき、the Cupola shall `--dangerously-skip-permissions` フラグなしで Claude Code を呼び出す。
-3. The Cupola shall Claude Code プロセスの起動ディレクトリを対象リポジトリのルートに設定し、`.claude/settings.json` が自動的に参照されるようにする。
+3. The Cupola shall set the Claude Code プロセスの起動ディレクトリを対象リポジトリのルートに設定し、`.claude/settings.json` が自動的に参照されるようにする。
 
 ### 要件 2: Claude Code 設定テンプレートの整備
 

@@ -83,13 +83,13 @@ graph TB
 
 ### テクノロジースタック
 
-| レイヤー | 選択 / バージョン | 本機能での役割 |
-|---------|-----------------|---------------|
-| CLI | clap 4 (derive) | `--template` オプション追加 (value_delimiter) |
-| Application | Rust 2024 / 既存構造 | TemplateManager (新規)、InitUseCase 拡張 |
-| Domain | Rust 2024 / serde 1 | ClaudeSettings 値オブジェクト (新規) |
-| Data | serde_json 1 (既存依存) | テンプレート JSON のパース・マージ |
-| Assets | Rust `include_str!` | テンプレートのコンパイル時埋め込み |
+| レイヤー | 選択 / バージョン | 本機能での役割 | 備考 |
+|---------|-----------------|---------------|------|
+| CLI | clap 4 (derive) | `--template` オプション追加 (value_delimiter) | 既存依存 |
+| Application | Rust 2024 / 既存構造 | TemplateManager (新規)、InitUseCase 拡張 | — |
+| Domain | Rust 2024 / serde 1 | ClaudeSettings 値オブジェクト (新規) | — |
+| Data | serde_json 1 (既存依存) | テンプレート JSON のパース・マージ | 追加依存なし |
+| Assets | Rust `include_str!` | テンプレートのコンパイル時埋め込み | 実行時依存なし |
 
 ## システムフロー
 
@@ -134,30 +134,30 @@ sequenceDiagram
 
 ## 要件トレーサビリティ
 
-| 要件 | サマリー | コンポーネント | インターフェース |
-|------|---------|--------------|----------------|
-| 1.1 | build_command からフラグ削除 | ClaudeCodeProcess | build_command |
-| 1.2 | steering bootstrap からフラグ削除 | InitUseCase | run |
-| 1.3 | ワーキングディレクトリ設定 (既存) | ClaudeCodeProcess | build_command |
-| 2.1 | base.json 配置 | TemplateManager, Embedded Assets | — |
-| 2.2 | スタック別テンプレート配置 | TemplateManager, Embedded Assets | — |
-| 2.3 | compile-time 埋め込み | TemplateManager | include_str! |
-| 2.4 | JSON 形式定義 | ClaudeSettings | — |
-| 3.1 | テンプレートなし = base のみ | TemplateManager, InitUseCase | build_settings |
-| 3.2 | 単一テンプレート指定 | TemplateManager | build_settings |
-| 3.3 | 複数テンプレート指定 | CLI Init, TemplateManager | InitArgs, build_settings |
-| 3.4 | 未知キーエラー | TemplateManager | TemplateError |
-| 3.5 | base 重複適用の防止 | TemplateManager | build_settings |
-| 4.1 | allow/deny の union マージ | InitFileGenerator | write_claude_settings |
-| 4.2 | スカラー既存優先 | InitFileGenerator | deep_merge_json |
-| 4.3 | --upgrade 時のユーザー設定保持 | InitFileGenerator | write_claude_settings |
-| 4.4 | 新規ファイル生成 | InitFileGenerator | write_claude_settings |
-| 5.1 | permission denied をセッション失敗として扱う | SessionManager | — |
-| 5.2 | エラーログとヒント出力 | SessionManager | tracing::error! |
-| 5.3 | 非インタラクティブ動作 | ClaudeCodeProcess | --output-format json (既存) |
-| 6.1 | SECURITY.md 更新 | — | — |
-| 6.2 | CONTRIBUTING.md 更新 | — | — |
-| 6.3 | SECURITY.md 攻撃面拡大警告 | — | — |
+| 要件 | サマリー | コンポーネント | インターフェース | フロー |
+|------|---------|--------------|----------------|--------|
+| 1.1 | build_command からフラグ削除 | ClaudeCodeProcess | build_command | — |
+| 1.2 | steering bootstrap からフラグ削除 | InitUseCase | run | — |
+| 1.3 | ワーキングディレクトリ設定 (既存) | ClaudeCodeProcess | build_command | — |
+| 2.1 | base.json 配置 | TemplateManager, Embedded Assets | — | — |
+| 2.2 | スタック別テンプレート配置 | TemplateManager, Embedded Assets | — | — |
+| 2.3 | compile-time 埋め込み | TemplateManager | include_str! | — |
+| 2.4 | JSON 形式定義 | ClaudeSettings | — | — |
+| 3.1 | テンプレートなし = base のみ | TemplateManager, InitUseCase | build_settings | テンプレート適用フロー |
+| 3.2 | 単一テンプレート指定 | TemplateManager | build_settings | テンプレート適用フロー |
+| 3.3 | 複数テンプレート指定 | CLI Init, TemplateManager | InitArgs, build_settings | テンプレート適用フロー |
+| 3.4 | 未知キーエラー | TemplateManager | TemplateError | — |
+| 3.5 | base 重複適用の防止 | TemplateManager | build_settings | — |
+| 4.1 | allow/deny の union マージ | InitFileGenerator | write_claude_settings | テンプレート適用フロー |
+| 4.2 | スカラー既存優先 | InitFileGenerator | deep_merge_json | テンプレート適用フロー |
+| 4.3 | --upgrade 時のユーザー設定保持 | InitFileGenerator | write_claude_settings | テンプレート適用フロー |
+| 4.4 | 新規ファイル生成 | InitFileGenerator | write_claude_settings | テンプレート適用フロー |
+| 5.1 | permission denied をセッション失敗として扱う | SessionManager | — | Permission Denied エラーフロー |
+| 5.2 | エラーログとヒント出力 | SessionManager | tracing::error! | Permission Denied エラーフロー |
+| 5.3 | 非インタラクティブ動作 | ClaudeCodeProcess | --output-format json (既存) | Permission Denied エラーフロー |
+| 6.1 | SECURITY.md 更新 | — | — | — |
+| 6.2 | CONTRIBUTING.md 更新 | — | — | — |
+| 6.3 | SECURITY.md 攻撃面拡大警告 | — | — | — |
 
 ## コンポーネントとインターフェース
 
@@ -344,7 +344,7 @@ Init {
     #[arg(long, default_value_t = false)]
     upgrade: bool,
     /// Permission template keys (comma-separated, e.g. "rust,docker")
-    #[arg(long, value_delimiter = ',', default_value = "")]
+    #[arg(long, value_delimiter = ',')]
     template: Vec<String>,
 }
 ```
