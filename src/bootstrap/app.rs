@@ -2,6 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use secrecy::SecretString;
 
 use crate::adapter::inbound::cli::{Cli, Command, InitAgent};
 use crate::adapter::outbound::claude_code_process::ClaudeCodeProcess;
@@ -522,7 +523,7 @@ async fn start_foreground(
         db.init_schema()?;
 
         // Resolve GitHub token
-        let token = gh_token::get()?;
+        let token = SecretString::new(gh_token::get()?.into());
 
         // Build adapters
         let rest = OctocrabRestClient::new(token.clone(), cfg.owner.clone(), cfg.repo.clone())?;
@@ -687,7 +688,7 @@ async fn start_daemon_child(
         db.init_schema()?;
 
         // Resolve GitHub token
-        let token = gh_token::get()?;
+        let token = SecretString::new(gh_token::get()?.into());
 
         // Build adapters
         let rest = OctocrabRestClient::new(token.clone(), cfg.owner.clone(), cfg.repo.clone())?;

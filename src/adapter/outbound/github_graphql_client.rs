@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use reqwest::Client;
+use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
 
 use crate::application::port::github_client::{
@@ -82,13 +83,13 @@ const OBSERVE_PR_QUERY: &str = r#"query($owner: String!, $repo: String!, $pr: In
 
 pub struct GraphQLClient {
     client: Client,
-    token: String,
+    token: SecretString,
     owner: String,
     repo: String,
 }
 
 impl GraphQLClient {
-    pub fn new(token: String, owner: String, repo: String) -> Self {
+    pub fn new(token: SecretString, owner: String, repo: String) -> Self {
         Self {
             client: Client::new(),
             token,
@@ -276,7 +277,7 @@ impl GraphQLClient {
         let response = self
             .client
             .post("https://api.github.com/graphql")
-            .header("Authorization", format!("bearer {}", self.token))
+            .header("Authorization", format!("bearer {}", self.token.expose_secret()))
             .header("User-Agent", "cupola")
             .json(payload)
             .send()
