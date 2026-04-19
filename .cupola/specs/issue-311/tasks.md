@@ -1,75 +1,72 @@
 # 実装計画
 
-- [ ] 1. SessionEntry と ExitedSession の構造を変更する
-- [ ] 1.1 SessionEntry から JoinHandle<String> フィールドを削除し、stdout_path / stderr_path を追加する
-  - `stdout_handle: Option<JoinHandle<String>>` と `stderr_handle: Option<JoinHandle<String>>` を削除する
-  - 代わりに `stdout_path: PathBuf` と `stderr_path: PathBuf` を追加する
-  - オプションで `stdout_reader_handle: Option<JoinHandle<()>>` / `stderr_reader_handle: Option<JoinHandle<()>>` を追加してプロセス完了時の join を可能にする
+- [ ] 1. セッション情報を、出力内容そのものではなく保存先を中心に扱えるようにする
+- [ ] 1.1 実行中セッションで標準出力・標準エラーの保存先と書き込み完了待ちに必要な情報を保持できるようにする
+  - 実行中の出力をメモリ上の文字列として抱え込まず、保存先を追跡できるようにする
+  - プロセス終了後に、ログの書き込みが完了したことを確認してから後続処理へ進めるようにする
   - _Requirements: 1.3_
 
-- [ ] 1.2 ExitedSession の stdout/stderr フィールドをパスフィールドに置換する
-  - `stdout: String` / `stderr: String` を削除する
-  - `stdout_path: PathBuf` / `stderr_path: PathBuf` を追加する
+- [ ] 1.2 終了済みセッションでも、標準出力・標準エラーを保存先経由で参照できるようにする
+  - 後続処理が終了後ログを再読み込みできるよう、出力本文ではなく保存先を引き継ぐ
   - _Requirements: 3.1_
 
-- [ ] 2. register 関数をストリーム書き込み方式に書き換える
-- [ ] 2.1 register シグネチャに run_id を追加し、ファイルパスを確定させる
-  - `pub fn register(&mut self, issue_id: i64, state: State, child: Child, run_id: i64)` にシグネチャを変更する
-  - `.cupola/logs/process-runs/` ディレクトリを `std::fs::create_dir_all` で作成する
-  - `run-{run_id}-stdout.log` / `run-{run_id}-stderr.log` のパスを構築し `SessionEntry` に格納する
-  - _Requirements: 1.5, 5.1, 5.4_
+- [ ] 2. セッション登録時の出力処理を、メモリ保持ではなくログへの逐次保存へ切り替える
+- [ ] 2.1 セッション登録時に実行単位ごとの stdout/stderr の保存先を確定できるようにする
+  - 実行ごとに衝突しないログ保存先を用意し、後続処理が同じ場所を参照できるようにする
+  - ログ保存先の親ディレクトリが未作成でも登録時に利用可能にする
+  - _Requirements: 1.5, 5.1, 5.2_
 
-- [ ] 2.2 stdout/stderr リーダースレッドをストリーム書き込みに変更する
-  - `std::thread::spawn` 内で `File::create(path)` → `LineWriter<BufWriter<File>>` を構築する
-  - `std::io::copy(&mut BufReader::new(stream), &mut writer)` でストリームコピーする
-  - `File::create` 失敗時は `tracing::error!(path = %path.display(), error = %e, ...)` を出力してスレッドを終了する（プロセスは継続）
-  - スレッドの `JoinHandle<()>` を `SessionEntry` に格納し、`collect_exited` で join することでファイルの完全書き込みを保証する
-  - _Requirements: 1.1, 1.2, 1.4, 2.1, 4.1, 4.4_
+- [ ] 2.2 実行中の stdout/stderr をログファイルへ継続的に書き出せるようにする
+  - 出力を最後までメモリに貯めず、プロセスの実行中からログへ順次反映する
+  - ログファイルを開けないなど保存に失敗した場合は、プロセス本体は継続しつつ障害を記録する
+  - 終了処理では、ログの書き込み完了を待ってから内容を利用できるようにする
+  - _Requirements: 1.1, 1.2, 1.4, 2.1, 2.2, 2.3, 4.1, 4.4_
 
-- [ ] 2.3 spawn_process から update_run_id 呼び出しを削除し、register に run_id を渡す
-  - `execute.rs` の `spawn_process` 内で `session_mgr.register(issue.id, issue.state, child, run_id)` に変更する
-  - `session_mgr.update_run_id(issue.id, run_id)` の呼び出しを削除する
+- [ ] 2.3 実行開始からセッション登録まで、同じ実行識別子でログ保存先を一貫して決定できるようにする
+  - プロセス生成時に決まった実行識別子を、そのままセッション登録とログ保存先決定に利用する
+  - 実行識別子の関連付けが二重管理にならないよう整理する
   - _Requirements: 1.5_
 
-- [ ] 3. resolve.rs をファイル読み取り方式に変更する
-- [ ] 3.1 dump_session_io 関数を削除する
-  - `fn dump_session_io(...)` 関数本体と、それを呼び出す `process_exited_session` 内の行を削除する
+- [ ] 3. 終了後の処理を、メモリ上の出力ではなく保存済みログを読み取る方式へ切り替える
+- [ ] 3.1 終了処理で、追加の出力ダンプではなく保存済みログをそのまま利用する流れに統一する
+  - 終了時に別経路で出力を複製する処理をなくし、ログ保存とログ読取の責務を明確にする
   - _Requirements: 3.4_
 
-- [ ] 3.2 (P) stdout をファイルから読み取り、読み取り失敗時に mark_failed する
-  - `process_exited_session` 内で `std::fs::read_to_string(&session.stdout_path)` を呼び出す
-  - 失敗した場合は `mark_failed(run_id, format!("stdout log unavailable: {e}"))` を呼び出して早期リターンする
-  - 成功した場合は従来の `parse_pr_creation_output(&stdout)` フローを継続する
+- [ ] 3.2 (P) 標準出力を保存済みログから読み取り、取得できない場合は実行を失敗として扱う
+  - 終了後の解析は保存済みの標準出力を入力として進める
+  - 標準出力ログを読めない場合は、理由を記録して早期に失敗処理へ移る
+  - 読み取りに成功した場合は、従来どおり解析と後続フローを継続する
   - _Requirements: 3.2, 4.2, 4.3_
 
-- [ ] 3.3 (P) stderr スニペット生成をファイル読み取りに変更する
-  - `process_exited_session` 内のプロセス失敗パスで `session.stderr.trim()` の代わりに `std::fs::read_to_string(&session.stderr_path)` を使用する
-  - 読み取り失敗時は空文字列として扱い処理を継続する（stderr 欠落は致命的でない）
-  - _Requirements: 3.3_
+- [ ] 3.3 (P) 標準エラーのスニペット生成も保存済みログをもとに行い、取得できない場合は実行を失敗として扱う
+  - 終了後のエラースニペット生成は保存済みの標準エラーを入力として進める
+  - 標準エラーログを読めない場合は、理由を記録して早期に失敗処理へ移る（空スニペットでの継続は行わない）
+  - _Requirements: 3.3, 4.2, 4.3_
 
-> 3.2 と 3.3 は同じ関数内だが修正箇所が独立しており並行作業可能（P）
+> 3.2 と 3.3 は同じ終了処理内だが修正箇所が独立しており並行作業可能（P）
 
-- [ ] 4. ファイル書き込み失敗フォールバックをテストする
-- [ ] 4.1 (P) リーダースレッドのファイル作成失敗ケースをテストする
-  - `File::create` が失敗する条件（読み取り専用ディレクトリなど）でリーダースレッドが `tracing::error!` を出力してプロセスが継続することを検証する
+- [ ] 4. ファイル書き込み・読み取り失敗時の振る舞いを検証する
+- [ ] 4.1 (P) ログ書き込みに失敗した場合でも、プロセス本体が継続して動作することを確認する
+  - ログファイルを作成できない条件下でも、子プロセスが正常に実行完了することを検証する
+  - 障害発生時にエラー情報（対象パス・エラー詳細）がログに記録されることを確認する
   - _Requirements: 4.1, 4.4_
 
-- [ ] 4.2 (P) resolve フェーズのファイル読み取り失敗ケースをテストする
-  - `stdout_path` が存在しないファイルを指す `ExitedSession` で `process_exited_session` を呼ぶとき `mark_failed` が呼ばれることを検証する
+- [ ] 4.2 (P) 終了処理でログが読み取れない場合に実行失敗として記録されることを確認する
+  - stdout ログが存在しない状態で終了処理を実行したとき、空の内容ではなく失敗として扱われることを検証する
+  - stderr ログが存在しない状態で終了処理を実行したとき、同様に失敗として扱われることを検証する
   - _Requirements: 4.2, 4.3_
 
-- [ ] 5. 既存テストをファイルパスベースに移行する
-- [ ] 5.1 session_manager.rs のテストを更新する
-  - `collect_exited_returns_finished_process` テストで `exited[0].stdout` の文字列比較を `std::fs::read_to_string(&exited[0].stdout_path)` による内容検証に変更する
-  - `register` の引数が変わるため、全テスト内の `mgr.register(...)` 呼び出しに `run_id` を追加する
+- [ ] 5. 既存テストをファイルベースの検証方式に移行する
+- [ ] 5.1 セッション管理のテストをファイル内容の検証に切り替える
+  - 終了済みセッションの出力確認を、メモリ上の文字列比較からファイル読み取りによる内容検証に変更する
+  - セッション登録の呼び出しに実行識別子を含める形に全テストを合わせる
   - _Requirements: 6.1_
 
-- [ ] 5.2 resolve.rs の make_session ヘルパーをファイルフィクスチャ化する
-  - `make_session` ヘルパーを `TempDir` を受け取り、`stdout_path` / `stderr_path` にフィクスチャファイルを作成するように変更する
-  - 既存の PR 作成・mark_failed・branch 検証テスト（T-2.1, T-2.2, T-2.3, T-2.base.1, T-2.base.2）がそのまま動作することを確認する
+- [ ] 5.2 終了処理のテストをファイルフィクスチャを使う形に移行する
+  - テスト用のログファイルを一時ディレクトリ上に準備し、終了セッション情報が保存先を参照するよう変更する
+  - PR 作成・失敗記録・ブランチ検証の各テストが、ファイルパスベースで引き続き動作することを確認する
   - _Requirements: 6.2, 6.4_
 
-- [ ] 5.3 (P) ストリーム書き込みの統合テストを追加する
-  - `spawn_echo` など実プロセスを使ったテストで、プロセス実行中にログファイルが書き込まれることを検証する
-  - `collect_exited` 後にファイル内容を読み取り、期待する出力が含まれることを確認する
+- [ ] 5.3 (P) プロセス実行中にログが書き込まれることを統合テストで確認する
+  - 実際のプロセスを起動してログファイルへの書き込みが行われることを、プロセス終了後のファイル内容で検証する
   - _Requirements: 6.3_

@@ -42,15 +42,13 @@
 | 4.3 | 空文字フォールバック禁止 | ResolvePhase | process_exited_session() | — |
 | 4.4 | error! にパスとエラー詳細を含める | SessionManager | — | — |
 | 5.1 | run-{id}-stdout/stderr.log 命名規則 | SessionManager | — | — |
-| 5.2 | run_id 未確定時は一時ファイル（廃止） | — | — | — |
-| 5.3 | update_run_id でリネーム（廃止） | — | — | — |
-| 5.4 | ログディレクトリ作成 | SessionManager | register() | — |
+| 5.2 | ログディレクトリ作成 | SessionManager | register() | — |
 | 6.1 | session_manager テスト移行 | SessionManager テスト | — | — |
 | 6.2 | resolve テスト make_session 移行 | ResolvePhase テスト | — | — |
 | 6.3 | 統合テストで書き込みを検証 | 統合テスト | — | — |
 | 6.4 | 既存 resolve テスト全通過 | ResolvePhase テスト | — | — |
 
-> 要件 5.2 / 5.3 については research.md の「run_id の確定タイミング」調査の結果、`register` 呼び出し時に run_id が常に確定しているため、一時ファイルによる回避策は不要と判断した。`register` シグネチャに `run_id: i64` を追加する（決定: `register` シグネチャへの run_id 追加）。
+> research.md の「run_id の確定タイミング」調査の結果、`register` 呼び出し時に run_id が常に確定しているため、一時ファイルによる回避策は不要と判断した。要件 1.5 は `register(..., run_id)` にシグネチャを変更してファイルパスを即時確定する方針に更新済み（決定: `register` シグネチャへの run_id 追加）。
 
 ## アーキテクチャ
 
@@ -149,13 +147,13 @@ sequenceDiagram
 
 **フロー決定事項**:
 - ファイル読み取りエラーは `?` で伝搬せず、`mark_failed` を明示的に呼び出して `Ok(())` を返す（呼び出し元の `resolve_exited_sessions` は warn ログを出すが継続する）
-- stderr 読み取りエラーは空スニペット扱いにするか、同様に mark_failed とするかは、stdout 読み取り失敗と同じ方針（mark_failed）を適用する
+- stderr 読み取りエラーも stdout 読み取り失敗と同様に `mark_failed` を適用し、空スニペット扱いでは継続しない
 
 ## コンポーネントとインターフェース
 
 | コンポーネント | ドメイン/レイヤー | 意図 | 要件カバレッジ | 主要依存 |
 |---|---|---|---|---|
-| SessionManager | application | セッション登録・完了収集・ストリーム書き込み | 1.1–1.5, 2.1–2.3, 4.1, 4.4, 5.1, 5.4 | std::fs, std::io, std::thread |
+| SessionManager | application | セッション登録・完了収集・ストリーム書き込み | 1.1–1.5, 2.1–2.3, 4.1, 4.4, 5.1, 5.2 | std::fs, std::io, std::thread |
 | ExitedSession | application | プロセス終了情報 DTO | 3.1 | PathBuf |
 | ResolvePhase | application | 完了セッションの後処理、ファイル読み取り | 3.2–3.4, 4.2–4.3 | std::fs |
 | spawn_process | application | プロセス起動・register 呼び出し | 1.5 | SessionManager |
@@ -167,7 +165,7 @@ sequenceDiagram
 | フィールド | 詳細 |
 |---|---|
 | 意図 | プロセスの登録・完了収集・stdout/stderr ストリーム書き込みを管理する |
-| 要件 | 1.1, 1.2, 1.3, 1.4, 1.5, 2.1, 2.2, 2.3, 4.1, 4.4, 5.1, 5.4 |
+| 要件 | 1.1, 1.2, 1.3, 1.4, 1.5, 2.1, 2.2, 2.3, 4.1, 4.4, 5.1, 5.2 |
 
 **責務と制約**
 - `register` 呼び出し時にリーダースレッドを起動し、`std::io::copy` でファイルへストリームする
@@ -302,7 +300,7 @@ let output = parse_pr_creation_output(&stdout);
 | リーダースレッド: `File::create` 失敗 | システムエラー | `tracing::error!` → スレッド終了、プロセス継続 | ファイル作成失敗でプロセスを止める理由はない |
 | リーダースレッド: `io::copy` 途中失敗 | システムエラー | `tracing::error!` → スレッド終了 | 一部書き込み後の障害は継続不可 |
 | resolve: `read_to_string(stdout_path)` 失敗 | システムエラー | `mark_failed(run_id, "stdout log unavailable: ...")` | ログなしで PR を作るリスクを排除 |
-| resolve: `read_to_string(stderr_path)` 失敗 | システムエラー | stderr スニペットを空文字として扱い、処理継続 | stderr 読み取り失敗は致命的でない（PR 作成は stdout 依存） |
+| resolve: `read_to_string(stderr_path)` 失敗 | システムエラー | `mark_failed(run_id, "stderr log unavailable: ...")` | ログなしでスニペット欠損のまま処理を継続するリスクを排除 |
 
 ### モニタリング
 

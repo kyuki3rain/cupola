@@ -16,7 +16,7 @@
 2. While プロセスが実行中である間、`SessionManager` はメモリ上に stdout/stderr の文字列バッファを保持してはならない。
 3. The `SessionManager` shall `JoinHandle<String>` 型の `stdout_handle` / `stderr_handle` フィールドを `SessionEntry` から削除し、代わりにファイルパス (`PathBuf`) を保持しなければならない。
 4. The `SessionManager` shall stdout/stderr ファイルへのリーダースレッドにおいて `std::io::copy` を使用し、`BufWriter` 経由でバッファリングしてファイルへ書き込まなければならない。
-5. When `register` 呼び出し時点で `run_id` が未確定（`update_run_id` 未呼び出し）の場合、`SessionManager` は一時ファイルを使用して書き込みを開始し、`update_run_id` 呼び出し時に確定パスへリネームしなければならない。
+5. The `SessionManager` shall `register(..., run_id)` 呼び出し時に確定した `run_id` を用いて `.cupola/logs/process-runs/run-{id}-stdout.log` および `.cupola/logs/process-runs/run-{id}-stderr.log` を決定し、一時ファイルや `update_run_id` によるリネームを前提とせずに書き込みを開始しなければならない。
 
 ### Requirement 2: デバッグ目的のリアルタイムログ可視化
 
@@ -57,9 +57,7 @@
 #### 受け入れ基準
 
 1. The システム shall stdout ログを `.cupola/logs/process-runs/run-{run_id}-stdout.log`、stderr ログを `.cupola/logs/process-runs/run-{run_id}-stderr.log` として保存しなければならない。
-2. When `register` 呼び出し時に `run_id` が不明の場合、システムは `tempfile::NamedTempFile` を使用して一時ファイルを作成しなければならない。
-3. When `update_run_id` が呼び出された場合、システムは一時ファイルを確定パスへリネームしなければならない。
-4. The システム shall ログディレクトリ `.cupola/logs/process-runs/` を `register` 時に確実に作成しなければならない。
+2. The システム shall ログディレクトリ `.cupola/logs/process-runs/` を `register` 時に確実に作成しなければならない。
 
 ### Requirement 6: 既存テストの移行
 
