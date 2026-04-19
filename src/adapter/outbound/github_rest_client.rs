@@ -113,7 +113,10 @@ impl OctocrabRestClient {
         let resp = self
             .http_client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", self.token.expose_secret()))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.token.expose_secret()),
+            )
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send()
@@ -299,7 +302,10 @@ impl OctocrabRestClient {
             let resp = self
                 .http_client
                 .get(&url)
-                .header("Authorization", format!("Bearer {}", self.token.expose_secret()))
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", self.token.expose_secret()),
+                )
                 .header("Accept", "application/vnd.github+json")
                 .header("X-GitHub-Api-Version", "2022-11-28")
                 .send()
@@ -364,7 +370,10 @@ impl OctocrabRestClient {
         let resp = self
             .http_client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", self.token.expose_secret()))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.token.expose_secret()),
+            )
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send()
@@ -410,7 +419,10 @@ impl OctocrabRestClient {
         let resp = self
             .http_client
             .delete(&url)
-            .header("Authorization", format!("Bearer {}", self.token.expose_secret()))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.token.expose_secret()),
+            )
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send()

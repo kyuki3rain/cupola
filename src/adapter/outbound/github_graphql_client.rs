@@ -277,7 +277,10 @@ impl GraphQLClient {
         let response = self
             .client
             .post("https://api.github.com/graphql")
-            .header("Authorization", format!("bearer {}", self.token.expose_secret()))
+            .header(
+                "Authorization",
+                format!("bearer {}", self.token.expose_secret()),
+            )
             .header("User-Agent", "cupola")
             .json(payload)
             .send()
