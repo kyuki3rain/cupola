@@ -1933,11 +1933,7 @@ mod tests {
         reg.register(child_pid);
 
         // Poison the mutex by panicking while holding the lock
-        let reg_clone = reg.clone();
-        let _ = std::panic::catch_unwind(move || {
-            let _guard = reg_clone.pids.lock().expect("lock");
-            panic!("intentional mutex poison");
-        });
+        reg.poison_for_test();
 
         // The registry mutex is now poisoned; shutdown_sync should still work via into_inner
         let saved_hook = std::panic::take_hook();

@@ -12,7 +12,7 @@ use crate::domain::state::State;
 /// Arc<Mutex<_>> でラップされているため、clone() で安価に複数の所有者に配布できる。
 #[derive(Clone, Default)]
 pub struct ChildProcessRegistry {
-    pub(crate) pids: Arc<Mutex<HashSet<u32>>>,
+    pids: Arc<Mutex<HashSet<u32>>>,
 }
 
 impl ChildProcessRegistry {
@@ -38,6 +38,35 @@ impl ChildProcessRegistry {
         set.remove(&pid);
     }
 
+    #[cfg(test)]
+    pub fn contains_pid(&self, pid: u32) -> bool {
+        let set = match self.pids.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
+        set.contains(&pid)
+    }
+
+    #[cfg(test)]
+    pub fn pids_is_empty(&self) -> bool {
+        let set = match self.pids.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
+        set.is_empty()
+    }
+
+    /// Poison the internal Mutex by panicking while holding the lock.
+    /// Intended only for tests that verify poisoned-mutex recovery.
+    #[cfg(test)]
+    pub fn poison_for_test(&self) {
+        let clone = self.clone();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = clone.pids.lock().expect("lock");
+            panic!("intentional mutex poison");
+        }));
+    }
+
     /// 全登録プロセスへ SIGTERM → タイムアウト → SIGKILL を同期実行する。
     /// panic hook から呼ばれることを想定しており、async/await を使わない。
     pub fn shutdown_sync(&self, sigterm_timeout: Duration) {
@@ -57,7 +86,9 @@ impl ChildProcessRegistry {
         }
 
         for &pid in &pids {
-            let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
+            if let Ok(raw) = i32::try_from(pid) && raw > 0 {
+                let _ = kill(Pid::from_raw(raw), Signal::SIGTERM);
+            }
         }
 
         let poll_interval = Duration::from_millis(100);
@@ -69,7 +100,13 @@ impl ChildProcessRegistry {
             let alive: Vec<u32> = pids
                 .iter()
                 .copied()
-                .filter(|&pid| kill(Pid::from_raw(pid as i32), None).is_ok())
+                .filter(|&pid| {
+                    i32::try_from(pid)
+                        .ok()
+                        .filter(|&raw| raw > 0)
+                        .map(|raw| kill(Pid::from_raw(raw), None).is_ok())
+                        .unwrap_or(false)
+                })
                 .collect();
 
             if alive.is_empty() {
@@ -78,7 +115,9 @@ impl ChildProcessRegistry {
 
             if Instant::now() >= deadline {
                 for &pid in &alive {
-                    let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
+                    if let Ok(raw) = i32::try_from(pid) && raw > 0 {
+                        let _ = kill(Pid::from_raw(raw), Signal::SIGKILL);
+                    }
                 }
                 return;
             }
@@ -176,11 +215,12 @@ impl SessionManager {
         self.pending = self.pending.saturating_sub(1);
 
         if let Some(mut old_entry) = self.sessions.remove(&issue_id) {
-            if let Some(ref reg) = self.registry {
-                reg.unregister(old_entry.child.id());
-            }
+            let old_pid = old_entry.child.id();
             let _ = old_entry.child.kill();
-            let _ = old_entry.child.wait();
+            let wait_result = old_entry.child.wait();
+            if wait_result.is_ok() && let Some(ref reg) = self.registry {
+                reg.unregister(old_pid);
+            }
         }
 
         let pid = child.id();
@@ -627,22 +667,13 @@ mod tests {
         let reg = ChildProcessRegistry::new();
         reg.register(100);
         reg.register(200);
-        {
-            let set = reg.pids.lock().unwrap();
-            assert!(set.contains(&100));
-            assert!(set.contains(&200));
-        }
+        assert!(reg.contains_pid(100));
+        assert!(reg.contains_pid(200));
         reg.unregister(100);
-        {
-            let set = reg.pids.lock().unwrap();
-            assert!(!set.contains(&100));
-            assert!(set.contains(&200));
-        }
+        assert!(!reg.contains_pid(100));
+        assert!(reg.contains_pid(200));
         reg.unregister(200);
-        {
-            let set = reg.pids.lock().unwrap();
-            assert!(set.is_empty());
-        }
+        assert!(reg.pids_is_empty());
     }
 
     #[test]
@@ -667,12 +698,10 @@ mod tests {
         let pid = child.id();
         mgr.register(1, State::DesignRunning, child);
 
-        let set = reg.pids.lock().unwrap();
         assert!(
-            set.contains(&pid),
+            reg.contains_pid(pid),
             "PID should be in registry after register"
         );
-        drop(set);
 
         mgr.kill_all();
     }
@@ -689,9 +718,8 @@ mod tests {
         let exited = mgr.collect_exited();
         assert_eq!(exited.len(), 1);
 
-        let set = reg.pids.lock().unwrap();
         assert!(
-            !set.contains(&pid),
+            !reg.contains_pid(pid),
             "PID should be removed from registry after collect_exited"
         );
     }
@@ -709,13 +737,12 @@ mod tests {
 
         mgr.kill_all();
 
-        let set = reg.pids.lock().unwrap();
         assert!(
-            !set.contains(&pid1),
+            !reg.contains_pid(pid1),
             "pid1 should be removed after kill_all"
         );
         assert!(
-            !set.contains(&pid2),
+            !reg.contains_pid(pid2),
             "pid2 should be removed after kill_all"
         );
     }
