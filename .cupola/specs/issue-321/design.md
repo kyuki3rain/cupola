@@ -325,20 +325,31 @@ impl ClaudeCodeProcess {
 
 ##### 危険パターン定義
 
-```
-SENSITIVE_PATTERNS: &[&str] = [
-    "GH_TOKEN", "GITHUB_TOKEN",
-    "AWS_*",
-    "AZURE_*",
-    "GOOGLE_*",
-]
-// plus suffix-based patterns: *_API_KEY, *_SECRET, *_TOKEN, *_PASSWORD
-```
+`check_env_allowlist` では、`extra_allow` の各エントリを 2 段階の照合で判定する：
+
+1. **完全一致・プレフィックス一致**（`matches_pattern` を使用）：
+   ```
+   SENSITIVE_PATTERNS: &[&str] = [
+       "GH_TOKEN",     // 完全一致
+       "GITHUB_TOKEN", // 完全一致
+       "AWS_*",        // プレフィックス一致
+       "AZURE_*",      // プレフィックス一致
+       "GOOGLE_*",     // プレフィックス一致
+   ]
+   ```
+
+2. **サフィックス一致**（`ends_with` を使用、`matches_pattern` は使用しない）：
+   ```
+   SENSITIVE_SUFFIX_PATTERNS: &[&str] = [
+       "_API_KEY", "_SECRET", "_TOKEN", "_PASSWORD",
+   ]
+   ```
+   → `extra_allow` のエントリが上記サフィックスで終わる場合に Warn
 
 **実装ノート**
 
 - Integration: `check_config()` で得た `DoctorConfigSummary` を `check_env_allowlist()` に渡す。config ロード失敗時はスキップする（既存の check_config と分離して実装する）
-- Validation: `matches_pattern` と同一のロジックを使用して SENSITIVE_PATTERNS とマッチングする
+- Validation: `SENSITIVE_PATTERNS` は `matches_pattern` で照合（完全一致・プレフィックス `*` 対応）。`SENSITIVE_SUFFIX_PATTERNS` は `extra_allow` の各エントリが当該サフィックスで終わるかを `ends_with` で判定する
 
 ---
 
