@@ -115,27 +115,6 @@ fn strip_closing_keywords(body: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|_| body.to_string())
 }
 
-/// Persist full stdout/stderr of a finished process to
-/// `.cupola/logs/process-runs/run-{run_id}-{stdout|stderr}.log` (best-effort).
-/// This is critical for debugging Claude failures where stderr may be empty
-/// but stdout contains the real diagnostic (e.g. Claude JSON error payload).
-fn dump_session_io(run_id: i64, stdout: &str, stderr: &str) {
-    if run_id <= 0 {
-        return;
-    }
-    let dir = std::path::Path::new(".cupola/logs/process-runs");
-    if let Err(e) = std::fs::create_dir_all(dir) {
-        tracing::warn!(error = %e, "failed to create process-runs log dir");
-        return;
-    }
-    for (name, content) in [("stdout", stdout), ("stderr", stderr)] {
-        let path = dir.join(format!("run-{run_id}-{name}.log"));
-        if let Err(e) = std::fs::write(&path, content) {
-            tracing::warn!(path = %path.display(), error = %e, "failed to write process log");
-        }
-    }
-}
-
 /// Process all exited sessions and update ProcessRun + Issue metadata.
 pub async fn resolve_exited_sessions<G, I, P>(
     github: &G,
@@ -206,11 +185,6 @@ where
         return Ok(());
     }
 
-    // Always dump stdout+stderr to .cupola/logs/process-runs/ before any
-    // success/failure branching. Essential for diagnosing Claude exit code 1
-    // with empty stderr, JSON schema mismatches, etc.
-    dump_session_io(run_id, &session.stdout, &session.stderr);
-
     let is_running_phase = matches!(
         session.registered_state,
         State::DesignRunning | State::ImplementationRunning
@@ -226,18 +200,32 @@ where
             Some(code) => format!("exit code {code}"),
             None => "terminated by signal".to_string(),
         };
-        let stderr_trimmed = session.stderr.trim();
-        let stderr_snippet = if stderr_trimmed.is_empty() {
-            String::new()
-        } else if stderr_trimmed.len() <= STDERR_SNIPPET_MAX {
-            format!(": {stderr_trimmed}")
-        } else {
-            let head: String = stderr_trimmed.chars().take(STDERR_SNIPPET_MAX).collect();
-            format!(": {head}… (truncated)")
-        };
-        let error_message = format!("{exit_repr}{stderr_snippet}");
 
         if run_id > 0 {
+            let stderr = match std::fs::read_to_string(&session.stderr_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!(
+                        path = %session.stderr_path.display(),
+                        error = %e,
+                        "failed to read stderr log"
+                    );
+                    process_repo
+                        .mark_failed(run_id, Some(format!("stderr log unavailable: {e}")))
+                        .await?;
+                    return Ok(());
+                }
+            };
+            let stderr_trimmed = stderr.trim();
+            let stderr_snippet = if stderr_trimmed.is_empty() {
+                String::new()
+            } else if stderr_trimmed.len() <= STDERR_SNIPPET_MAX {
+                format!(": {stderr_trimmed}")
+            } else {
+                let head: String = stderr_trimmed.chars().take(STDERR_SNIPPET_MAX).collect();
+                format!(": {head}… (truncated)")
+            };
+            let error_message = format!("{exit_repr}{stderr_snippet}");
             process_repo
                 .mark_failed(run_id, Some(error_message))
                 .await?;
@@ -248,7 +236,24 @@ where
     // Process succeeded
     if is_running_phase {
         // Running phase: parse PR creation output, create PR on GitHub
-        let output = parse_pr_creation_output(&session.stdout);
+        let stdout = match std::fs::read_to_string(&session.stdout_path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(
+                    path = %session.stdout_path.display(),
+                    error = %e,
+                    "failed to read stdout log"
+                );
+                if run_id > 0 {
+                    process_repo
+                        .mark_failed(run_id, Some(format!("stdout log unavailable: {e}")))
+                        .await?;
+                }
+                return Ok(());
+            }
+        };
+
+        let output = parse_pr_creation_output(&stdout);
         let (title, body) = match output {
             Some(o) => (
                 o.pr_title.unwrap_or_else(|| {
@@ -340,7 +345,24 @@ where
         }
     } else if is_fixing_phase {
         // Fixing phase: parse fixing output, reply to threads
-        let output = parse_fixing_output(&session.stdout);
+        let stdout = match std::fs::read_to_string(&session.stdout_path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(
+                    path = %session.stdout_path.display(),
+                    error = %e,
+                    "failed to read stdout log"
+                );
+                if run_id > 0 {
+                    process_repo
+                        .mark_failed(run_id, Some(format!("stdout log unavailable: {e}")))
+                        .await?;
+                }
+                return Ok(());
+            }
+        };
+
+        let output = parse_fixing_output(&stdout);
         if let Some(fixing) = output {
             for thread in &fixing.threads {
                 if let Err(e) = github
@@ -458,6 +480,7 @@ mod tests {
     use crate::domain::task_weight::TaskWeight;
     use anyhow::Result;
     use chrono::{DateTime, Utc};
+    use std::path::PathBuf;
     use std::process::{Command, Stdio};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -823,12 +846,56 @@ mod tests {
         std::process::ExitStatus::from_raw(0)
     }
 
-    fn make_session(run_id: i64, state: State) -> ExitedSession {
+    fn failure_exit_status() -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(1 << 8) // exit code 1
+    }
+
+    /// Fixture that keeps the TempDir alive for the duration of the test.
+    struct SessionFixture {
+        _tmpdir: tempfile::TempDir,
+        pub session: ExitedSession,
+    }
+
+    fn make_session(run_id: i64, state: State) -> SessionFixture {
+        let tmpdir = tempfile::tempdir().expect("temp dir");
+        let stdout_path = tmpdir.path().join("stdout.log");
+        let stderr_path = tmpdir.path().join("stderr.log");
+        std::fs::write(&stdout_path, "").expect("write stdout");
+        std::fs::write(&stderr_path, "").expect("write stderr");
+
+        SessionFixture {
+            _tmpdir: tmpdir,
+            session: ExitedSession {
+                issue_id: 1,
+                exit_status: success_exit_status(),
+                stdout_path,
+                stderr_path,
+                log_id: 0,
+                run_id,
+                registered_state: state,
+            },
+        }
+    }
+
+    fn make_session_missing_files(run_id: i64, state: State) -> ExitedSession {
         ExitedSession {
             issue_id: 1,
             exit_status: success_exit_status(),
-            stdout: String::new(),
-            stderr: String::new(),
+            stdout_path: PathBuf::from("/tmp/nonexistent-cupola-test-12345-stdout.log"),
+            stderr_path: PathBuf::from("/tmp/nonexistent-cupola-test-12345-stderr.log"),
+            log_id: 0,
+            run_id,
+            registered_state: state,
+        }
+    }
+
+    fn make_failed_session_missing_stderr(run_id: i64, state: State) -> ExitedSession {
+        ExitedSession {
+            issue_id: 1,
+            exit_status: failure_exit_status(),
+            stdout_path: PathBuf::from("/tmp/nonexistent-cupola-test-12345-stdout.log"),
+            stderr_path: PathBuf::from("/tmp/nonexistent-cupola-test-12345-stderr.log"),
             log_id: 0,
             run_id,
             registered_state: state,
@@ -869,10 +936,16 @@ mod tests {
         let process_repo = MockProcessRepo::new();
         let calls = process_repo.calls.clone();
         let config = unit_config();
-        let session = make_session(42, State::DesignRunning);
+        let fixture = make_session(42, State::DesignRunning);
 
-        let result =
-            process_exited_session(&github, &issue_repo, &process_repo, &config, &session).await;
+        let result = process_exited_session(
+            &github,
+            &issue_repo,
+            &process_repo,
+            &config,
+            &fixture.session,
+        )
+        .await;
 
         assert!(result.is_ok(), "expected Ok(()), got {result:?}");
         let log = calls.lock().unwrap();
@@ -908,10 +981,16 @@ mod tests {
         let process_repo = MockProcessRepo::new();
         let calls = process_repo.calls.clone();
         let config = unit_config();
-        let session = make_session(7, State::ImplementationRunning);
+        let fixture = make_session(7, State::ImplementationRunning);
 
-        let result =
-            process_exited_session(&github, &issue_repo, &process_repo, &config, &session).await;
+        let result = process_exited_session(
+            &github,
+            &issue_repo,
+            &process_repo,
+            &config,
+            &fixture.session,
+        )
+        .await;
 
         assert!(result.is_ok(), "expected Ok(()), got {result:?}");
         let log = calls.lock().unwrap();
@@ -947,10 +1026,16 @@ mod tests {
         let process_repo = MockProcessRepo::new();
         let calls = process_repo.calls.clone();
         let config = unit_config();
-        let session = make_session(0, State::DesignRunning);
+        let fixture = make_session(0, State::DesignRunning);
 
-        let result =
-            process_exited_session(&github, &issue_repo, &process_repo, &config, &session).await;
+        let result = process_exited_session(
+            &github,
+            &issue_repo,
+            &process_repo,
+            &config,
+            &fixture.session,
+        )
+        .await;
 
         assert!(result.is_ok(), "expected Ok(()), got {result:?}");
         let log = calls.lock().unwrap();
@@ -967,7 +1052,8 @@ mod tests {
     /// T-3.RS.1: kill_stalled kills a long-running process
     #[test]
     fn kill_stalled_kills_long_running() {
-        let mut mgr = SessionManager::new();
+        let tmpdir = tempfile::tempdir().expect("temp dir");
+        let mut mgr = SessionManager::with_log_dir(tmpdir.path().to_path_buf());
         let child = Command::new("sleep")
             .arg("60")
             .stdout(Stdio::piped())
@@ -975,7 +1061,7 @@ mod tests {
             .spawn()
             .expect("spawn");
 
-        mgr.register(1, State::DesignRunning, child);
+        mgr.register(1, State::DesignRunning, child, 2001);
 
         kill_stalled(&mut mgr, 0); // 0 secs timeout → everything is stalled
 
@@ -1042,10 +1128,16 @@ mod tests {
         };
         let process_repo = MockProcessRepo::new();
         let config = unit_config();
-        let session = make_session(1, State::DesignRunning);
+        let fixture = make_session(1, State::DesignRunning);
 
-        let _ =
-            process_exited_session(&github, &issue_repo, &process_repo, &config, &session).await;
+        let _ = process_exited_session(
+            &github,
+            &issue_repo,
+            &process_repo,
+            &config,
+            &fixture.session,
+        )
+        .await;
 
         let log = calls.lock().unwrap();
         assert_eq!(log.find_pr_calls.len(), 1, "find_pr should be called once");
@@ -1067,10 +1159,16 @@ mod tests {
         };
         let process_repo = MockProcessRepo::new();
         let config = unit_config();
-        let session = make_session(1, State::ImplementationRunning);
+        let fixture = make_session(1, State::ImplementationRunning);
 
-        let _ =
-            process_exited_session(&github, &issue_repo, &process_repo, &config, &session).await;
+        let _ = process_exited_session(
+            &github,
+            &issue_repo,
+            &process_repo,
+            &config,
+            &fixture.session,
+        )
+        .await;
 
         let log = calls.lock().unwrap();
         assert_eq!(log.find_pr_calls.len(), 1, "find_pr should be called once");
@@ -1174,10 +1272,15 @@ mod tests {
                 };
                 let process_repo = MockProcessRepo::new();
                 let config = unit_config();
-                let session = make_session(99, State::DesignRunning);
-                let _ =
-                    process_exited_session(&github, &issue_repo, &process_repo, &config, &session)
-                        .await;
+                let fixture = make_session(99, State::DesignRunning);
+                let _ = process_exited_session(
+                    &github,
+                    &issue_repo,
+                    &process_repo,
+                    &config,
+                    &fixture.session,
+                )
+                .await;
             });
         });
 
@@ -1203,7 +1306,8 @@ mod tests {
     /// T-3.RS.2: kill_stalled does not kill fresh process
     #[test]
     fn kill_stalled_skips_fresh_process() {
-        let mut mgr = SessionManager::new();
+        let tmpdir = tempfile::tempdir().expect("temp dir");
+        let mut mgr = SessionManager::with_log_dir(tmpdir.path().to_path_buf());
         let child = Command::new("sleep")
             .arg("60")
             .stdout(Stdio::piped())
@@ -1211,7 +1315,7 @@ mod tests {
             .spawn()
             .expect("spawn");
 
-        mgr.register(1, State::DesignRunning, child);
+        mgr.register(1, State::DesignRunning, child, 2002);
 
         kill_stalled(&mut mgr, 3600); // 1hr timeout → nothing stalled
 
@@ -1219,5 +1323,77 @@ mod tests {
         assert!(exited.is_empty(), "fresh process should not be killed");
 
         mgr.kill_all();
+    }
+
+    // ── Unit tests: task 4.2 (ログ読み取り失敗 → mark_failed) ────────────────
+
+    /// T-4.2a: stdout ログが読み取れない場合に mark_failed が呼ばれること（running phase）
+    #[tokio::test]
+    async fn stdout_log_unavailable_calls_mark_failed_in_running_phase() {
+        let github = GhBranchRecorder::new();
+        let issue_repo = MockIssueRepo {
+            issue: make_issue(State::DesignRunning),
+        };
+        let process_repo = MockProcessRepo::new();
+        let calls = process_repo.calls.clone();
+        let config = unit_config();
+        let session = make_session_missing_files(55, State::DesignRunning);
+
+        let result =
+            process_exited_session(&github, &issue_repo, &process_repo, &config, &session).await;
+
+        assert!(result.is_ok(), "expected Ok(()), got {result:?}");
+        let log = calls.lock().unwrap();
+        assert_eq!(
+            log.mark_failed.len(),
+            1,
+            "mark_failed should be called when stdout log is unavailable"
+        );
+        assert_eq!(log.mark_failed[0].0, 55, "run_id should match");
+        assert!(
+            log.mark_failed[0]
+                .1
+                .as_deref()
+                .unwrap_or("")
+                .contains("stdout log unavailable"),
+            "error_message should indicate stdout log unavailable"
+        );
+        assert!(
+            log.mark_succeeded.is_empty(),
+            "mark_succeeded must not be called"
+        );
+    }
+
+    /// T-4.2b: stderr ログが読み取れない場合に mark_failed が呼ばれること（failed process）
+    #[tokio::test]
+    async fn stderr_log_unavailable_calls_mark_failed_on_process_failure() {
+        let github = GhBranchRecorder::new();
+        let issue_repo = MockIssueRepo {
+            issue: make_issue(State::DesignRunning),
+        };
+        let process_repo = MockProcessRepo::new();
+        let calls = process_repo.calls.clone();
+        let config = unit_config();
+        let session = make_failed_session_missing_stderr(66, State::DesignRunning);
+
+        let result =
+            process_exited_session(&github, &issue_repo, &process_repo, &config, &session).await;
+
+        assert!(result.is_ok(), "expected Ok(()), got {result:?}");
+        let log = calls.lock().unwrap();
+        assert_eq!(
+            log.mark_failed.len(),
+            1,
+            "mark_failed should be called when stderr log is unavailable"
+        );
+        assert_eq!(log.mark_failed[0].0, 66, "run_id should match");
+        assert!(
+            log.mark_failed[0]
+                .1
+                .as_deref()
+                .unwrap_or("")
+                .contains("stderr log unavailable"),
+            "error_message should indicate stderr log unavailable"
+        );
     }
 }

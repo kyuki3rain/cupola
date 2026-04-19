@@ -305,7 +305,7 @@ async fn session_manager_lifecycle() {
         .spawn()
         .expect("spawn echo");
 
-    mgr.register(999, State::DesignRunning, child);
+    mgr.register(999, State::DesignRunning, child, 9991);
     assert!(mgr.is_running(999));
 
     // Wait for it to finish
@@ -315,7 +315,8 @@ async fn session_manager_lifecycle() {
     assert_eq!(exited.len(), 1);
     assert_eq!(exited[0].issue_id, 999);
     assert!(exited[0].exit_status.success());
-    assert!(exited[0].stdout.contains("integration test output"));
+    let stdout = std::fs::read_to_string(&exited[0].stdout_path).expect("stdout log");
+    assert!(stdout.contains("integration test output"));
     assert!(!mgr.is_running(999));
 }
 
@@ -334,7 +335,7 @@ async fn session_manager_stall_detection() {
         .spawn()
         .expect("spawn sleep");
 
-    mgr.register(888, State::DesignRunning, child);
+    mgr.register(888, State::DesignRunning, child, 8881);
 
     // Immediate stall check with 0 timeout → stalled
     let stalled = mgr.find_stalled(Duration::from_nanos(1));
@@ -461,9 +462,9 @@ async fn session_count_decreases_after_process_exit() {
         .spawn()
         .expect("spawn");
 
-    mgr.register(1, State::DesignRunning, echo1);
-    mgr.register(2, State::DesignRunning, echo2);
-    mgr.register(3, State::ImplementationRunning, sleep);
+    mgr.register(1, State::DesignRunning, echo1, 7001);
+    mgr.register(2, State::DesignRunning, echo2, 7002);
+    mgr.register(3, State::ImplementationRunning, sleep, 7003);
     assert_eq!(mgr.count(), 3);
 
     // Wait for echo processes to finish
@@ -668,8 +669,7 @@ async fn two_concurrent_sessions_github_error_isolated_per_session() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn child_a");
-    session_mgr.register(id_a, State::DesignRunning, child_a);
-    session_mgr.update_run_id(id_a, run_id_a);
+    session_mgr.register(id_a, State::DesignRunning, child_a, run_id_a);
 
     let child_b = Command::new("echo")
         .arg("")
@@ -677,8 +677,7 @@ async fn two_concurrent_sessions_github_error_isolated_per_session() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn child_b");
-    session_mgr.register(id_b, State::DesignRunning, child_b);
-    session_mgr.update_run_id(id_b, run_id_b);
+    session_mgr.register(id_b, State::DesignRunning, child_b, run_id_b);
 
     // Wait for both processes to finish
     std::thread::sleep(std::time::Duration::from_millis(300));

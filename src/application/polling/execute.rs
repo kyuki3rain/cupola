@@ -583,8 +583,7 @@ where
     {
         Ok((child, run_id, pid)) => {
             // register() consumes the pending reservation.
-            session_mgr.register(issue.id, issue.state, child);
-            session_mgr.update_run_id(issue.id, run_id);
+            session_mgr.register(issue.id, issue.state, child, run_id);
             tracing::info!(
                 issue_number = issue.github_issue_number,
                 run_id,
