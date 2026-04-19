@@ -1,9 +1,9 @@
 # Implementation Plan
 
-- [ ] 1. tokio::select! を biased 化してシグナルアームを先頭に配置する
-  - `PollingUseCase::run()` 内の `tokio::select!` に `biased;` キーワードを追加する
-  - SIGINT・SIGTERM・SIGHUP の各シグナルアームを tick アームより前に並べ替える
-  - 各シグナルアーム内のハンドラロジック（`graceful_shutdown` 呼び出し・`sigint_count` 更新）は変更しない
+- [ ] 1. ポーリングループで同時 ready 時にシグナルを優先するようにする
+  - シグナルと tick が同時 ready になった場合に、常にシグナルが選択されるよう優先制御を追加する
+  - SIGINT・SIGTERM・SIGHUP の各シグナルを tick より高い優先度で評価する
+  - 既存のシグナルハンドラおよびシャットダウンロジックは変更しない
   - _Requirements: 1.1, 1.2, 1.3, 1.4_
 
 - [ ] 2. 既存テストで動作を検証する
