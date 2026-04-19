@@ -86,7 +86,9 @@ impl ChildProcessRegistry {
         }
 
         for &pid in &pids {
-            if let Ok(raw) = i32::try_from(pid) && raw > 0 {
+            if let Ok(raw) = i32::try_from(pid)
+                && raw > 0
+            {
                 let _ = kill(Pid::from_raw(raw), Signal::SIGTERM);
             }
         }
@@ -115,7 +117,9 @@ impl ChildProcessRegistry {
 
             if Instant::now() >= deadline {
                 for &pid in &alive {
-                    if let Ok(raw) = i32::try_from(pid) && raw > 0 {
+                    if let Ok(raw) = i32::try_from(pid)
+                        && raw > 0
+                    {
                         let _ = kill(Pid::from_raw(raw), Signal::SIGKILL);
                     }
                 }
@@ -218,7 +222,9 @@ impl SessionManager {
             let old_pid = old_entry.child.id();
             let _ = old_entry.child.kill();
             let wait_result = old_entry.child.wait();
-            if wait_result.is_ok() && let Some(ref reg) = self.registry {
+            if wait_result.is_ok()
+                && let Some(ref reg) = self.registry
+            {
                 reg.unregister(old_pid);
             }
         }
