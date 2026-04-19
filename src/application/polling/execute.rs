@@ -230,7 +230,26 @@ where
                 "CI fix limit reached ({} cycles). Automatic fixing has stopped.",
                 config.max_ci_fix_cycles
             );
-            github.comment_on_issue(n, &msg).await?;
+            match github.comment_on_issue(n, &msg).await {
+                Ok(()) => {
+                    issue_repo
+                        .update_state_and_metadata(
+                            issue.id,
+                            &MetadataUpdates {
+                                ci_fix_limit_notified: Some(true),
+                                ..Default::default()
+                            },
+                        )
+                        .await?;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        issue_number = n,
+                        error = %e,
+                        "failed to post ci-fix-limit comment; will retry next cycle"
+                    );
+                }
+            }
         }
 
         Effect::SpawnInit => {
@@ -1592,6 +1611,7 @@ mod tests {
             weight: crate::domain::task_weight::TaskWeight::Medium,
             worktree_path: Some(wt_path.to_string()),
             ci_fix_count: 0,
+            ci_fix_limit_notified: false,
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
@@ -1707,6 +1727,7 @@ mod tests {
             weight: crate::domain::task_weight::TaskWeight::Medium,
             worktree_path: None,
             ci_fix_count: 0,
+            ci_fix_limit_notified: false,
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,

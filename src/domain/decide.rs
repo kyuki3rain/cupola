@@ -678,7 +678,7 @@ fn decide_implementation_review_waiting(
     }
     if impl_pr.ci_status == CiStatus::Failure {
         if snap.ci_fix_exhausted {
-            if prev.ci_fix_count == cfg.max_ci_fix_cycles {
+            if prev.ci_fix_count >= cfg.max_ci_fix_cycles && !prev.ci_fix_limit_notified {
                 effects.push(Effect::PostCiFixLimitComment);
                 metadata_updates.ci_fix_count = Some(prev.ci_fix_count + 1);
             }
@@ -690,7 +690,7 @@ fn decide_implementation_review_waiting(
     }
     if impl_pr.has_conflict {
         if snap.ci_fix_exhausted {
-            if prev.ci_fix_count == cfg.max_ci_fix_cycles {
+            if prev.ci_fix_count >= cfg.max_ci_fix_cycles && !prev.ci_fix_limit_notified {
                 effects.push(Effect::PostCiFixLimitComment);
                 metadata_updates.ci_fix_count = Some(prev.ci_fix_count + 1);
             }
