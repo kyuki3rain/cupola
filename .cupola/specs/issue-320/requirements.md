@@ -27,13 +27,13 @@ attacker は collaborator である必要すらない。Issue を立てた本人
 
 #### 受け入れ条件
 
-1.1. The system shall maintain a nullable `body_hash TEXT` column in the `issues` table.
+1.1. The system shall `issues` テーブルに nullable な `body_hash TEXT` カラムを保持する。
 
-1.2. The system shall include a nullable `body_hash: Option<String>` field in the `Issue` domain entity.
+1.2. The system shall `Issue` ドメインエンティティに nullable な `body_hash: Option<String>` フィールドを含める。
 
-1.3. The system shall include a nullable `body_hash: Option<Option<String>>` field in `MetadataUpdates` to support sparse DB updates; `Some(Some(hash))` sets the value, `Some(None)` clears it, and `None` leaves it unchanged.
+1.3. The system shall スパース DB 更新をサポートするために `MetadataUpdates` に nullable な `body_hash: Option<Option<String>>` フィールドを含める。`Some(Some(hash))` は値を設定し、`Some(None)` はクリアし、`None` は変更しない。
 
-1.4. When the `issues` table lacks the `body_hash` column on startup, the system shall add the column via an idempotent, backward-compatible migration without data loss.
+1.4. When the `issues` table lacks the `body_hash` column on startup, the system shall データロスなしに冪等で後方互換のマイグレーションによってカラムを追加する。
 
 ---
 
@@ -43,9 +43,9 @@ attacker は collaborator である必要すらない。Issue を立てた本人
 
 #### 受け入れ条件
 
-2.1. When the `SpawnInit` effect is executed and the issue body is successfully fetched from GitHub, the system shall compute a SHA-256 hex digest of the body and persist it in `body_hash` via `IssueRepository.update_state_and_metadata`.
+2.1. When the `SpawnInit` effect is executed and the issue body is successfully fetched from GitHub, the system shall 本文の SHA-256 hex ダイジェストを計算し、`IssueRepository.update_state_and_metadata` を介して `body_hash` に永続化する。
 
-2.2. When the hash is saved during `SpawnInit`, the system shall update the in-memory `Issue.body_hash` field to reflect the stored value so that the current polling cycle reflects the updated hash.
+2.2. When the hash is saved during `SpawnInit`, the system shall インメモリの `Issue.body_hash` フィールドを更新して保存された値を反映させ、現在のポーリングサイクルに更新済みハッシュが反映されるようにする。
 
 ---
 
@@ -55,11 +55,11 @@ attacker は collaborator である必要すらない。Issue を立てた本人
 
 #### 受け入れ条件
 
-3.1. While `Issue.body_hash` is `Some(saved_hash)`, when `SpawnProcess` is about to execute, the system shall re-fetch the current issue body and compute its SHA-256 hex digest.
+3.1. While `Issue.body_hash` is `Some(saved_hash)`, when `SpawnProcess` is about to execute, the system shall 現在の Issue 本文を再取得してその SHA-256 hex ダイジェストを計算する。
 
-3.2. If the computed hash differs from the stored `body_hash`, the system shall treat this as a tampering event and abort the spawn by returning `BodyTamperedError`.
+3.2. If the computed hash differs from the stored `body_hash`, the system shall これを改変イベントとして扱い、`BodyTamperedError` を返して spawn を中断する。
 
-3.3. While `Issue.body_hash` is `None`, the system shall skip the hash comparison and proceed with the spawn normally (backward-compatible behavior for issues initialized before this feature).
+3.3. While `Issue.body_hash` is `None`, the system shall ハッシュ比較をスキップして通常通り spawn を続行する（本機能導入前に初期化された Issue の後方互換動作）。
 
 ---
 
@@ -69,13 +69,13 @@ attacker は collaborator である必要すらない。Issue を立てた本人
 
 #### 受け入れ条件
 
-4.1. If body tampering is detected, the system shall transition the issue state to `Cancelled` in the database.
+4.1. If body tampering is detected, the system shall Issue の状態をデータベース上で `Cancelled` に遷移させる。
 
-4.2. If body tampering is detected, the system shall remove the `agent:ready` label from the GitHub issue (best-effort; label removal failure is logged as `warn!` and does not abort).
+4.2. If body tampering is detected, the system shall GitHub Issue から `agent:ready` ラベルを削除する（ベストエフォート；ラベル削除の失敗は `warn!` ログに記録され、処理を中断しない）。
 
-4.3. If body tampering is detected, the system shall post a notification comment on the GitHub issue explaining the reason for cancellation and the steps required to resume processing (best-effort; comment failure is logged as `warn!` and does not abort).
+4.3. If body tampering is detected, the system shall GitHub Issue にキャンセル理由と処理再開に必要な手順を説明する通知コメントを投稿する（ベストエフォート；コメント失敗は `warn!` ログに記録され、処理を中断しない）。
 
-4.4. If body tampering is detected, the system shall emit a `warn!` tracing event including the issue number and a description of the tampering event.
+4.4. If body tampering is detected, the system shall Issue 番号と改変イベントの説明を含む `warn!` トレースイベントを発火する。
 
 ---
 
@@ -85,9 +85,9 @@ attacker は collaborator である必要すらない。Issue を立てた本人
 
 #### 受け入れ条件
 
-5.1. When `agent:ready` is re-applied to a Cancelled issue by a trusted user, the system shall restart the initialization flow (SpawnInit effect), which re-fetches the current issue body and saves the updated hash as the new approval snapshot.
+5.1. When `agent:ready` is re-applied to a Cancelled issue by a trusted user, the system shall 初期化フロー（SpawnInit エフェクト）を再開し、現在の Issue 本文を再取得して更新済みハッシュを新しい承認スナップショットとして保存する。
 
-5.2. When the re-approve flow completes successfully, the system shall continue subsequent spawns comparing against the newly saved hash.
+5.2. When the re-approve flow completes successfully, the system shall 新しく保存されたハッシュと照合しながら後続の spawn を続行する。
 
 ---
 
@@ -97,14 +97,14 @@ attacker は collaborator である必要すらない。Issue を立てた本人
 
 #### 受け入れ条件
 
-6.1. The system documentation shall state that the `agent:ready` label applicant bears responsibility for approving the issue body content at the time of labeling.
+6.1. The system documentation shall `agent:ready` ラベルの付与者がラベル付与時点での Issue 本文内容の承認に責任を負うことを記載する。
 
-6.2. The system documentation shall state that Issue authors can edit their own issue body regardless of `author_association`.
+6.2. The system documentation shall Issue の作成者が `author_association` に関係なく自分の Issue 本文を編集できることを記載する。
 
-6.3. The system documentation shall explain the hash-based body tampering detection mechanism and the system's behavior upon detection (Cancelled transition, label removal, comment notification).
+6.3. The system documentation shall ハッシュベースの本文改変検知メカニズムと検知時のシステム動作（Cancelled 遷移、ラベル削除、コメント通知）を説明する。
 
-6.4. The system documentation shall state that in-progress change requests should be submitted via PR review comments, not by editing the issue body.
+6.4. The system documentation shall 進行中の変更要求は Issue 本文の編集ではなく PR レビューコメント経由で送信すべきことを記載する。
 
-6.5. The system documentation shall explain that the issue body is re-fetched on each spawn but rejected if the SHA-256 hash does not match the saved value.
+6.5. The system documentation shall Issue 本文は各 spawn で再取得されるが、SHA-256 ハッシュが保存値と一致しない場合は拒否されることを説明する。
 
-6.6. The system documentation shall note that collaborator+ users also have issue body edit access, and that granting collaborator status effectively extends the trust boundary.
+6.6. The system documentation shall collaborator 以上のユーザーも Issue 本文の編集権限を持ち、collaborator ステータスを付与することは実質的に信頼境界を広げる行為であることを記載する。

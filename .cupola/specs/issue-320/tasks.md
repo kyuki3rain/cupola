@@ -7,7 +7,7 @@
   - `Issue` 構造体リテラルを使う既存テスト（`issue_has_correct_fields` 等）に `body_hash: None` を追加してコンパイルエラーを解消する
   - `MetadataUpdates` 構造体に `body_hash: Option<Option<String>>` フィールドを追加する
   - `MetadataUpdates::apply_to` で `body_hash` の適用ロジック（`Some(Some(h))` でセット、`Some(None)` でクリア）を追加する
-  - `MetadataUpdates` 関連のユニットテスト（`metadata_updates_has_correct_fields`、`default_constructed`、`apply_to_*`）を更新する
+  - `MetadataUpdates` の既定値・フィールド保持・更新適用の検証を見直し、`body_hash` の設定・クリア・未変更が正しく扱われることを確認する
   - _Requirements: 1.2, 1.3_
 
 - [ ] 1.2 (P) SQLite スキーマとリポジトリに `body_hash` サポートを追加する
@@ -83,13 +83,3 @@
   - `body_hash = None`: ハッシュ比較をスキップして spawn が成功するケースを検証する
   - SpawnInit 後に body_hash が正しく保存されること（`issue.body_hash` がインメモリで更新されていること）を検証する
   - _Requirements: 3.1, 3.2, 3.3, 4.1, 4.2, 4.3, 4.4_
-
-- [ ] 5. SECURITY.md の更新
-- [ ] 5.1 SECURITY.md の `Prompt Injection Risk` セクションを拡充する
-  - `agent:ready` 付与者は Issue 本文の内容承認者として責任を負うことを明示する
-  - Issue 本文 author は author_association に関係なく自分の Issue 本文を常に編集可能であることを明示する
-  - hash 比較による改変検知機能（SHA-256 hex ダイジスト）と改変検知時の動作（Cancelled 遷移・`agent:ready` ラベル削除・通知コメント投稿）を説明する
-  - 進行中の修正要求は PR レビューコメント経由で行うべきことを明示する（Issue 本文の編集ではなく）
-  - Issue 本文は各 spawn で re-fetch されるが、ハッシュ比較により改変は拒否される旨を説明する
-  - collaborator+ ユーザーも Issue 本文の編集権を持つため、collaborator 権限を付与することは信頼境界を広げる行為であることを認識する旨を明示する
-  - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6_
