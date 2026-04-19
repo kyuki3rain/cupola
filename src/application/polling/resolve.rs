@@ -219,7 +219,9 @@ where
                     }
                 };
                 // Limit read to avoid OOM on large log files; only a snippet is needed.
-                let byte_limit = (STDERR_SNIPPET_MAX as u64).saturating_mul(4).saturating_add(1);
+                let byte_limit = (STDERR_SNIPPET_MAX as u64)
+                    .saturating_mul(4)
+                    .saturating_add(1);
                 let mut buf = String::new();
                 if let Err(e) = std::io::BufReader::new(file)
                     .take(byte_limit)
@@ -1374,9 +1376,14 @@ mod tests {
         let config = unit_config();
         let fixture = make_session_missing_files(55, State::DesignRunning);
 
-        let result =
-            process_exited_session(&github, &issue_repo, &process_repo, &config, &fixture.session)
-                .await;
+        let result = process_exited_session(
+            &github,
+            &issue_repo,
+            &process_repo,
+            &config,
+            &fixture.session,
+        )
+        .await;
 
         assert!(result.is_ok(), "expected Ok(()), got {result:?}");
         let log = calls.lock().unwrap();
@@ -1412,9 +1419,14 @@ mod tests {
         let config = unit_config();
         let fixture = make_failed_session_missing_stderr(66, State::DesignRunning);
 
-        let result =
-            process_exited_session(&github, &issue_repo, &process_repo, &config, &fixture.session)
-                .await;
+        let result = process_exited_session(
+            &github,
+            &issue_repo,
+            &process_repo,
+            &config,
+            &fixture.session,
+        )
+        .await;
 
         assert!(result.is_ok(), "expected Ok(()), got {result:?}");
         let log = calls.lock().unwrap();
