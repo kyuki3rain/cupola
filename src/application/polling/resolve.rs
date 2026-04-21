@@ -503,7 +503,6 @@ mod tests {
     use crate::domain::task_weight::TaskWeight;
     use anyhow::Result;
     use chrono::{DateTime, Utc};
-    use std::path::PathBuf;
     use std::process::{Command, Stdio};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
