@@ -214,8 +214,15 @@ pub async fn run(cli: Cli) -> Result<()> {
             } else {
                 3
             };
-            let db =
-                SqliteConnection::open(&db_path).or_else(|_| SqliteConnection::open_in_memory())?;
+            let db = SqliteConnection::open(&db_path).with_context(|| {
+                format!("failed to open sqlite database at {}", db_path.display())
+            })?;
+            db.init_schema().with_context(|| {
+                format!(
+                    "failed to initialize sqlite schema for doctor at {}",
+                    db_path.display()
+                )
+            })?;
             let issue_repo = SqliteIssueRepository::new(db);
             let use_case = DoctorUseCase::new(loader, runner, issue_repo, max_ci_fix_cycles);
             let results = use_case.run(&config).await;
