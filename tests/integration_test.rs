@@ -271,6 +271,7 @@ fn _new_issue(issue_number: u64) -> Issue {
         close_finished: false,
         consecutive_failures_epoch: None,
         last_pr_review_submitted_at: None,
+        body_hash: None,
         feature_name: format!("issue-{issue_number}"),
         weight: cupola::domain::task_weight::TaskWeight::Medium,
         created_at: chrono::Utc::now(),
@@ -630,6 +631,7 @@ async fn two_concurrent_sessions_github_error_isolated_per_session() {
         close_finished: false,
         consecutive_failures_epoch: None,
         last_pr_review_submitted_at: None,
+        body_hash: None,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
@@ -648,6 +650,7 @@ async fn two_concurrent_sessions_github_error_isolated_per_session() {
         close_finished: false,
         consecutive_failures_epoch: None,
         last_pr_review_submitted_at: None,
+        body_hash: None,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };

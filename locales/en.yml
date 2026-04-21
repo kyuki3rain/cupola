@@ -7,3 +7,4 @@ issue_comment:
   cleanup_done: "Cleanup executed"
   retry_exhausted: "Retry limit reached (%{count} times). Cleanup executed.\n\nError: %{error}"
   unknown_error: "unknown"
+  body_tampered: "⚠️ **Issue body tampering detected**\n\nThe issue body was edited after `agent:ready` was applied. Processing has been stopped for security reasons.\n\n**To resume processing:**\n1. Review the current issue body content\n2. If the content is acceptable, have a trusted user re-apply the `agent:ready` label\n\nRe-applying the label will resume processing with the current body content."

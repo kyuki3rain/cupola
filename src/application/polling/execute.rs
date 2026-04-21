@@ -7,6 +7,7 @@ use std::process::Child;
 use std::time::Duration;
 
 use anyhow::Result;
+use sha2::Digest;
 
 use crate::application::init_task_manager::InitTaskManager;
 use crate::application::io::{clear_inputs_dir, write_issue_input, write_review_threads_input};
@@ -25,6 +26,20 @@ use crate::domain::effect::Effect;
 use crate::domain::issue::Issue;
 use crate::domain::metadata_update::MetadataUpdates;
 use crate::domain::process_run::{ProcessRun, ProcessRunState, ProcessRunType};
+use crate::domain::state::State;
+
+/// Issue 本文が agent:ready 承認後に改変されたことを示すエラー。
+#[derive(Debug, thiserror::Error)]
+#[error("issue #{issue_number} body was modified after agent:ready approval")]
+pub(crate) struct BodyTamperedError {
+    pub issue_number: u64,
+}
+
+/// Issue 本文の SHA-256 hex ダイジェストを計算する。
+fn sha256_hex(text: &str) -> String {
+    let result = sha2::Sha256::digest(text.as_bytes());
+    format!("{result:x}")
+}
 
 /// Backoff delays for DB update retries: [1s, 2s, 4s] — 3 retries after the
 /// initial attempt (4 total calls maximum).
@@ -282,7 +297,7 @@ where
             causes,
             pending_run_id,
         } => {
-            spawn_process(
+            let result = spawn_process(
                 github,
                 issue_repo,
                 process_repo,
@@ -295,7 +310,15 @@ where
                 causes,
                 *pending_run_id,
             )
-            .await?;
+            .await;
+
+            if let Err(ref e) = result
+                && e.downcast_ref::<BodyTamperedError>().is_some()
+            {
+                handle_body_tampered(github, issue_repo, config, issue).await;
+                return Ok(());
+            }
+            result?;
         }
 
         Effect::CleanupWorktree => {
@@ -370,13 +393,13 @@ where
 #[allow(clippy::too_many_arguments)]
 async fn spawn_init_task<G, I, P, W, F>(
     github: &G,
-    _issue_repo: &I,
+    issue_repo: &I,
     process_repo: &P,
     worktree: &W,
     file_gen: &F,
     init_mgr: &mut InitTaskManager,
     config: &Config,
-    issue: &Issue,
+    issue: &mut Issue,
 ) -> Result<()>
 where
     G: GitHubClient,
@@ -398,7 +421,25 @@ where
     // Perform all async I/O in a helper.  On failure, release the claim so
     // that a future cycle can retry.
     match prepare_init_handle(github, process_repo, worktree, file_gen, config, issue).await {
-        Ok(handle) => {
+        Ok((handle, body_hash, run_id)) => {
+            // Persist the body_hash as the approval snapshot.
+            let updates = MetadataUpdates {
+                body_hash: Some(Some(body_hash.clone())),
+                ..Default::default()
+            };
+            if let Err(e) = issue_repo
+                .update_state_and_metadata(issue.id, &updates)
+                .await
+            {
+                // Abort the already-spawned task and mark the ProcessRun as
+                // failed so it does not remain stuck in `running` state.
+                handle.abort();
+                let _ = process_repo.mark_failed(run_id, Some(e.to_string())).await;
+                init_mgr.release_claim(issue.id);
+                return Err(e);
+            }
+            // Update in-memory state so the current cycle sees the new hash.
+            issue.body_hash = Some(body_hash);
             // register() consumes the pending claim.
             init_mgr.register(issue.id, handle);
         }
@@ -410,7 +451,8 @@ where
     Ok(())
 }
 
-/// Performs all async I/O for an init task and returns the spawned JoinHandle.
+/// Performs all async I/O for an init task and returns the spawned JoinHandle
+/// together with the SHA-256 hex digest of the issue body (approval snapshot).
 ///
 /// Separated from `spawn_init_task` so that the claim lifecycle (try_claim /
 /// release_claim / register) stays in the caller with no scattered `?` returns.
@@ -421,7 +463,7 @@ async fn prepare_init_handle<G, P, W, F>(
     file_gen: &F,
     config: &Config,
     issue: &Issue,
-) -> Result<tokio::task::JoinHandle<anyhow::Result<String>>>
+) -> Result<(tokio::task::JoinHandle<anyhow::Result<String>>, String, i64)>
 where
     G: GitHubClient,
     P: ProcessRunRepository,
@@ -438,6 +480,8 @@ where
     // failure here does not leave an Init run stuck in `running` state.
     // If get_issue fails, decide() will retry SpawnInit next cycle cleanly.
     let detail = github.get_issue(issue.github_issue_number).await?;
+    // Compute approval snapshot hash from the fetched body.
+    let body_hash = sha256_hex(&detail.body);
 
     // Insert ProcessRun(init, state=running). Resolve will transition it to
     // succeeded/failed when the JoinHandle completes.
@@ -497,7 +541,7 @@ where
         .map_err(|e| anyhow::anyhow!("init blocking task panicked: {e}"))?
     });
 
-    Ok(handle)
+    Ok((handle, body_hash, run_id))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -656,6 +700,17 @@ where
     // Fetch issue detail for input files
     let detail = github.get_issue(issue.github_issue_number).await?;
 
+    // Verify body hash against the approval snapshot.
+    let current_hash = sha256_hex(&detail.body);
+    if let Some(saved) = &issue.body_hash
+        && saved != &current_hash
+    {
+        return Err(BodyTamperedError {
+            issue_number: issue.github_issue_number,
+        }
+        .into());
+    }
+
     // Clear and write input files
     clear_inputs_dir(wt_path)?;
     write_issue_input(wt_path, &detail)?;
@@ -758,6 +813,67 @@ where
     }
 }
 
+/// Issue 本文改変検知時の応答処理。
+///
+/// 1. DB 上の Issue 状態を `Cancelled` に遷移させる（失敗時はログのみ）。
+/// 2. GitHub から `agent:ready` ラベルを削除する（ベストエフォート）。
+/// 3. GitHub Issue に通知コメントを投稿する（ベストエフォート）。
+/// 4. インメモリの `issue.state` を `Cancelled` に更新する。
+/// 5. `warn!` トレースイベントを発火する。
+async fn handle_body_tampered<G: GitHubClient, I: IssueRepository>(
+    github: &G,
+    issue_repo: &I,
+    config: &Config,
+    issue: &mut Issue,
+) {
+    let n = issue.github_issue_number;
+    let lang = &config.language;
+
+    // 1. Cancelled 遷移（失敗時はログのみ）
+    let updates = MetadataUpdates {
+        state: Some(State::Cancelled),
+        ..Default::default()
+    };
+    if let Err(e) = issue_repo
+        .update_state_and_metadata(issue.id, &updates)
+        .await
+    {
+        tracing::error!(
+            issue_number = n,
+            error = %e,
+            "failed to transition issue to Cancelled after body tampering"
+        );
+    }
+
+    // 2. agent:ready ラベル削除（ベストエフォート）
+    if let Err(e) = github.remove_label(n, "agent:ready").await {
+        tracing::warn!(
+            issue_number = n,
+            error = %e,
+            "failed to remove agent:ready label after body tampering"
+        );
+    }
+
+    // 3. 通知コメント投稿（ベストエフォート）
+    let msg = rust_i18n::t!("issue_comment.body_tampered", locale = lang);
+    if let Err(e) = github.comment_on_issue(n, &msg).await {
+        tracing::warn!(
+            issue_number = n,
+            error = %e,
+            "failed to post tamper notification comment"
+        );
+    }
+
+    // 4. インメモリ更新
+    issue.state = State::Cancelled;
+
+    // 5. warn! トレースイベント
+    tracing::warn!(
+        issue_number = n,
+        "Issue body was tampered after agent:ready approval — cancelled"
+    );
+}
+
 async fn get_pr_number_for_type<P: ProcessRunRepository>(
     process_repo: &P,
     issue_id: i64,
@@ -823,7 +939,7 @@ mod tests {
 
     use anyhow::Result;
 
-    use super::{perform_init_sync, prepare_init_handle, prepare_process_spawn};
+    use super::{perform_init_sync, prepare_init_handle, prepare_process_spawn, sha256_hex};
     use crate::application::port::file_generator::FileGenerator;
     use crate::application::port::git_worktree::GitWorktree;
     use crate::application::port::github_client::{
@@ -836,6 +952,37 @@ mod tests {
     use crate::domain::issue::Issue;
     use crate::domain::process_run::ProcessRunType;
     use crate::domain::process_run::{ProcessRun, ProcessRunState};
+
+    // ── sha256_hex unit tests ────────────────────────────────────────────────
+
+    /// T-2.1.1: sha256_hex は同一入力に対して同一出力を返す
+    #[test]
+    fn sha256_hex_is_deterministic() {
+        let h1 = sha256_hex("hello world");
+        let h2 = sha256_hex("hello world");
+        assert_eq!(h1, h2);
+    }
+
+    /// T-2.1.2: sha256_hex は空文字列に対して既知の SHA-256 値を返す
+    #[test]
+    fn sha256_hex_empty_string_known_value() {
+        let h = sha256_hex("");
+        assert_eq!(
+            h,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    /// T-2.2: BodyTamperedError の Display メッセージに issue_number が含まれる
+    #[test]
+    fn body_tampered_error_display_contains_issue_number() {
+        let err = super::BodyTamperedError { issue_number: 42 };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("42"),
+            "error message should contain issue number, got: {msg}"
+        );
+    }
 
     /// Shared, ordered call log used by both `MockGitWorktree` and
     /// `MockFileGenerator` so tests can assert the full sequence of init
@@ -1615,6 +1762,7 @@ mod tests {
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
+            body_hash: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }
@@ -1731,6 +1879,7 @@ mod tests {
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
+            body_hash: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -2338,6 +2487,384 @@ mod tests {
             issue_repo.call_count(),
             super::RETRY_DELAYS.len() as u32 + 1,
             "should exhaust all retries"
+        );
+    }
+
+    // ── SpawnInit body_hash integration tests ────────────────────────────────
+
+    /// Configurable GitHub mock for body_hash tests.
+    #[derive(Clone)]
+    struct MockGitHubWithBody {
+        body: String,
+        comments: Arc<Mutex<Vec<String>>>,
+        removed_labels: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl MockGitHubWithBody {
+        fn new(body: impl Into<String>) -> Self {
+            Self {
+                body: body.into(),
+                comments: Arc::new(Mutex::new(vec![])),
+                removed_labels: Arc::new(Mutex::new(vec![])),
+            }
+        }
+
+        fn posted_comments(&self) -> Vec<String> {
+            self.comments.lock().expect("lock").clone()
+        }
+
+        fn removed_labels(&self) -> Vec<String> {
+            self.removed_labels.lock().expect("lock").clone()
+        }
+    }
+
+    impl crate::application::port::github_client::GitHubClient for MockGitHubWithBody {
+        async fn get_issue(&self, number: u64) -> anyhow::Result<GitHubIssueDetail> {
+            Ok(GitHubIssueDetail {
+                number,
+                title: "Test Issue".to_string(),
+                body: self.body.clone(),
+                labels: vec![],
+            })
+        }
+        async fn comment_on_issue(&self, _: u64, body: &str) -> anyhow::Result<()> {
+            self.comments.lock().expect("lock").push(body.to_string());
+            Ok(())
+        }
+        async fn list_open_issues(
+            &self,
+        ) -> anyhow::Result<Vec<crate::application::port::github_client::OpenIssueInfo>> {
+            Ok(vec![])
+        }
+        async fn find_pr_by_branches(&self, _: &str, _: &str) -> anyhow::Result<Option<GitHubPr>> {
+            Ok(None)
+        }
+        async fn is_pr_merged(&self, _: u64) -> anyhow::Result<bool> {
+            Ok(false)
+        }
+        async fn list_unresolved_threads(&self, _: u64) -> anyhow::Result<Vec<ReviewThread>> {
+            Ok(vec![])
+        }
+        async fn create_pr(&self, _: &str, _: &str, _: &str, _: &str) -> anyhow::Result<u64> {
+            Ok(0)
+        }
+        async fn reply_to_thread(&self, _: &str, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn resolve_thread(&self, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn close_issue(&self, _: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn get_job_logs(&self, _: u64) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+        async fn get_pr_details(&self, _: u64) -> anyhow::Result<GitHubPrDetails> {
+            unimplemented!()
+        }
+        async fn fetch_label_actor_login(&self, _: u64, _: &str) -> anyhow::Result<Option<String>> {
+            Ok(None)
+        }
+        async fn fetch_user_permission(&self, _: &str) -> anyhow::Result<RepositoryPermission> {
+            Ok(RepositoryPermission::Read)
+        }
+        async fn remove_label(&self, _: u64, label: &str) -> anyhow::Result<()> {
+            self.removed_labels
+                .lock()
+                .expect("lock")
+                .push(label.to_string());
+            Ok(())
+        }
+        async fn observe_pr(
+            &self,
+            _: u64,
+        ) -> anyhow::Result<Option<crate::application::port::github_client::PrObservation>>
+        {
+            Ok(None)
+        }
+    }
+
+    /// body_hash を追跡する IssueRepository モック。
+    #[derive(Clone)]
+    struct MockIssueRepoForHash {
+        updates: Arc<Mutex<Vec<crate::domain::metadata_update::MetadataUpdates>>>,
+        states: Arc<Mutex<Vec<crate::domain::state::State>>>,
+    }
+
+    impl MockIssueRepoForHash {
+        fn new() -> Self {
+            Self {
+                updates: Arc::new(Mutex::new(vec![])),
+                states: Arc::new(Mutex::new(vec![])),
+            }
+        }
+
+        fn recorded_updates(&self) -> Vec<crate::domain::metadata_update::MetadataUpdates> {
+            self.updates.lock().expect("lock").clone()
+        }
+    }
+
+    impl crate::application::port::issue_repository::IssueRepository for MockIssueRepoForHash {
+        async fn find_by_id(&self, _: i64) -> Result<Option<Issue>> {
+            unimplemented!()
+        }
+        async fn find_by_issue_number(&self, _: u64) -> Result<Option<Issue>> {
+            unimplemented!()
+        }
+        async fn find_active(&self) -> Result<Vec<Issue>> {
+            unimplemented!()
+        }
+        async fn find_all(&self) -> Result<Vec<Issue>> {
+            unimplemented!()
+        }
+        async fn save(&self, _: &Issue) -> Result<i64> {
+            unimplemented!()
+        }
+        async fn update_state(&self, _: i64, state: crate::domain::state::State) -> Result<()> {
+            self.states.lock().expect("lock").push(state);
+            Ok(())
+        }
+        async fn update(&self, _: &Issue) -> Result<()> {
+            unimplemented!()
+        }
+        async fn update_state_and_metadata(
+            &self,
+            _: i64,
+            updates: &crate::domain::metadata_update::MetadataUpdates,
+        ) -> Result<()> {
+            self.updates.lock().expect("lock").push(updates.clone());
+            Ok(())
+        }
+        async fn find_by_state(&self, _: crate::domain::state::State) -> Result<Vec<Issue>> {
+            unimplemented!()
+        }
+    }
+
+    /// T-3.2: SpawnInit 後に body_hash が DB に保存され in-memory が更新されること
+    #[tokio::test]
+    async fn spawn_init_saves_body_hash_to_db_and_in_memory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let body = "Approved issue body";
+        let github = MockGitHubWithBody::new(body);
+        let issue_repo = MockIssueRepoForHash::new();
+        let proc_repo = MockProcRepo::new();
+        let worktree = MockGitWorktree::with_log(Arc::new(Mutex::new(vec![])));
+        let file_gen = MockFileGenerator::with_log(Arc::new(Mutex::new(vec![])));
+        let mut init_mgr = crate::application::init_task_manager::InitTaskManager::new();
+        let config = make_test_config(dir.path());
+        let mut issue = make_test_issue("issue-1");
+
+        let result = super::spawn_init_task(
+            &github,
+            &issue_repo,
+            &proc_repo,
+            &worktree,
+            &file_gen,
+            &mut init_mgr,
+            &config,
+            &mut issue,
+        )
+        .await;
+
+        assert!(result.is_ok(), "spawn_init_task should succeed");
+
+        let expected_hash = sha256_hex(body);
+        assert_eq!(
+            issue.body_hash.as_deref(),
+            Some(expected_hash.as_str()),
+            "in-memory body_hash should be updated"
+        );
+
+        let updates = issue_repo.recorded_updates();
+        let hash_update = updates
+            .iter()
+            .find(|u| u.body_hash.is_some())
+            .expect("should have a body_hash update");
+        assert_eq!(
+            hash_update.body_hash,
+            Some(Some(expected_hash)),
+            "body_hash should be persisted to DB"
+        );
+    }
+
+    /// T-4.3.match: body_hash が一致する場合は spawn が成功（改変なし）
+    #[tokio::test]
+    async fn prepare_process_spawn_succeeds_when_hash_matches() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let body = "Approved issue body";
+        let expected_hash = sha256_hex(body);
+
+        let github = MockGitHubWithBody::new(body);
+        let proc_repo = MockProcRepo::new();
+        let log: CallLog = Arc::new(Mutex::new(vec![]));
+        let worktree = MockGitWorktree::with_log(log);
+        let config = make_test_config(dir.path());
+        let mut issue = make_test_issue("issue-1");
+        issue.state = crate::domain::state::State::DesignRunning;
+        issue.worktree_path = Some(dir.path().to_string_lossy().into_owned());
+        issue.body_hash = Some(expected_hash);
+
+        let result = prepare_process_spawn(
+            &github,
+            &proc_repo,
+            &MockClaudeRunnerFailing,
+            &worktree,
+            &config,
+            &issue,
+            ProcessRunType::Design,
+            &[],
+            None,
+        )
+        .await;
+
+        // The failure is from MockClaudeRunnerFailing, not from hash check
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.downcast_ref::<super::BodyTamperedError>().is_none(),
+            "should not be BodyTamperedError when hash matches"
+        );
+    }
+
+    /// T-4.3.tamper: body_hash が不一致の場合は BodyTamperedError が返る
+    #[tokio::test]
+    async fn prepare_process_spawn_returns_body_tampered_error_when_hash_differs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let github = MockGitHubWithBody::new("Tampered body content");
+        let proc_repo = MockProcRepo::new();
+        let log: CallLog = Arc::new(Mutex::new(vec![]));
+        let worktree = MockGitWorktree::with_log(log);
+        let config = make_test_config(dir.path());
+        let mut issue = make_test_issue("issue-1");
+        issue.worktree_path = Some(dir.path().to_string_lossy().into_owned());
+        // Set a saved hash that doesn't match the "tampered" body
+        issue.body_hash = Some(sha256_hex("Original approved body"));
+
+        let result = prepare_process_spawn(
+            &github,
+            &proc_repo,
+            &MockClaudeRunnerFailing,
+            &worktree,
+            &config,
+            &issue,
+            ProcessRunType::Design,
+            &[],
+            None,
+        )
+        .await;
+
+        assert!(result.is_err(), "should fail when hash differs");
+        let err = result.unwrap_err();
+        assert!(
+            err.downcast_ref::<super::BodyTamperedError>().is_some(),
+            "should be BodyTamperedError when body was tampered"
+        );
+    }
+
+    /// T-4.3.none: body_hash が None の場合はハッシュ比較をスキップして spawn が続行
+    #[tokio::test]
+    async fn prepare_process_spawn_skips_hash_check_when_body_hash_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let github = MockGitHubWithBody::new("Any body content");
+        let proc_repo = MockProcRepo::new();
+        let log: CallLog = Arc::new(Mutex::new(vec![]));
+        let worktree = MockGitWorktree::with_log(log);
+        let config = make_test_config(dir.path());
+        let mut issue = make_test_issue("issue-1");
+        issue.state = crate::domain::state::State::DesignRunning;
+        issue.worktree_path = Some(dir.path().to_string_lossy().into_owned());
+        // body_hash is None — backward-compatible, skip check
+
+        let result = prepare_process_spawn(
+            &github,
+            &proc_repo,
+            &MockClaudeRunnerFailing,
+            &worktree,
+            &config,
+            &issue,
+            ProcessRunType::Design,
+            &[],
+            None,
+        )
+        .await;
+
+        // Failure from MockClaudeRunnerFailing, not BodyTamperedError
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.downcast_ref::<super::BodyTamperedError>().is_none(),
+            "should not be BodyTamperedError when body_hash is None"
+        );
+    }
+
+    /// T-4.3.cancel: 改変検知時に Cancelled 遷移・ラベル削除・コメントが実行される
+    #[tokio::test]
+    async fn tamper_detection_transitions_to_cancelled_and_removes_label_and_posts_comment() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let github = MockGitHubWithBody::new("Tampered body");
+        let issue_repo = MockIssueRepoForHash::new();
+        let proc_repo = MockProcRepo::new();
+        let log: CallLog = Arc::new(Mutex::new(vec![]));
+        let worktree = MockGitWorktree::with_log(log);
+        let file_gen = MockFileGenerator::with_log(Arc::new(Mutex::new(vec![])));
+        let mut session_mgr = crate::application::session_manager::SessionManager::new();
+        let mut init_mgr = crate::application::init_task_manager::InitTaskManager::new();
+        let config = make_test_config(dir.path());
+        let mut issue = make_test_issue("issue-1");
+        issue.worktree_path = Some(dir.path().to_string_lossy().into_owned());
+        issue.body_hash = Some(sha256_hex("Original approved body"));
+
+        let effects = [Effect::SpawnProcess {
+            type_: ProcessRunType::Design,
+            causes: vec![],
+            pending_run_id: None,
+        }];
+
+        let result = super::execute_effects(
+            &github,
+            &issue_repo,
+            &proc_repo,
+            &MockClaudeRunner,
+            &worktree,
+            &file_gen,
+            &mut session_mgr,
+            &mut init_mgr,
+            &config,
+            &mut issue,
+            &effects,
+        )
+        .await;
+
+        assert!(result.is_ok(), "tamper response should return Ok");
+        assert_eq!(
+            issue.state,
+            crate::domain::state::State::Cancelled,
+            "in-memory state should be Cancelled"
+        );
+
+        // agent:ready ラベルが削除されていること
+        let removed = github.removed_labels();
+        assert!(
+            removed.contains(&"agent:ready".to_string()),
+            "agent:ready label should be removed"
+        );
+
+        // 通知コメントが投稿されていること（SpawnInit 開始コメントに加えて）
+        let comments = github.posted_comments();
+        assert!(
+            !comments.is_empty(),
+            "at least one comment should be posted"
+        );
+
+        // DB が Cancelled に更新されていること
+        let updates = issue_repo.recorded_updates();
+        let cancelled_update = updates
+            .iter()
+            .find(|u| u.state == Some(crate::domain::state::State::Cancelled));
+        assert!(
+            cancelled_update.is_some(),
+            "should have a Cancelled state update in DB"
         );
     }
 }
