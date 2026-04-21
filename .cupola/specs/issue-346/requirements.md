@@ -62,12 +62,12 @@
 2. When permission denied エラーが発生したとき、the Cupola shall 拒否されたツール名または操作の情報をエラーログに出力し、`.claude/settings.json` の `permissions.allow` への追加方法をヒントとして併記する。
 3. The Cupola shall `--output-format json` での実行時に、permission denied が発生してもインタラクティブプロンプトに移行しない動作を期待する。
 
-### 要件 6: ドキュメント更新
+### 要件 6: ドキュメント整備事項
 
-**目的:** コントリビューターおよびユーザーとして、permission 機構の変更内容とテンプレート追加手順を公式ドキュメントで確認したい。
+**目的:** コントリビューターおよびユーザーとして、permission 機構の変更内容とテンプレート追加手順を将来的に公式ドキュメントで確認できるようにしたい。
 
-#### 受け入れ条件
+#### 補足事項
 
-1. The Cupola shall `SECURITY.md` の Prompt Injection Risk セクションに、`--dangerously-skip-permissions` 廃止と permission 機構の採用、および `cupola init --template` の使い方を記載する。
-2. The Cupola shall `CONTRIBUTING.md` に `assets/claude-settings/<key>.json` を追加することでテンプレートをコントリビュートできる手順と命名規則を記載する。
-3. The Cupola shall `SECURITY.md` に、`permissions.allow` を緩めることが攻撃面の拡大につながることを明記する。
+1. `SECURITY.md` の Prompt Injection Risk セクションには、`--dangerously-skip-permissions` 廃止と permission 機構の採用、および `cupola init --template` の使い方を追って記載することが望ましい。
+2. `CONTRIBUTING.md` には、`assets/claude-settings/<key>.json` を追加することでテンプレートをコントリビュートできる手順と命名規則を追って記載することが望ましい。
+3. `SECURITY.md` には、`permissions.allow` を緩めることが攻撃面の拡大につながることを追って明記することが望ましい。
