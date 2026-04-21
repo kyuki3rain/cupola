@@ -216,11 +216,8 @@ where
 
         loop {
             tokio::select! {
-                _ = tick.tick() => {
-                    if let Err(e) = self.run_cycle().await {
-                        tracing::error!(error = %e, "polling cycle error");
-                    }
-                }
+                biased;
+
                 _ = sigint.recv() => {
                     sigint_count += 1;
                     if sigint_count == 1 {
@@ -245,6 +242,11 @@ where
                     let deadline = self.shutdown_timeout.map(|d| std::time::Instant::now() + d);
                     self.graceful_shutdown(ShutdownMode::Graceful { deadline }).await;
                     return Ok(());
+                }
+                _ = tick.tick() => {
+                    if let Err(e) = self.run_cycle().await {
+                        tracing::error!(error = %e, "polling cycle error");
+                    }
                 }
             }
         }
