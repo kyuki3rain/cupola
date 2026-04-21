@@ -241,6 +241,16 @@ default_branch = ""
 # design = "opus"
 # implementation = "opus"
 # # design_fix / implementation_fix は上記にフォールバックされます
+
+# [claude_code.env]
+# Claude Code に渡す追加の環境変数 (ベース: HOME, PATH, USER, LANG, LC_ALL, TERM)
+# サフィックス '*' によるワイルドカード対応 (例: "CLAUDE_*")
+# extra_allow = [
+#   # "ANTHROPIC_API_KEY",  # OAuth ログインを使わない場合
+#   # "CLAUDE_*",           # Claude Code 内部変数
+#   # "OPENAI_API_KEY",     # MCP が OpenAI を使う場合
+#   # "DOCKER_HOST",        # ビルドで Docker を使う場合
+# ]
 "#;
 
 const GITIGNORE_MARKER: &str = "# cupola";

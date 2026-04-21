@@ -3,6 +3,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::domain::author_association::{AuthorAssociation, TrustedAssociations};
+use crate::domain::claude_code_env_config::ClaudeCodeEnvConfig;
 use crate::domain::config::{Config, LogLevel};
 use crate::domain::model_config::{ModelConfig, PerPhaseModels, WeightModelConfig};
 
@@ -63,12 +64,23 @@ pub struct CupolaToml {
     /// 0: 無限待機。
     /// 正の整数: n 秒タイムアウト。
     pub shutdown_timeout_secs: Option<u64>,
+    claude_code: Option<ClaudeCodeToml>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct LogToml {
     pub level: Option<String>,
     pub dir: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeCodeEnvToml {
+    extra_allow: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeCodeToml {
+    env: Option<ClaudeCodeEnvToml>,
 }
 
 /// CLI overrides that take priority over cupola.toml values.
@@ -78,6 +90,14 @@ pub struct CliOverrides {
 }
 
 impl CupolaToml {
+    pub fn claude_code_extra_allow(&self) -> Vec<String> {
+        self.claude_code
+            .as_ref()
+            .and_then(|cc| cc.env.as_ref())
+            .and_then(|e| e.extra_allow.clone())
+            .unwrap_or_default()
+    }
+
     pub fn into_config(self, overrides: &CliOverrides) -> Result<Config, ConfigError> {
         let log_level = overrides
             .log_level
@@ -129,6 +149,14 @@ impl CupolaToml {
             Some(n) => Some(std::time::Duration::from_secs(n)), // n 秒タイムアウト
         };
 
+        let claude_code_env = ClaudeCodeEnvConfig {
+            extra_allow: self
+                .claude_code
+                .and_then(|cc| cc.env)
+                .and_then(|e| e.extra_allow)
+                .unwrap_or_default(),
+        };
+
         Ok(Config {
             owner: self.owner,
             repo: self.repo,
@@ -150,6 +178,7 @@ impl CupolaToml {
                 .trusted_reviewers
                 .unwrap_or_else(|| vec!["copilot-pull-request-reviewer".to_string()]),
             shutdown_timeout,
+            claude_code_env,
         })
     }
 }
@@ -777,6 +806,70 @@ shutdown_timeout_secs = 120
             config.shutdown_timeout,
             Some(std::time::Duration::from_secs(120)),
             "正の整数は指定秒数タイムアウト"
+        );
+    }
+
+    // --- [claude_code.env] セクション TOML 解析テスト ---
+
+    #[test]
+    fn parse_claude_code_env_section_with_extra_allow() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+
+[claude_code.env]
+extra_allow = ["ANTHROPIC_API_KEY", "CLAUDE_*"]
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides).expect("should succeed");
+        assert_eq!(
+            config.claude_code_env.extra_allow,
+            vec!["ANTHROPIC_API_KEY", "CLAUDE_*"]
+        );
+    }
+
+    #[test]
+    fn parse_claude_code_env_section_absent_defaults_to_empty() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides).expect("should succeed");
+        assert!(
+            config.claude_code_env.extra_allow.is_empty(),
+            "セクション未設定時は extra_allow が空リスト"
+        );
+    }
+
+    #[test]
+    fn parse_claude_code_env_section_present_no_extra_allow_defaults_to_empty() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+
+[claude_code.env]
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides).expect("should succeed");
+        assert!(
+            config.claude_code_env.extra_allow.is_empty(),
+            "extra_allow 未設定時は空リスト"
         );
     }
 }
