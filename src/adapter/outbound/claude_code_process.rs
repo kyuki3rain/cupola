@@ -233,6 +233,8 @@ mod tests {
     use super::*;
     use std::ffi::OsStr;
 
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn default_process() -> ClaudeCodeProcess {
         ClaudeCodeProcess::new("claude", ClaudeCodeEnvConfig::default())
     }
@@ -411,8 +413,9 @@ mod tests {
 
     #[test]
     fn build_command_wildcard_extra_allow_matches_prefix() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         // CUPOLA_TEST_VAR_* で始まる環境変数をテスト用に設定
-        // SAFETY: テスト内のみの env 変更。単一スレッドテストで実行。
+        // SAFETY: テスト内のみの env 変更。ENV_MUTEX によりシリアライズ済み。
         unsafe {
             std::env::set_var("CUPOLA_TEST_WILDCARD_FOO", "bar");
         }
@@ -438,7 +441,9 @@ mod tests {
 
     #[test]
     fn build_command_non_matching_env_excluded() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         // CUPOLA_TEST_NOMATCH_BAR を設定し、extra_allow に含まないことを確認
+        // SAFETY: テスト内のみの env 変更。ENV_MUTEX によりシリアライズ済み。
         unsafe {
             std::env::set_var("CUPOLA_TEST_NOMATCH_BAR", "secret");
         }

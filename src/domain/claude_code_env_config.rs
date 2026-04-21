@@ -11,6 +11,10 @@ impl ClaudeCodeEnvConfig {
     /// 先頭 `*` や中間 `*` はリテラルとして扱われる。
     pub fn matches_pattern(key: &str, pattern: &str) -> bool {
         if let Some(prefix) = pattern.strip_suffix('*') {
+            if prefix.is_empty() {
+                // bare "*" would match every env var — reject to prevent accidental full inheritance
+                return false;
+            }
             key.starts_with(prefix)
         } else {
             key == pattern
@@ -83,6 +87,14 @@ mod tests {
         // 先頭の * はリテラル扱い
         assert!(!ClaudeCodeEnvConfig::matches_pattern("_API_KEY", "*_KEY"));
         assert!(ClaudeCodeEnvConfig::matches_pattern("*_KEY", "*_KEY"));
+    }
+
+    #[test]
+    fn matches_pattern_bare_wildcard_never_matches() {
+        // bare "*" would inherit all env vars — must be rejected for security
+        assert!(!ClaudeCodeEnvConfig::matches_pattern("ANY_VAR", "*"));
+        assert!(!ClaudeCodeEnvConfig::matches_pattern("HOME", "*"));
+        assert!(!ClaudeCodeEnvConfig::matches_pattern("", "*"));
     }
 
     #[test]

@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use crate::application::doctor_result::{CheckStatus, DoctorCheckResult, DoctorSection};
 use crate::application::port::command_runner::CommandRunner;
-use crate::application::port::config_loader::{ConfigLoader, DoctorConfigSummary};
+use crate::application::port::config_loader::{ConfigLoadError, ConfigLoader, DoctorConfigSummary};
 use crate::application::port::issue_repository::IssueRepository;
 use crate::domain::claude_code_env_config::{BASE_ALLOWLIST, ClaudeCodeEnvConfig};
 
@@ -33,12 +33,9 @@ impl<C: ConfigLoader, R: CommandRunner, I: IssueRepository> DoctorUseCase<C, R, 
 
         let [agent_ready_result, weight_labels_result] = check_labels(&self.command_runner);
 
-        let config_result = check_config(&self.config_loader, config_path);
-        let env_allowlist_result = self
-            .config_loader
-            .load(config_path)
-            .ok()
-            .map(|summary| check_env_allowlist(&summary));
+        let config_load_result = self.config_loader.load(config_path);
+        let config_result = check_config_from_result(&config_load_result);
+        let env_allowlist_result = config_load_result.as_ref().ok().map(check_env_allowlist);
 
         let pending_check =
             check_pending_ci_fix_limit_notifications(&self.issue_repo, self.max_ci_fix_cycles)
@@ -74,6 +71,22 @@ const SENSITIVE_SUFFIX_PATTERNS: &[&str] = &["_API_KEY", "_SECRET", "_TOKEN", "_
 fn check_env_allowlist(summary: &DoctorConfigSummary) -> DoctorCheckResult {
     let base: Vec<&str> = BASE_ALLOWLIST.to_vec();
     let extra = &summary.claude_code_extra_allow;
+
+    let has_bare_wildcard = extra.iter().any(|e| e == "*");
+    if has_bare_wildcard {
+        return DoctorCheckResult {
+            section: DoctorSection::StartReadiness,
+            name: "env allowlist".to_string(),
+            status: CheckStatus::Warn(
+                "\"*\" が extra_allow に含まれています。全ての環境変数が Claude Code に渡されます"
+                    .to_string(),
+            ),
+            remediation: Some(
+                "cupola.toml の extra_allow から \"*\" を削除し、必要な変数名を明示的に指定してください"
+                    .to_string(),
+            ),
+        };
+    }
 
     let dangerous: Vec<&str> = extra
         .iter()
@@ -161,8 +174,10 @@ async fn check_pending_ci_fix_limit_notifications(
     }
 }
 
-fn check_config(config_loader: &dyn ConfigLoader, path: &Path) -> DoctorCheckResult {
-    match config_loader.load(path) {
+fn check_config_from_result(
+    result: &Result<DoctorConfigSummary, ConfigLoadError>,
+) -> DoctorCheckResult {
+    match result {
         Ok(_) => DoctorCheckResult {
             section: DoctorSection::StartReadiness,
             name: "config".to_string(),
@@ -170,8 +185,7 @@ fn check_config(config_loader: &dyn ConfigLoader, path: &Path) -> DoctorCheckRes
             remediation: None,
         },
         Err(e) => {
-            use crate::application::port::config_loader::ConfigLoadError;
-            let remediation = match &e {
+            let remediation = match e {
                 ConfigLoadError::NotFound { .. } => {
                     Some("`cupola init` を実行して cupola.toml を作成してください".to_string())
                 }
@@ -188,6 +202,11 @@ fn check_config(config_loader: &dyn ConfigLoader, path: &Path) -> DoctorCheckRes
             }
         }
     }
+}
+
+#[cfg(test)]
+fn check_config(config_loader: &dyn ConfigLoader, path: &Path) -> DoctorCheckResult {
+    check_config_from_result(&config_loader.load(path))
 }
 
 fn check_git(runner: &dyn CommandRunner) -> DoctorCheckResult {
@@ -1253,6 +1272,17 @@ mod tests {
         let summary = make_summary(vec!["DOCKER_HOST", "CLAUDE_*"]);
         let result = check_env_allowlist(&summary);
         assert!(matches!(result.status, CheckStatus::Ok(_)));
+    }
+
+    #[test]
+    fn check_env_allowlist_bare_wildcard_returns_warn() {
+        let summary = make_summary(vec!["*"]);
+        let result = check_env_allowlist(&summary);
+        assert!(matches!(result.status, CheckStatus::Warn(_)));
+        assert!(result.remediation.is_some());
+        if let CheckStatus::Warn(msg) = &result.status {
+            assert!(msg.contains("\"*\""));
+        }
     }
 
     #[test]
