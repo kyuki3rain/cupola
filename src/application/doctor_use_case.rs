@@ -4,8 +4,9 @@ use serde::Deserialize;
 
 use crate::application::doctor_result::{CheckStatus, DoctorCheckResult, DoctorSection};
 use crate::application::port::command_runner::CommandRunner;
-use crate::application::port::config_loader::ConfigLoader;
+use crate::application::port::config_loader::{ConfigLoadError, ConfigLoader, DoctorConfigSummary};
 use crate::application::port::issue_repository::IssueRepository;
+use crate::domain::claude_code_env_config::{BASE_ALLOWLIST, ClaudeCodeEnvConfig};
 
 pub struct DoctorUseCase<C: ConfigLoader, R: CommandRunner, I: IssueRepository> {
     config_loader: C,
@@ -32,24 +33,101 @@ impl<C: ConfigLoader, R: CommandRunner, I: IssueRepository> DoctorUseCase<C, R, 
 
         let [agent_ready_result, weight_labels_result] = check_labels(&self.command_runner);
 
+        let config_load_result = self.config_loader.load(config_path);
+        let config_result = check_config_from_result(&config_load_result);
+        let env_allowlist_result = config_load_result.as_ref().ok().map(check_env_allowlist);
+
         let pending_check =
             check_pending_ci_fix_limit_notifications(&self.issue_repo, self.max_ci_fix_cycles)
                 .await;
 
-        vec![
+        let mut results = vec![
             // Start Readiness
-            check_config(&self.config_loader, config_path),
+            config_result,
             check_git(&self.command_runner),
             check_github_token(&self.command_runner),
             check_claude(&self.command_runner),
             check_db(&db_path),
+        ];
+        if let Some(r) = env_allowlist_result {
+            results.push(r);
+        }
+        results.extend([
             // Operational Readiness
             check_assets(&commands_path, &settings_path),
             check_steering(&steering_path),
             agent_ready_result,
             weight_labels_result,
             pending_check,
-        ]
+        ]);
+        results
+    }
+}
+
+const SENSITIVE_PATTERNS: &[&str] = &["GH_TOKEN", "GITHUB_TOKEN", "AWS_*", "AZURE_*", "GOOGLE_*"];
+
+const SENSITIVE_SUFFIX_PATTERNS: &[&str] = &["_API_KEY", "_SECRET", "_TOKEN", "_PASSWORD"];
+
+fn check_env_allowlist(summary: &DoctorConfigSummary) -> DoctorCheckResult {
+    let base: Vec<&str> = BASE_ALLOWLIST.to_vec();
+    let extra = &summary.claude_code_extra_allow;
+
+    let has_bare_wildcard = extra.iter().any(|e| e == "*");
+    if has_bare_wildcard {
+        return DoctorCheckResult {
+            section: DoctorSection::StartReadiness,
+            name: "env allowlist".to_string(),
+            status: CheckStatus::Warn(
+                "\"*\" が extra_allow に含まれています。全ての環境変数が Claude Code に渡されます"
+                    .to_string(),
+            ),
+            remediation: Some(
+                "cupola.toml の extra_allow から \"*\" を削除し、必要な変数名を明示的に指定してください"
+                    .to_string(),
+            ),
+        };
+    }
+
+    let dangerous: Vec<&str> = extra
+        .iter()
+        .filter(|entry| {
+            SENSITIVE_PATTERNS
+                .iter()
+                .any(|p| ClaudeCodeEnvConfig::matches_pattern(entry, p))
+                || SENSITIVE_SUFFIX_PATTERNS
+                    .iter()
+                    .any(|suffix| entry.ends_with(suffix))
+        })
+        .map(String::as_str)
+        .collect();
+
+    if dangerous.is_empty() {
+        let base_list = base.join(", ");
+        let extra_list = if extra.is_empty() {
+            "（なし）".to_string()
+        } else {
+            extra.join(", ")
+        };
+        DoctorCheckResult {
+            section: DoctorSection::StartReadiness,
+            name: "env allowlist".to_string(),
+            status: CheckStatus::Ok(format!(
+                "BASE_ALLOWLIST: [{base_list}] / extra_allow: [{extra_list}]"
+            )),
+            remediation: None,
+        }
+    } else {
+        let dangerous_list = dangerous.join(", ");
+        DoctorCheckResult {
+            section: DoctorSection::StartReadiness,
+            name: "env allowlist".to_string(),
+            status: CheckStatus::Warn(format!(
+                "潜在的に危険なパターンが extra_allow に含まれています: {dangerous_list}"
+            )),
+            remediation: Some(
+                "不要であれば cupola.toml の extra_allow から削除してください".to_string(),
+            ),
+        }
     }
 }
 
@@ -96,8 +174,10 @@ async fn check_pending_ci_fix_limit_notifications(
     }
 }
 
-fn check_config(config_loader: &dyn ConfigLoader, path: &Path) -> DoctorCheckResult {
-    match config_loader.load(path) {
+fn check_config_from_result(
+    result: &Result<DoctorConfigSummary, ConfigLoadError>,
+) -> DoctorCheckResult {
+    match result {
         Ok(_) => DoctorCheckResult {
             section: DoctorSection::StartReadiness,
             name: "config".to_string(),
@@ -105,8 +185,7 @@ fn check_config(config_loader: &dyn ConfigLoader, path: &Path) -> DoctorCheckRes
             remediation: None,
         },
         Err(e) => {
-            use crate::application::port::config_loader::ConfigLoadError;
-            let remediation = match &e {
+            let remediation = match e {
                 ConfigLoadError::NotFound { .. } => {
                     Some("`cupola init` を実行して cupola.toml を作成してください".to_string())
                 }
@@ -123,6 +202,11 @@ fn check_config(config_loader: &dyn ConfigLoader, path: &Path) -> DoctorCheckRes
             }
         }
     }
+}
+
+#[cfg(test)]
+fn check_config(config_loader: &dyn ConfigLoader, path: &Path) -> DoctorCheckResult {
+    check_config_from_result(&config_loader.load(path))
 }
 
 fn check_git(runner: &dyn CommandRunner) -> DoctorCheckResult {
@@ -539,6 +623,7 @@ mod tests {
                     owner: "owner".to_string(),
                     repo: "repo".to_string(),
                     default_branch: "main".to_string(),
+                    claude_code_extra_allow: vec![],
                 }),
             }
         }
@@ -575,6 +660,7 @@ mod tests {
                     owner: s.owner.clone(),
                     repo: s.repo.clone(),
                     default_branch: s.default_branch.clone(),
+                    claude_code_extra_allow: s.claude_code_extra_allow.clone(),
                 }),
                 Err(ConfigLoadError::NotFound { path }) => {
                     Err(ConfigLoadError::NotFound { path: path.clone() })
@@ -962,8 +1048,9 @@ mod tests {
         let use_case = DoctorUseCase::new(loader, runner, MockIssueRepository::empty(), 3);
         let results = use_case.run(&config_path).await;
 
-        // 10 checks: 5 Start Readiness + 5 Operational Readiness (includes ci-fix-limit check)
-        assert_eq!(results.len(), 10);
+        // 11 checks: 6 Start Readiness (config + git + github_token + claude + db + env_allowlist)
+        //            + 5 Operational Readiness (includes ci-fix-limit check)
+        assert_eq!(results.len(), 11);
 
         let start_count = results
             .iter()
@@ -973,7 +1060,7 @@ mod tests {
             .iter()
             .filter(|r| matches!(r.section, DoctorSection::OperationalReadiness))
             .count();
-        assert_eq!(start_count, 5);
+        assert_eq!(start_count, 6);
         assert_eq!(op_count, 5);
     }
 
@@ -1158,5 +1245,139 @@ mod tests {
         assert!(matches!(ok, CheckStatus::Ok(_)));
         assert!(matches!(warn, CheckStatus::Warn(_)));
         assert!(matches!(fail, CheckStatus::Fail(_)));
+    }
+
+    // --- check_env_allowlist tests ---
+
+    fn make_summary(extra_allow: Vec<&str>) -> DoctorConfigSummary {
+        DoctorConfigSummary {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+            default_branch: "main".to_string(),
+            claude_code_extra_allow: extra_allow.into_iter().map(str::to_string).collect(),
+        }
+    }
+
+    #[test]
+    fn check_env_allowlist_empty_extra_allow_returns_ok() {
+        let summary = make_summary(vec![]);
+        let result = check_env_allowlist(&summary);
+        assert!(matches!(result.status, CheckStatus::Ok(_)));
+        assert!(matches!(result.section, DoctorSection::StartReadiness));
+        assert!(result.remediation.is_none());
+    }
+
+    #[test]
+    fn check_env_allowlist_safe_patterns_returns_ok() {
+        let summary = make_summary(vec!["DOCKER_HOST", "CLAUDE_*"]);
+        let result = check_env_allowlist(&summary);
+        assert!(matches!(result.status, CheckStatus::Ok(_)));
+    }
+
+    #[test]
+    fn check_env_allowlist_bare_wildcard_returns_warn() {
+        let summary = make_summary(vec!["*"]);
+        let result = check_env_allowlist(&summary);
+        assert!(matches!(result.status, CheckStatus::Warn(_)));
+        assert!(result.remediation.is_some());
+        if let CheckStatus::Warn(msg) = &result.status {
+            assert!(msg.contains("\"*\""));
+        }
+    }
+
+    #[test]
+    fn check_env_allowlist_gh_token_exact_match_returns_warn() {
+        let summary = make_summary(vec!["GH_TOKEN"]);
+        let result = check_env_allowlist(&summary);
+        assert!(matches!(result.status, CheckStatus::Warn(_)));
+        assert!(result.remediation.is_some());
+        if let CheckStatus::Warn(msg) = &result.status {
+            assert!(msg.contains("GH_TOKEN"));
+        }
+    }
+
+    #[test]
+    fn check_env_allowlist_github_token_exact_match_returns_warn() {
+        let summary = make_summary(vec!["GITHUB_TOKEN"]);
+        let result = check_env_allowlist(&summary);
+        assert!(matches!(result.status, CheckStatus::Warn(_)));
+    }
+
+    #[test]
+    fn check_env_allowlist_aws_prefix_pattern_returns_warn() {
+        let summary = make_summary(vec!["AWS_*"]);
+        let result = check_env_allowlist(&summary);
+        assert!(matches!(result.status, CheckStatus::Warn(_)));
+        if let CheckStatus::Warn(msg) = &result.status {
+            assert!(msg.contains("AWS_*"));
+        }
+    }
+
+    #[test]
+    fn check_env_allowlist_api_key_suffix_returns_warn() {
+        let summary = make_summary(vec!["OPENAI_API_KEY"]);
+        let result = check_env_allowlist(&summary);
+        assert!(matches!(result.status, CheckStatus::Warn(_)));
+        if let CheckStatus::Warn(msg) = &result.status {
+            assert!(msg.contains("OPENAI_API_KEY"));
+        }
+    }
+
+    #[test]
+    fn check_env_allowlist_secret_suffix_returns_warn() {
+        let summary = make_summary(vec!["MY_SECRET"]);
+        let result = check_env_allowlist(&summary);
+        assert!(matches!(result.status, CheckStatus::Warn(_)));
+    }
+
+    #[test]
+    fn check_env_allowlist_token_suffix_returns_warn() {
+        let summary = make_summary(vec!["SOME_TOKEN"]);
+        let result = check_env_allowlist(&summary);
+        assert!(matches!(result.status, CheckStatus::Warn(_)));
+    }
+
+    #[test]
+    fn check_env_allowlist_password_suffix_returns_warn() {
+        let summary = make_summary(vec!["DB_PASSWORD"]);
+        let result = check_env_allowlist(&summary);
+        assert!(matches!(result.status, CheckStatus::Warn(_)));
+    }
+
+    #[tokio::test]
+    async fn doctor_use_case_config_load_failure_skips_env_allowlist() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("cupola.toml");
+
+        let loader = MockConfigLoader::not_found(config_path.to_str().unwrap());
+        let runner = MockCommandRunner::new();
+        let use_case = DoctorUseCase::new(loader, runner, MockIssueRepository::empty(), 3);
+        let results = use_case.run(&config_path).await;
+
+        // config ロード失敗時は env allowlist チェックが追加されない（10 件）
+        assert_eq!(results.len(), 10);
+        let env_check = results.iter().find(|r| r.name == "env allowlist");
+        assert!(
+            env_check.is_none(),
+            "config load 失敗時は env allowlist チェックをスキップ"
+        );
+    }
+
+    #[tokio::test]
+    async fn doctor_start_readiness_includes_env_allowlist_check_on_success() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("cupola.toml");
+        let loader = MockConfigLoader::ok();
+        let runner = MockCommandRunner::new();
+        let use_case = DoctorUseCase::new(loader, runner, MockIssueRepository::empty(), 3);
+        let results = use_case.run(&config_path).await;
+
+        let env_check = results.iter().find(|r| r.name == "env allowlist");
+        assert!(
+            env_check.is_some(),
+            "config load 成功時は env allowlist チェックが含まれる"
+        );
+        let env_check = env_check.unwrap();
+        assert!(matches!(env_check.section, DoctorSection::StartReadiness));
     }
 }

@@ -38,6 +38,7 @@ impl ConfigLoader for TomlConfigLoader {
             owner: toml.owner.clone(),
             repo: toml.repo.clone(),
             default_branch: toml.default_branch.clone(),
+            claude_code_extra_allow: toml.claude_code_extra_allow(),
         };
 
         let overrides = CliOverrides {

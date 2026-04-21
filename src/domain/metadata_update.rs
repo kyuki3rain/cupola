@@ -18,6 +18,9 @@ pub struct MetadataUpdates {
     /// fixing トリガーとして採用した PR レベルレビューの最新 submittedAt。
     /// Some の場合のみ DB に書き込む。
     pub last_pr_review_submitted_at: Option<DateTime<Utc>>,
+    /// Issue 本文の SHA-256 承認スナップショットを更新する。
+    /// Some(Some(hash)) → 値を設定、Some(None) → NULL クリア、None → 変更なし。
+    pub body_hash: Option<Option<String>>,
 }
 
 impl MetadataUpdates {
@@ -50,6 +53,9 @@ impl MetadataUpdates {
         if let Some(ts) = self.last_pr_review_submitted_at {
             issue.last_pr_review_submitted_at = Some(ts);
         }
+        if let Some(ref hash) = self.body_hash {
+            issue.body_hash = hash.clone();
+        }
     }
 }
 
@@ -74,6 +80,7 @@ mod tests {
             consecutive_failures_epoch: Some(Some(Utc::now())),
             worktree_path: Some(Some("/tmp/wt".to_string())),
             last_pr_review_submitted_at: None,
+            body_hash: Some(Some("abc123".to_string())),
         };
         assert!(m.state.is_some());
         assert!(m.weight.is_some());
@@ -83,6 +90,7 @@ mod tests {
         assert!(m.feature_name.is_some());
         assert!(m.consecutive_failures_epoch.is_some());
         assert!(m.worktree_path.is_some());
+        assert!(m.body_hash.is_some());
     }
 
     /// T-1.M.2: default is all-None
@@ -170,5 +178,44 @@ mod tests {
         };
         updates.apply_to(&mut issue);
         assert!(issue.consecutive_failures_epoch.is_some());
+    }
+
+    #[test]
+    fn apply_to_sets_body_hash() {
+        let mut issue = make_issue();
+        assert!(issue.body_hash.is_none());
+
+        let updates = MetadataUpdates {
+            body_hash: Some(Some("abc123".to_string())),
+            ..Default::default()
+        };
+        updates.apply_to(&mut issue);
+        assert_eq!(issue.body_hash.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn apply_to_clears_body_hash() {
+        let mut issue = make_issue();
+        issue.body_hash = Some("abc123".to_string());
+
+        let updates = MetadataUpdates {
+            body_hash: Some(None),
+            ..Default::default()
+        };
+        updates.apply_to(&mut issue);
+        assert!(issue.body_hash.is_none());
+    }
+
+    #[test]
+    fn apply_to_does_not_touch_body_hash_when_none() {
+        let mut issue = make_issue();
+        issue.body_hash = Some("abc123".to_string());
+
+        let updates = MetadataUpdates {
+            body_hash: None,
+            ..Default::default()
+        };
+        updates.apply_to(&mut issue);
+        assert_eq!(issue.body_hash.as_deref(), Some("abc123"));
     }
 }
