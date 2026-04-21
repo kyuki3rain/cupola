@@ -14,7 +14,7 @@ use crate::application::port::github_client::GitHubClient;
 use crate::application::port::issue_repository::IssueRepository;
 use crate::application::port::pid_file::PidFilePort;
 use crate::application::port::process_run_repository::ProcessRunRepository;
-use crate::application::session_manager::SessionManager;
+use crate::application::session_manager::{ChildProcessRegistry, SessionManager};
 use crate::domain::config::Config;
 use crate::domain::decide::decide;
 use crate::domain::shutdown_mode::ShutdownMode;
@@ -198,6 +198,11 @@ where
 
     pub fn with_pid_file(mut self, pid_file: Box<dyn PidFilePort>) -> Self {
         self.pid_file = Some(pid_file);
+        self
+    }
+
+    pub fn with_child_registry(mut self, registry: ChildProcessRegistry) -> Self {
+        self.session_mgr = self.session_mgr.with_registry(registry);
         self
     }
 
