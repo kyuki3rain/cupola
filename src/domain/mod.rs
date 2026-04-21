@@ -1,4 +1,5 @@
 pub mod author_association;
+pub mod claude_code_env_config;
 pub mod config;
 pub mod decide;
 pub mod decision;

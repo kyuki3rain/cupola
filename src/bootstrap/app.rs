@@ -539,7 +539,7 @@ async fn start_foreground(
         }
 
         let exec_log_repo = SqliteExecutionLogRepository::new(db);
-        let claude_runner = ClaudeCodeProcess::new("claude");
+        let claude_runner = ClaudeCodeProcess::new("claude", cfg.claude_code_env.clone());
         let worktree = GitWorktreeManager::new(".");
         let file_gen = InitFileGenerator::new(std::env::current_dir()?);
 
@@ -704,7 +704,7 @@ async fn start_daemon_child(
         }
 
         let exec_log_repo = SqliteExecutionLogRepository::new(db);
-        let claude_runner = ClaudeCodeProcess::new("claude");
+        let claude_runner = ClaudeCodeProcess::new("claude", cfg.claude_code_env.clone());
         let worktree = GitWorktreeManager::new(".");
         let file_gen = InitFileGenerator::new(config_dir.clone());
 
