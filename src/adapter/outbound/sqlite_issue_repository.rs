@@ -29,7 +29,8 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
-                        created_at, updated_at, last_pr_review_submitted_at
+                        created_at, updated_at, last_pr_review_submitted_at,
+                        ci_fix_limit_notified
                  FROM issues WHERE id = ?1",
             )?;
             let issue = stmt
@@ -54,7 +55,8 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
-                        created_at, updated_at, last_pr_review_submitted_at
+                        created_at, updated_at, last_pr_review_submitted_at,
+                        ci_fix_limit_notified
                  FROM issues WHERE github_issue_number = ?1",
             )?;
             let issue = stmt
@@ -79,7 +81,8 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
-                        created_at, updated_at, last_pr_review_submitted_at
+                        created_at, updated_at, last_pr_review_submitted_at,
+                        ci_fix_limit_notified
                  FROM issues WHERE state NOT IN ('completed', 'cancelled')",
             )?;
             let issues = stmt
@@ -104,7 +107,8 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
-                        created_at, updated_at, last_pr_review_submitted_at
+                        created_at, updated_at, last_pr_review_submitted_at,
+                        ci_fix_limit_notified
                  FROM issues",
             )?;
             let issues = stmt
@@ -129,9 +133,9 @@ impl IssueRepository for SqliteIssueRepository {
             let conn = db.conn_lock();
             conn.execute(
                 "INSERT INTO issues (github_issue_number, state, feature_name, weight,
-                                     worktree_path, ci_fix_count, close_finished,
-                                     consecutive_failures_epoch)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                                     worktree_path, ci_fix_count, ci_fix_limit_notified,
+                                     close_finished, consecutive_failures_epoch)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 rusqlite::params![
                     issue.github_issue_number,
                     issue.state.to_string(),
@@ -139,6 +143,7 @@ impl IssueRepository for SqliteIssueRepository {
                     task_weight_to_str(issue.weight),
                     issue.worktree_path,
                     issue.ci_fix_count,
+                    issue.ci_fix_limit_notified as i64,
                     issue.close_finished as i64,
                     issue
                         .consecutive_failures_epoch
@@ -186,8 +191,9 @@ impl IssueRepository for SqliteIssueRepository {
             conn.execute(
                 "UPDATE issues SET state = ?1, feature_name = ?2, weight = ?3,
                                    worktree_path = ?4, ci_fix_count = ?5, close_finished = ?6,
-                                   consecutive_failures_epoch = ?7, updated_at = datetime('now')
-                 WHERE id = ?8",
+                                   consecutive_failures_epoch = ?7, ci_fix_limit_notified = ?8,
+                                   updated_at = datetime('now')
+                 WHERE id = ?9",
                 rusqlite::params![
                     issue.state.to_string(),
                     issue.feature_name,
@@ -198,6 +204,7 @@ impl IssueRepository for SqliteIssueRepository {
                     issue
                         .consecutive_failures_epoch
                         .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
+                    issue.ci_fix_limit_notified as i64,
                     issue.id,
                 ],
             )
@@ -242,6 +249,12 @@ impl IssueRepository for SqliteIssueRepository {
             if let Some(ci_fix_count) = updates.ci_fix_count {
                 param_values.push(rusqlite::types::Value::Integer(ci_fix_count as i64));
                 set_clauses.push(format!("ci_fix_count = ?{}", param_values.len()));
+            }
+            if let Some(ci_fix_limit_notified) = updates.ci_fix_limit_notified {
+                param_values.push(rusqlite::types::Value::Integer(
+                    ci_fix_limit_notified as i64,
+                ));
+                set_clauses.push(format!("ci_fix_limit_notified = ?{}", param_values.len()));
             }
             if let Some(close_finished) = updates.close_finished {
                 param_values.push(rusqlite::types::Value::Integer(close_finished as i64));
@@ -316,7 +329,8 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
-                        created_at, updated_at, last_pr_review_submitted_at
+                        created_at, updated_at, last_pr_review_submitted_at,
+                        ci_fix_limit_notified
                  FROM issues WHERE state = ?1",
             )?;
             let issues = stmt
@@ -395,6 +409,10 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
         last_pr_review_submitted_at,
         created_at: parse_sqlite_datetime(9, &created_str)?,
         updated_at: parse_sqlite_datetime(10, &updated_str)?,
+        ci_fix_limit_notified: {
+            let v: i64 = row.get(12)?;
+            v != 0
+        },
     })
 }
 
@@ -672,6 +690,7 @@ mod tests {
             state: Some(State::DesignRunning),
             weight: Some(TaskWeight::Heavy),
             ci_fix_count: Some(5),
+            ci_fix_limit_notified: None,
             close_finished: Some(true),
             feature_name: Some("updated-feature".to_string()),
             consecutive_failures_epoch: Some(Some(

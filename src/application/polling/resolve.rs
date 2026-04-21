@@ -845,6 +845,7 @@ mod tests {
             weight: TaskWeight::Medium,
             worktree_path: None,
             ci_fix_count: 0,
+            ci_fix_limit_notified: false,
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,

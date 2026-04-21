@@ -14,7 +14,7 @@ use crate::application::port::github_client::GitHubClient;
 use crate::application::port::issue_repository::IssueRepository;
 use crate::application::port::pid_file::PidFilePort;
 use crate::application::port::process_run_repository::ProcessRunRepository;
-use crate::application::session_manager::SessionManager;
+use crate::application::session_manager::{ChildProcessRegistry, SessionManager};
 use crate::domain::config::Config;
 use crate::domain::decide::decide;
 use crate::domain::shutdown_mode::ShutdownMode;
@@ -201,6 +201,11 @@ where
         self
     }
 
+    pub fn with_child_registry(mut self, registry: ChildProcessRegistry) -> Self {
+        self.session_mgr = self.session_mgr.with_registry(registry);
+        self
+    }
+
     /// Main polling loop — 5-phase cycle.
     pub async fn run(&mut self) -> Result<()> {
         let mut tick = interval(Duration::from_secs(self.config.polling_interval_secs));
@@ -211,11 +216,8 @@ where
 
         loop {
             tokio::select! {
-                _ = tick.tick() => {
-                    if let Err(e) = self.run_cycle().await {
-                        tracing::error!(error = %e, "polling cycle error");
-                    }
-                }
+                biased;
+
                 _ = sigint.recv() => {
                     sigint_count += 1;
                     if sigint_count == 1 {
@@ -240,6 +242,11 @@ where
                     let deadline = self.shutdown_timeout.map(|d| std::time::Instant::now() + d);
                     self.graceful_shutdown(ShutdownMode::Graceful { deadline }).await;
                     return Ok(());
+                }
+                _ = tick.tick() => {
+                    if let Err(e) = self.run_cycle().await {
+                        tracing::error!(error = %e, "polling cycle error");
+                    }
                 }
             }
         }
