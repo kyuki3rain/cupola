@@ -678,25 +678,25 @@ fn decide_implementation_review_waiting(
     }
     if impl_pr.ci_status == CiStatus::Failure {
         if snap.ci_fix_exhausted {
-            if prev.ci_fix_count == cfg.max_ci_fix_cycles {
+            if prev.ci_fix_count >= cfg.max_ci_fix_cycles && !prev.ci_fix_limit_notified {
                 effects.push(Effect::PostCiFixLimitComment);
-                metadata_updates.ci_fix_count = Some(prev.ci_fix_count + 1);
+                metadata_updates.ci_fix_count = Some(prev.ci_fix_count.saturating_add(1));
             }
             return State::ImplementationReviewWaiting;
         }
-        metadata_updates.ci_fix_count = Some(prev.ci_fix_count + 1);
+        metadata_updates.ci_fix_count = Some(prev.ci_fix_count.saturating_add(1));
         emit_spawn_impl_fix(snap, impl_pr, effects);
         return State::ImplementationFixing;
     }
     if impl_pr.has_conflict {
         if snap.ci_fix_exhausted {
-            if prev.ci_fix_count == cfg.max_ci_fix_cycles {
+            if prev.ci_fix_count >= cfg.max_ci_fix_cycles && !prev.ci_fix_limit_notified {
                 effects.push(Effect::PostCiFixLimitComment);
-                metadata_updates.ci_fix_count = Some(prev.ci_fix_count + 1);
+                metadata_updates.ci_fix_count = Some(prev.ci_fix_count.saturating_add(1));
             }
             return State::ImplementationReviewWaiting;
         }
-        metadata_updates.ci_fix_count = Some(prev.ci_fix_count + 1);
+        metadata_updates.ci_fix_count = Some(prev.ci_fix_count.saturating_add(1));
         emit_spawn_impl_fix(snap, impl_pr, effects);
         return State::ImplementationFixing;
     }
@@ -1995,6 +1995,80 @@ mod tests {
             d.metadata_updates.ci_fix_count,
             Some(cfg.max_ci_fix_cycles + 1)
         );
+    }
+
+    /// T-1.D.X.5: ci_fix_count > max かつ未通知 → PostCiFixLimitComment 再発火 (CI failure)
+    #[test]
+    fn cross_5_post_ci_fix_limit_refires_when_count_exceeds_max_unnotified_ci() {
+        let cfg = cfg();
+        let mut issue = make_issue(State::ImplementationReviewWaiting);
+        issue.ci_fix_count = cfg.max_ci_fix_cycles + 1;
+        issue.ci_fix_limit_notified = false;
+        let mut snap = fixtures::idle();
+        snap.ci_fix_exhausted = true;
+        let mut pr = fixtures::open_pr();
+        pr.ci_status = CiStatus::Failure;
+        snap.impl_pr = Some(pr);
+        let d = decide(&issue, &snap, &cfg);
+        assert!(d.effects.contains(&Effect::PostCiFixLimitComment));
+        assert_eq!(
+            d.metadata_updates.ci_fix_count,
+            Some(cfg.max_ci_fix_cycles + 2)
+        );
+    }
+
+    /// T-1.D.X.6: ci_fix_limit_notified = true → PostCiFixLimitComment 抑制 (CI failure)
+    #[test]
+    fn cross_6_post_ci_fix_limit_suppressed_when_notified_ci() {
+        let cfg = cfg();
+        let mut issue = make_issue(State::ImplementationReviewWaiting);
+        issue.ci_fix_count = cfg.max_ci_fix_cycles;
+        issue.ci_fix_limit_notified = true;
+        let mut snap = fixtures::idle();
+        snap.ci_fix_exhausted = true;
+        let mut pr = fixtures::open_pr();
+        pr.ci_status = CiStatus::Failure;
+        snap.impl_pr = Some(pr);
+        let d = decide(&issue, &snap, &cfg);
+        assert!(!d.effects.contains(&Effect::PostCiFixLimitComment));
+        assert_eq!(d.metadata_updates.ci_fix_count, None);
+    }
+
+    /// T-1.D.X.7: ci_fix_count > max かつ未通知 → PostCiFixLimitComment 再発火 (conflict)
+    #[test]
+    fn cross_7_post_ci_fix_limit_refires_when_count_exceeds_max_unnotified_conflict() {
+        let cfg = cfg();
+        let mut issue = make_issue(State::ImplementationReviewWaiting);
+        issue.ci_fix_count = cfg.max_ci_fix_cycles + 1;
+        issue.ci_fix_limit_notified = false;
+        let mut snap = fixtures::idle();
+        snap.ci_fix_exhausted = true;
+        let mut pr = fixtures::open_pr();
+        pr.has_conflict = true;
+        snap.impl_pr = Some(pr);
+        let d = decide(&issue, &snap, &cfg);
+        assert!(d.effects.contains(&Effect::PostCiFixLimitComment));
+        assert_eq!(
+            d.metadata_updates.ci_fix_count,
+            Some(cfg.max_ci_fix_cycles + 2)
+        );
+    }
+
+    /// T-1.D.X.8: ci_fix_limit_notified = true → PostCiFixLimitComment 抑制 (conflict)
+    #[test]
+    fn cross_8_post_ci_fix_limit_suppressed_when_notified_conflict() {
+        let cfg = cfg();
+        let mut issue = make_issue(State::ImplementationReviewWaiting);
+        issue.ci_fix_count = cfg.max_ci_fix_cycles;
+        issue.ci_fix_limit_notified = true;
+        let mut snap = fixtures::idle();
+        snap.ci_fix_exhausted = true;
+        let mut pr = fixtures::open_pr();
+        pr.has_conflict = true;
+        snap.impl_pr = Some(pr);
+        let d = decide(&issue, &snap, &cfg);
+        assert!(!d.effects.contains(&Effect::PostCiFixLimitComment));
+        assert_eq!(d.metadata_updates.ci_fix_count, None);
     }
 
     // ── Transition-point persistent effect tests ──────────────────────

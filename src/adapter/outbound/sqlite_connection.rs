@@ -65,6 +65,7 @@ impl SqliteConnection {
                 weight                      TEXT NOT NULL DEFAULT 'medium',
                 worktree_path               TEXT,
                 ci_fix_count                INTEGER NOT NULL DEFAULT 0,
+                ci_fix_limit_notified       INTEGER NOT NULL DEFAULT 0,
                 close_finished              INTEGER NOT NULL DEFAULT 0,
                 consecutive_failures_epoch  TEXT,
                 created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -109,6 +110,7 @@ impl SqliteConnection {
         Self::run_add_column_migration(&conn, "feature_name TEXT")?;
         Self::run_add_column_migration(&conn, "weight TEXT NOT NULL DEFAULT 'medium'")?;
         Self::run_add_column_migration(&conn, "ci_fix_count INTEGER NOT NULL DEFAULT 0")?;
+        Self::run_add_column_migration(&conn, "ci_fix_limit_notified INTEGER NOT NULL DEFAULT 0")?;
         Self::run_add_column_migration(&conn, "close_finished INTEGER NOT NULL DEFAULT 0")?;
         Self::run_add_column_migration(&conn, "consecutive_failures_epoch TEXT")?;
         Self::run_add_column_migration(&conn, "last_pr_review_submitted_at TEXT")?;
