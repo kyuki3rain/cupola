@@ -2,6 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use secrecy::SecretString;
 
 use crate::adapter::inbound::cli::{Cli, Command, InitAgent};
 use crate::adapter::outbound::claude_code_process::ClaudeCodeProcess;
@@ -18,6 +19,7 @@ use crate::adapter::outbound::sqlite_execution_log_repository::SqliteExecutionLo
 use crate::adapter::outbound::sqlite_issue_repository::SqliteIssueRepository;
 use crate::adapter::outbound::sqlite_process_run_repository::SqliteProcessRunRepository;
 use crate::application::cleanup_use_case::CleanupUseCase;
+use crate::application::session_manager::ChildProcessRegistry;
 use crate::application::start_use_case::{ProcessAlivePort, recover_orphans};
 
 /// Production ProcessAlivePort using nix::sys::signal::kill(pid, 0).
@@ -196,10 +198,36 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Doctor { config } => {
+            let db_path = config
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("cupola.db");
             let loader = TomlConfigLoader;
             let runner = ProcessCommandRunner;
-            let use_case = DoctorUseCase::new(loader, runner);
-            let results = use_case.run(&config);
+            let overrides = CliOverrides {
+                polling_interval_secs: None,
+                log_level: None,
+            };
+            let max_ci_fix_cycles = if config.exists() {
+                match load_toml(&config).and_then(|t| t.into_config(&overrides)) {
+                    Ok(cfg) => cfg.max_ci_fix_cycles,
+                    Err(_) => 3,
+                }
+            } else {
+                3
+            };
+            let db = SqliteConnection::open(&db_path).with_context(|| {
+                format!("failed to open sqlite database at {}", db_path.display())
+            })?;
+            db.init_schema().with_context(|| {
+                format!(
+                    "failed to initialize sqlite schema for doctor at {}",
+                    db_path.display()
+                )
+            })?;
+            let issue_repo = SqliteIssueRepository::new(db);
+            let use_case = DoctorUseCase::new(loader, runner, issue_repo, max_ci_fix_cycles);
+            let results = use_case.run(&config).await;
 
             use crate::application::doctor_result::DoctorSection;
 
@@ -412,25 +440,25 @@ pub async fn run(cli: Cli) -> Result<()> {
             let repo = SqliteIssueRepository::new(db.clone());
             let process_run_repo = SqliteProcessRunRepository::new(db);
 
-            // Load config for max_concurrent_sessions display
+            // Load config for max_concurrent_sessions and max_ci_fix_cycles display
             let config_path = Path::new(".cupola/cupola.toml");
-            let max_sessions = if config_path.exists() {
+            let (max_sessions, max_ci_fix_cycles) = if config_path.exists() {
                 let overrides = CliOverrides {
                     polling_interval_secs: None,
                     log_level: None,
                 };
                 match load_toml(config_path).and_then(|t| t.into_config(&overrides)) {
-                    Ok(cfg) => cfg.max_concurrent_sessions,
+                    Ok(cfg) => (cfg.max_concurrent_sessions, Some(cfg.max_ci_fix_cycles)),
                     Err(e) => {
                         tracing::warn!(
                             error = %e,
                             "設定ファイルの読み込みに失敗しました。一部のステータス情報が表示されない場合があります。"
                         );
-                        None
+                        (None, None)
                     }
                 }
             } else {
-                None
+                (None, None)
             };
 
             let pid_file_manager =
@@ -441,6 +469,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 &process_run_repo,
                 &repo,
                 max_sessions,
+                max_ci_fix_cycles,
             )
             .await
         }
@@ -492,9 +521,11 @@ async fn start_foreground(
             other => anyhow::anyhow!("failed to write PID file: {other}"),
         })?;
 
-    // Install a panic hook that deletes the PID file if the polling loop panics
-    // unexpectedly, preventing a stale PID file from blocking the next startup.
-    install_panic_hook(pid_path.clone());
+    let registry = ChildProcessRegistry::new();
+
+    // Install a panic hook that shuts down child processes and deletes the PID file
+    // if the polling loop panics unexpectedly.
+    install_panic_hook(pid_path.clone(), registry.clone());
 
     // Wrap all post-write_pid work in a single async block so that any `?` propagation
     // (tracing, DB open, token resolution, client construction, polling) is captured as a
@@ -522,7 +553,7 @@ async fn start_foreground(
         db.init_schema()?;
 
         // Resolve GitHub token
-        let token = gh_token::get()?;
+        let token = SecretString::new(gh_token::get()?.into());
 
         // Build adapters
         let rest = OctocrabRestClient::new(token.clone(), cfg.owner.clone(), cfg.repo.clone())?;
@@ -554,7 +585,8 @@ async fn start_foreground(
             cfg,
         )
         .with_process_repo(process_repo)
-        .with_pid_file(Box::new(pid_file_manager));
+        .with_pid_file(Box::new(pid_file_manager))
+        .with_child_registry(registry);
 
         polling.run().await
     }
@@ -660,9 +692,11 @@ async fn start_daemon_child(
             other => anyhow::anyhow!("failed to write PID file: {other}"),
         })?;
 
-    // Install a panic hook that deletes the PID file if the polling loop panics
-    // unexpectedly, preventing a stale PID file from blocking the next startup.
-    install_panic_hook(pid_path.clone());
+    let registry = ChildProcessRegistry::new();
+
+    // Install a panic hook that shuts down child processes and deletes the PID file
+    // if the polling loop panics unexpectedly.
+    install_panic_hook(pid_path.clone(), registry.clone());
 
     // Wrap all post-write_pid work in a single async block so that any `?` propagation
     // (DB open, token resolution, client construction, polling) is captured as a Result
@@ -687,7 +721,7 @@ async fn start_daemon_child(
         db.init_schema()?;
 
         // Resolve GitHub token
-        let token = gh_token::get()?;
+        let token = SecretString::new(gh_token::get()?.into());
 
         // Build adapters
         let rest = OctocrabRestClient::new(token.clone(), cfg.owner.clone(), cfg.repo.clone())?;
@@ -719,7 +753,8 @@ async fn start_daemon_child(
             cfg,
         )
         .with_process_repo(process_repo)
-        .with_pid_file(Box::new(pid_file_manager));
+        .with_pid_file(Box::new(pid_file_manager))
+        .with_child_registry(registry);
 
         polling.run().await
     }
@@ -738,6 +773,7 @@ async fn handle_status<W: std::io::Write>(
     process_run_repo: &impl crate::application::port::process_run_repository::ProcessRunRepository,
     repo: &impl IssueRepository,
     max_sessions: Option<u32>,
+    max_ci_fix_cycles: Option<u32>,
 ) -> Result<()> {
     use crate::application::port::pid_file::ProcessMode;
 
@@ -798,13 +834,25 @@ async fn handle_status<W: std::io::Write>(
         }
 
         for issue in &issues {
-            writeln!(
-                out,
-                "  #{:<5} {:<30} wt:{}",
-                issue.github_issue_number,
-                issue.state.to_string(),
-                issue.worktree_path.as_deref().unwrap_or("none"),
-            )?;
+            let pending_notification = max_ci_fix_cycles
+                .is_some_and(|max| issue.ci_fix_count > max && !issue.ci_fix_limit_notified);
+            if pending_notification {
+                writeln!(
+                    out,
+                    "  #{:<5} {:<30} wt:{} ⚠ ci-fix-limit notification pending",
+                    issue.github_issue_number,
+                    issue.state.to_string(),
+                    issue.worktree_path.as_deref().unwrap_or("none"),
+                )?;
+            } else {
+                writeln!(
+                    out,
+                    "  #{:<5} {:<30} wt:{}",
+                    issue.github_issue_number,
+                    issue.state.to_string(),
+                    issue.worktree_path.as_deref().unwrap_or("none"),
+                )?;
+            }
         }
     }
     Ok(())
@@ -847,32 +895,26 @@ fn check_daemon_not_running(
     }
 }
 
-/// Installs a global panic hook that deletes the PID file at `pid_path` before
-/// the default panic handler runs.
-///
-/// Call this immediately after writing the PID file so that an unexpected panic
-/// (e.g. inside the polling loop) does not leave a stale PID file behind.
+/// Installs a global panic hook that shuts down child processes, deletes the
+/// PID file, logs the panic, then invokes the previous hook.
 ///
 /// # Behaviour
-/// 1. Deletes the PID file (best-effort; errors are silently ignored).
-/// 2. Logs the panic message and location via `tracing::error!` (no-op when the
+/// 1. Sends SIGTERM to all registered child processes, waits up to 3 seconds, then SIGKILL.
+/// 2. Deletes the PID file (best-effort; errors are silently ignored).
+/// 3. Logs the panic message and location via `tracing::error!` (no-op when the
 ///    subscriber is not yet initialised).
-/// 3. Invokes the previously-installed hook so that the default panic output
+/// 4. Invokes the previously-installed hook so that the default panic output
 ///    (stack trace to stderr) is preserved.
-pub fn install_panic_hook(pid_path: std::path::PathBuf) {
+pub fn install_panic_hook(pid_path: std::path::PathBuf, child_registry: ChildProcessRegistry) {
     use crate::application::port::pid_file::PidFilePort;
 
-    // Capture whatever hook is currently installed so we can chain it.
     let previous_hook = std::panic::take_hook();
 
     std::panic::set_hook(Box::new(move |panic_info| {
-        // Best-effort PID file cleanup first — do this before any I/O that
-        // could itself panic (e.g. eprintln! on a broken pipe), so cleanup
-        // is never skipped due to a secondary failure.  Errors are silently
-        // ignored so the original panic is never obscured.
+        child_registry.shutdown_sync(std::time::Duration::from_secs(3));
+
         let _ = PidFileManager::new(pid_path.clone()).delete_pid();
 
-        // Build a human-readable panic message from the payload.
         let msg: String = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
             (*s).to_string()
         } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
@@ -892,9 +934,6 @@ pub fn install_panic_hook(pid_path: std::path::PathBuf) {
             tracing::error!(message = %msg, "daemon panicked");
         }
 
-        // Preserve the default panic behaviour (stderr backtrace / abort).
-        // The default hook already writes the panic message to stderr, so
-        // there is no need for an additional eprintln! here.
         previous_hook(panic_info);
     }));
 }
@@ -1156,6 +1195,7 @@ mod tests {
             weight: crate::domain::task_weight::TaskWeight::Medium,
             worktree_path: None,
             ci_fix_count: 0,
+            ci_fix_limit_notified: false,
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
@@ -1188,6 +1228,7 @@ mod tests {
             weight: crate::domain::task_weight::TaskWeight::Medium,
             worktree_path: Some(".cupola/worktrees/42".into()),
             ci_fix_count: 0,
+            ci_fix_limit_notified: false,
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
@@ -1295,6 +1336,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -1321,6 +1363,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -1344,6 +1387,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -1375,6 +1419,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -1410,6 +1455,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -1439,6 +1485,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -1466,6 +1513,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -1497,6 +1545,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -1624,6 +1673,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -1648,6 +1698,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -1675,6 +1726,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -1699,6 +1751,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -1727,6 +1780,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -1762,6 +1816,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -1791,6 +1846,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -1822,19 +1878,15 @@ mod tests {
         std::fs::write(&pid_path, "12345\n").expect("write PID file");
         assert!(pid_path.exists(), "PID file must exist before test");
 
-        // Save the current hook so we can restore it after the test.
         let saved_hook = std::panic::take_hook();
 
-        super::install_panic_hook(pid_path.clone());
+        use crate::application::session_manager::ChildProcessRegistry;
+        super::install_panic_hook(pid_path.clone(), ChildProcessRegistry::new());
 
-        // Trigger a real panic and catch the unwind so the test process survives.
-        // The panic hook runs *before* unwinding, so the PID file should already
-        // be deleted when catch_unwind returns.
         let result = std::panic::catch_unwind(|| {
             panic!("intentional test panic");
         });
 
-        // Restore the hook that was active before this test.
         let _installed = std::panic::take_hook();
         std::panic::set_hook(saved_hook);
 
@@ -1852,11 +1904,11 @@ mod tests {
 
         let dir = tempfile::TempDir::new().expect("temp dir");
         let pid_path = dir.path().join("cupola.pid");
-        // Deliberately do NOT create the PID file.
         assert!(!pid_path.exists(), "PID file must not exist before test");
 
         let saved_hook = std::panic::take_hook();
-        super::install_panic_hook(pid_path.clone());
+        use crate::application::session_manager::ChildProcessRegistry;
+        super::install_panic_hook(pid_path.clone(), ChildProcessRegistry::new());
 
         let result = std::panic::catch_unwind(|| {
             panic!("intentional test panic – no pid file");
@@ -1865,9 +1917,103 @@ mod tests {
         let _installed = std::panic::take_hook();
         std::panic::set_hook(saved_hook);
 
-        // The hook must not itself panic even when the PID file is missing.
         assert!(result.is_err(), "catch_unwind should have caught the panic");
-        // No assertion on pid_path.exists() since it was never created.
+    }
+
+    /// panic hook が registry に登録された子プロセスを終了させること。
+    #[test]
+    fn install_panic_hook_kills_registered_child_process() {
+        use crate::application::session_manager::ChildProcessRegistry;
+        use std::process::{Command, Stdio};
+
+        let _guard = hook_test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let pid_path = dir.path().join("cupola.pid");
+        std::fs::write(&pid_path, "12345\n").expect("write PID file");
+
+        let mut child = Command::new("sleep")
+            .arg("60")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep");
+        let child_pid = child.id();
+
+        let reg = ChildProcessRegistry::new();
+        reg.register(child_pid);
+
+        let saved_hook = std::panic::take_hook();
+        super::install_panic_hook(pid_path.clone(), reg);
+
+        // catch_unwind runs the hook synchronously (blocks up to 3s for shutdown_sync)
+        let result = std::panic::catch_unwind(|| {
+            panic!("intentional test panic for child kill");
+        });
+
+        let _installed = std::panic::take_hook();
+        std::panic::set_hook(saved_hook);
+
+        assert!(result.is_err(), "catch_unwind should have caught a panic");
+        assert!(
+            !pid_path.exists(),
+            "PID file should be deleted by the panic hook"
+        );
+
+        // child.wait() correctly handles zombies: if SIGTERM caused the process to exit,
+        // it will be a zombie that wait() reaps immediately with a non-zero exit status.
+        let status = child.wait().expect("wait should succeed");
+        assert!(
+            !status.success(),
+            "sleep pid={child_pid} should have been killed, not exited normally"
+        );
+    }
+
+    /// panic hook が Mutex 毒化状態でも子プロセスを終了させること。
+    #[test]
+    fn install_panic_hook_kills_child_even_with_poisoned_mutex() {
+        use crate::application::session_manager::ChildProcessRegistry;
+        use std::process::{Command, Stdio};
+
+        let _guard = hook_test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let pid_path = dir.path().join("cupola.pid");
+        std::fs::write(&pid_path, "12345\n").expect("write PID file");
+
+        let mut child = Command::new("sleep")
+            .arg("60")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep");
+        let child_pid = child.id();
+
+        let reg = ChildProcessRegistry::new();
+        reg.register(child_pid);
+
+        // Poison the mutex by panicking while holding the lock
+        reg.poison_for_test();
+
+        // The registry mutex is now poisoned; shutdown_sync should still work via into_inner
+        let saved_hook = std::panic::take_hook();
+        super::install_panic_hook(pid_path.clone(), reg);
+
+        let result = std::panic::catch_unwind(|| {
+            panic!("intentional test panic");
+        });
+
+        let _installed = std::panic::take_hook();
+        std::panic::set_hook(saved_hook);
+
+        assert!(result.is_err());
+
+        // child.wait() correctly handles zombies: if SIGTERM caused exit, returns immediately.
+        let status = child.wait().expect("wait should succeed");
+        assert!(
+            !status.success(),
+            "sleep pid={child_pid} should have been killed even with poisoned mutex"
+        );
     }
 
     // --- check_daemon_not_running tests ---
@@ -1933,6 +2079,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -1961,6 +2108,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -1987,6 +2135,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -2011,6 +2160,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -2038,6 +2188,7 @@ mod tests {
             &MockProcessRunRepository::with_running_count(2),
             &repo,
             Some(5),
+            None,
         )
         .await
         .expect("handle");
@@ -2063,6 +2214,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::with_running_count(3),
             &repo,
+            None,
             None,
         )
         .await
@@ -2094,6 +2246,7 @@ mod tests {
             &MockProcessRunRepository::with_running_count(4),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -2121,6 +2274,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await

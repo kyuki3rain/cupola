@@ -347,6 +347,7 @@ dependencies = [
  "reqwest",
  "rusqlite",
  "rust-i18n",
+ "secrecy",
  "serde",
  "serde_json",
  "sha2",
