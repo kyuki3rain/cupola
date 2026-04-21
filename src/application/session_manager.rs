@@ -1,13 +1,136 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufWriter, LineWriter};
 use std::path::PathBuf;
 use std::process::{Child, ExitStatus};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::domain::state::State;
 
 const LOG_DIR: &str = ".cupola/logs/process-runs";
+
+/// アクティブな子プロセスの PID 共有レジストリ。
+/// SessionManager と panic hook の間でプロセス PID を共有する。
+/// Arc<Mutex<_>> でラップされているため、clone() で安価に複数の所有者に配布できる。
+#[derive(Clone, Default)]
+pub struct ChildProcessRegistry {
+    pids: Arc<Mutex<HashSet<u32>>>,
+}
+
+impl ChildProcessRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 子プロセスが起動したときに PID を登録する。
+    pub fn register(&self, pid: u32) {
+        let mut set = match self.pids.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
+        set.insert(pid);
+    }
+
+    /// 子プロセスが終了・強制終了したときに PID を削除する。
+    pub fn unregister(&self, pid: u32) {
+        let mut set = match self.pids.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
+        set.remove(&pid);
+    }
+
+    #[cfg(test)]
+    pub fn contains_pid(&self, pid: u32) -> bool {
+        let set = match self.pids.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
+        set.contains(&pid)
+    }
+
+    #[cfg(test)]
+    pub fn pids_is_empty(&self) -> bool {
+        let set = match self.pids.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
+        set.is_empty()
+    }
+
+    /// Poison the internal Mutex by panicking while holding the lock.
+    /// Intended only for tests that verify poisoned-mutex recovery.
+    #[cfg(test)]
+    pub fn poison_for_test(&self) {
+        let clone = self.clone();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = clone.pids.lock().expect("lock");
+            panic!("intentional mutex poison");
+        }));
+    }
+
+    /// 全登録プロセスへ SIGTERM → タイムアウト → SIGKILL を同期実行する。
+    /// panic hook から呼ばれることを想定しており、async/await を使わない。
+    pub fn shutdown_sync(&self, sigterm_timeout: Duration) {
+        use nix::sys::signal::{Signal, kill};
+        use nix::unistd::Pid;
+
+        let pids: Vec<u32> = {
+            let set = match self.pids.lock() {
+                Ok(g) => g,
+                Err(e) => e.into_inner(),
+            };
+            set.iter().copied().collect()
+        };
+
+        if pids.is_empty() {
+            return;
+        }
+
+        for &pid in &pids {
+            if let Ok(raw) = i32::try_from(pid)
+                && raw > 0
+            {
+                let _ = kill(Pid::from_raw(raw), Signal::SIGTERM);
+            }
+        }
+
+        let poll_interval = Duration::from_millis(100);
+        let deadline = Instant::now() + sigterm_timeout;
+
+        loop {
+            std::thread::sleep(poll_interval);
+
+            let alive: Vec<u32> = pids
+                .iter()
+                .copied()
+                .filter(|&pid| {
+                    i32::try_from(pid)
+                        .ok()
+                        .filter(|&raw| raw > 0)
+                        .map(|raw| kill(Pid::from_raw(raw), None).is_ok())
+                        .unwrap_or(false)
+                })
+                .collect();
+
+            if alive.is_empty() {
+                return;
+            }
+
+            if Instant::now() >= deadline {
+                for &pid in &alive {
+                    if let Ok(raw) = i32::try_from(pid)
+                        && raw > 0
+                    {
+                        let _ = kill(Pid::from_raw(raw), Signal::SIGKILL);
+                    }
+                }
+                return;
+            }
+        }
+    }
+}
 
 pub struct SessionManager {
     sessions: HashMap<i64, SessionEntry>,
@@ -20,6 +143,7 @@ pub struct SessionManager {
     /// limit even while async I/O is in flight.
     pending: usize,
     log_dir: PathBuf,
+    registry: Option<ChildProcessRegistry>,
 }
 
 struct SessionEntry {
@@ -86,7 +210,14 @@ impl SessionManager {
             sessions: HashMap::new(),
             pending: 0,
             log_dir: PathBuf::from(LOG_DIR),
+            registry: None,
         }
+    }
+
+    /// ChildProcessRegistry を設定する builder メソッド。
+    pub fn with_registry(mut self, registry: ChildProcessRegistry) -> Self {
+        self.registry = Some(registry);
+        self
     }
 
     /// Attempt to reserve a session slot before performing async I/O.
@@ -128,9 +259,17 @@ impl SessionManager {
         self.pending = self.pending.saturating_sub(1);
 
         if let Some(mut old_entry) = self.sessions.remove(&issue_id) {
+            let old_pid = old_entry.child.id();
             let _ = old_entry.child.kill();
-            let _ = old_entry.child.wait();
+            let wait_result = old_entry.child.wait();
+            if wait_result.is_ok()
+                && let Some(ref reg) = self.registry
+            {
+                reg.unregister(old_pid);
+            }
         }
+
+        let pid = child.id();
 
         if let Err(e) = std::fs::create_dir_all(&self.log_dir) {
             tracing::warn!(
@@ -156,7 +295,6 @@ impl SessionManager {
                 self.log_dir.join(format!("issue-{issue_id}-stderr.log")),
             )
         };
-
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
@@ -191,6 +329,10 @@ impl SessionManager {
                 run_id,
             },
         );
+
+        if let Some(ref reg) = self.registry {
+            reg.register(pid);
+        }
     }
 
     pub fn collect_exited(&mut self) -> Vec<ExitedSession> {
@@ -212,6 +354,8 @@ impl SessionManager {
         let mut results = Vec::new();
         for issue_id in exited_ids {
             if let Some(mut entry) = self.sessions.remove(&issue_id) {
+                let pid = entry.child.id();
+
                 #[expect(
                     clippy::expect_used,
                     reason = "wait after kill is practically unreachable"
@@ -227,6 +371,10 @@ impl SessionManager {
                 }
                 if let Some(h) = entry.stderr_reader_handle.take() {
                     let _ = h.join();
+                }
+
+                if let Some(ref reg) = self.registry {
+                    reg.unregister(pid);
                 }
 
                 results.push(ExitedSession {
@@ -254,14 +402,24 @@ impl SessionManager {
 
     pub fn kill(&mut self, issue_id: i64) -> anyhow::Result<()> {
         if let Some(entry) = self.sessions.get_mut(&issue_id) {
+            let pid = entry.child.id();
             entry.child.kill()?;
+            if let Some(ref reg) = self.registry {
+                reg.unregister(pid);
+            }
         }
         Ok(())
     }
 
     pub fn kill_all(&mut self) {
+        let pids: Vec<u32> = self.sessions.values().map(|e| e.child.id()).collect();
         for entry in self.sessions.values_mut() {
             let _ = entry.child.kill();
+        }
+        if let Some(ref reg) = self.registry {
+            for pid in pids {
+                reg.unregister(pid);
+            }
         }
     }
 
@@ -293,6 +451,7 @@ impl SessionManager {
             sessions: HashMap::new(),
             pending: 0,
             log_dir,
+            registry: None,
         }
     }
 }
@@ -645,6 +804,140 @@ mod tests {
         assert!(
             content.contains("line3"),
             "log should contain line3; content: {content:?}"
+        );
+    }
+
+    // --- ChildProcessRegistry unit tests ---
+
+    #[test]
+    fn registry_register_and_unregister() {
+        let reg = ChildProcessRegistry::new();
+        reg.register(100);
+        reg.register(200);
+        assert!(reg.contains_pid(100));
+        assert!(reg.contains_pid(200));
+        reg.unregister(100);
+        assert!(!reg.contains_pid(100));
+        assert!(reg.contains_pid(200));
+        reg.unregister(200);
+        assert!(reg.pids_is_empty());
+    }
+
+    #[test]
+    fn registry_unregister_nonexistent_is_safe() {
+        let reg = ChildProcessRegistry::new();
+        reg.unregister(9999); // should not panic
+    }
+
+    #[test]
+    fn registry_shutdown_sync_empty_is_safe() {
+        let reg = ChildProcessRegistry::new();
+        reg.shutdown_sync(Duration::from_millis(100)); // should not panic
+    }
+
+    // --- SessionManager + ChildProcessRegistry integration tests ---
+
+    #[test]
+    fn registry_pid_added_on_register() {
+        let tmpdir = tempfile::tempdir().expect("temp dir");
+        let reg = ChildProcessRegistry::new();
+        let mut mgr =
+            SessionManager::with_log_dir(tmpdir.path().to_path_buf()).with_registry(reg.clone());
+        let child = spawn_sleep(60);
+        let pid = child.id();
+        mgr.register(1, State::DesignRunning, child, 0);
+
+        assert!(
+            reg.contains_pid(pid),
+            "PID should be in registry after register"
+        );
+
+        mgr.kill_all();
+    }
+
+    #[test]
+    fn registry_pid_removed_on_collect_exited() {
+        let tmpdir = tempfile::tempdir().expect("temp dir");
+        let reg = ChildProcessRegistry::new();
+        let mut mgr =
+            SessionManager::with_log_dir(tmpdir.path().to_path_buf()).with_registry(reg.clone());
+        let child = spawn_echo();
+        let pid = child.id();
+        mgr.register(1, State::DesignRunning, child, 0);
+
+        std::thread::sleep(Duration::from_millis(200));
+        let exited = mgr.collect_exited();
+        assert_eq!(exited.len(), 1);
+
+        assert!(
+            !reg.contains_pid(pid),
+            "PID should be removed from registry after collect_exited"
+        );
+    }
+
+    #[test]
+    fn registry_pid_removed_on_kill_all() {
+        let tmpdir = tempfile::tempdir().expect("temp dir");
+        let reg = ChildProcessRegistry::new();
+        let mut mgr =
+            SessionManager::with_log_dir(tmpdir.path().to_path_buf()).with_registry(reg.clone());
+        let child1 = spawn_sleep(60);
+        let pid1 = child1.id();
+        let child2 = spawn_sleep(60);
+        let pid2 = child2.id();
+        mgr.register(1, State::DesignRunning, child1, 0);
+        mgr.register(2, State::ImplementationRunning, child2, 0);
+
+        mgr.kill_all();
+
+        assert!(
+            !reg.contains_pid(pid1),
+            "pid1 should be removed after kill_all"
+        );
+        assert!(
+            !reg.contains_pid(pid2),
+            "pid2 should be removed after kill_all"
+        );
+    }
+
+    #[test]
+    fn no_registry_existing_behavior_unchanged() {
+        let tmpdir = tempfile::tempdir().expect("temp dir");
+        let mut mgr = SessionManager::with_log_dir(tmpdir.path().to_path_buf());
+        let child = spawn_sleep(60);
+        mgr.register(1, State::DesignRunning, child, 0);
+        assert!(mgr.is_running(1));
+        mgr.kill_all();
+    }
+
+    #[test]
+    fn registry_shutdown_sync_terminates_sleep_process() {
+        let reg = ChildProcessRegistry::new();
+        let mut child = spawn_sleep(60);
+        let pid = child.id();
+        reg.register(pid);
+
+        // shutdown_sync sends SIGTERM; use a short timeout for fast test execution
+        reg.shutdown_sync(Duration::from_millis(500));
+
+        // child.try_wait() properly handles zombies (processes that exited but weren't reaped)
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(s)) => break s,
+                Ok(None) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "process pid={pid} should have exited after shutdown_sync"
+                    );
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => panic!("try_wait error: {e}"),
+            }
+        };
+        assert!(
+            !status.success(),
+            "sleep should have been killed by signal, not exited normally"
         );
     }
 }

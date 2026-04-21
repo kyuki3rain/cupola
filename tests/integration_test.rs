@@ -760,7 +760,10 @@ fn panic_hook_deletes_pid_file_in_spawned_thread() {
 
     // Save and then install our hook in the main thread (hooks are global).
     let saved_hook = std::panic::take_hook();
-    cupola::bootstrap::app::install_panic_hook(pid_path.clone());
+    cupola::bootstrap::app::install_panic_hook(
+        pid_path.clone(),
+        cupola::application::session_manager::ChildProcessRegistry::new(),
+    );
 
     // Spawn a thread that panics.  Because the hook is already installed,
     // it will run when the thread panics, deleting the PID file.
@@ -793,7 +796,10 @@ fn panic_hook_safe_when_pid_file_absent_in_thread() {
     assert!(!pid_path.exists());
 
     let saved_hook = std::panic::take_hook();
-    cupola::bootstrap::app::install_panic_hook(pid_path.clone());
+    cupola::bootstrap::app::install_panic_hook(
+        pid_path.clone(),
+        cupola::application::session_manager::ChildProcessRegistry::new(),
+    );
 
     let handle = std::thread::spawn(|| {
         panic!("deliberate panic – absent pid file");
