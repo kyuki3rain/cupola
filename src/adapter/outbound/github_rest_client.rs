@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use octocrab::Octocrab;
+use secrecy::{ExposeSecret, SecretString};
 
 use crate::adapter::outbound::github_api_error::{classify_http_error, parse_retry_after};
 use crate::application::port::github_client::{
@@ -57,15 +58,15 @@ pub struct OctocrabRestClient {
     octocrab: Octocrab,
     owner: String,
     repo: String,
-    token: String,
+    token: SecretString,
     http_client: reqwest::Client,
     api_base_url: String,
 }
 
 impl OctocrabRestClient {
-    pub fn new(token: String, owner: String, repo: String) -> Result<Self> {
+    pub fn new(token: SecretString, owner: String, repo: String) -> Result<Self> {
         let octocrab = Octocrab::builder()
-            .personal_token(token.clone())
+            .personal_token(token.expose_secret().to_string())
             .build()
             .context("failed to build octocrab client")?;
         let http_client = reqwest::Client::builder()
@@ -97,7 +98,7 @@ impl OctocrabRestClient {
             octocrab,
             owner: owner.to_string(),
             repo: repo.to_string(),
-            token: "test-token".to_string(),
+            token: SecretString::new("test-token".into()),
             http_client,
             api_base_url: base_url.to_string(),
         })
@@ -112,7 +113,10 @@ impl OctocrabRestClient {
         let resp = self
             .http_client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.token.expose_secret()),
+            )
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send()
@@ -298,7 +302,10 @@ impl OctocrabRestClient {
             let resp = self
                 .http_client
                 .get(&url)
-                .header("Authorization", format!("Bearer {}", self.token))
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", self.token.expose_secret()),
+                )
                 .header("Accept", "application/vnd.github+json")
                 .header("X-GitHub-Api-Version", "2022-11-28")
                 .send()
@@ -363,7 +370,10 @@ impl OctocrabRestClient {
         let resp = self
             .http_client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.token.expose_secret()),
+            )
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send()
@@ -409,7 +419,10 @@ impl OctocrabRestClient {
         let resp = self
             .http_client
             .delete(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.token.expose_secret()),
+            )
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send()
@@ -475,6 +488,21 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
+
+    // ============================================================
+    // SecretString Debug マスキングテスト（Task 4.1）
+    // ============================================================
+
+    /// SecretString の Debug 出力に実トークン文字列が含まれないことを検証する
+    #[test]
+    fn secret_string_debug_masks_token_value() {
+        let secret = SecretString::new("actual-token".into());
+        let debug_output = format!("{:?}", secret);
+        assert!(
+            !debug_output.contains("actual-token"),
+            "Debug output must not contain actual token value, got: {debug_output}"
+        );
+    }
 
     // ============================================================
     // parse_link_header ユニットテスト（Task 1.2）
