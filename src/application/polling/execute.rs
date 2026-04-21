@@ -421,7 +421,7 @@ where
     // Perform all async I/O in a helper.  On failure, release the claim so
     // that a future cycle can retry.
     match prepare_init_handle(github, process_repo, worktree, file_gen, config, issue).await {
-        Ok((handle, body_hash)) => {
+        Ok((handle, body_hash, run_id)) => {
             // Persist the body_hash as the approval snapshot.
             let updates = MetadataUpdates {
                 body_hash: Some(Some(body_hash.clone())),
@@ -431,6 +431,10 @@ where
                 .update_state_and_metadata(issue.id, &updates)
                 .await
             {
+                // Abort the already-spawned task and mark the ProcessRun as
+                // failed so it does not remain stuck in `running` state.
+                handle.abort();
+                let _ = process_repo.mark_failed(run_id, Some(e.to_string())).await;
                 init_mgr.release_claim(issue.id);
                 return Err(e);
             }
@@ -459,7 +463,7 @@ async fn prepare_init_handle<G, P, W, F>(
     file_gen: &F,
     config: &Config,
     issue: &Issue,
-) -> Result<(tokio::task::JoinHandle<anyhow::Result<String>>, String)>
+) -> Result<(tokio::task::JoinHandle<anyhow::Result<String>>, String, i64)>
 where
     G: GitHubClient,
     P: ProcessRunRepository,
@@ -537,7 +541,7 @@ where
         .map_err(|e| anyhow::anyhow!("init blocking task panicked: {e}"))?
     });
 
-    Ok((handle, body_hash))
+    Ok((handle, body_hash, run_id))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -811,7 +815,7 @@ where
 
 /// Issue 本文改変検知時の応答処理。
 ///
-/// 1. DB 上の Issue 状態を `Cancelled` に遷移させる（失敗時は伝播）。
+/// 1. DB 上の Issue 状態を `Cancelled` に遷移させる（失敗時はログのみ）。
 /// 2. GitHub から `agent:ready` ラベルを削除する（ベストエフォート）。
 /// 3. GitHub Issue に通知コメントを投稿する（ベストエフォート）。
 /// 4. インメモリの `issue.state` を `Cancelled` に更新する。

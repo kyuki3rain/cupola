@@ -127,9 +127,10 @@ If an Issue body change is intentional and acceptable, a trusted user can resume
   subsequent `SpawnProcess` are detected. Changes made during an active Claude Code session
   are not intercepted (the session uses already-written input files).
 
-- **PR review comments are handled separately** via the per-author trust check
-  (`trusted_associations`). Do not use Issue body edits to send change requests to the
-  agent; use PR review comments instead.
+- **PR review comments are handled separately** via Cupola's comment trust check, which
+  accepts comments from authors whose association is allowed by `trusted_associations` or
+  whose login is explicitly listed in `trusted_reviewers`. Do not use Issue body edits to
+  send change requests to the agent; use PR review comments instead.
 
 ## Reporting Security Vulnerabilities
 
