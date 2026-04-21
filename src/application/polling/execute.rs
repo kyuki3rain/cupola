@@ -230,7 +230,26 @@ where
                 "CI fix limit reached ({} cycles). Automatic fixing has stopped.",
                 config.max_ci_fix_cycles
             );
-            github.comment_on_issue(n, &msg).await?;
+            match github.comment_on_issue(n, &msg).await {
+                Ok(()) => {
+                    issue_repo
+                        .update_state_and_metadata(
+                            issue.id,
+                            &MetadataUpdates {
+                                ci_fix_limit_notified: Some(true),
+                                ..Default::default()
+                            },
+                        )
+                        .await?;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        issue_number = n,
+                        error = %e,
+                        "failed to post ci-fix-limit comment; will retry next cycle"
+                    );
+                }
+            }
         }
 
         Effect::SpawnInit => {
@@ -1591,6 +1610,7 @@ mod tests {
             weight: crate::domain::task_weight::TaskWeight::Medium,
             worktree_path: Some(wt_path.to_string()),
             ci_fix_count: 0,
+            ci_fix_limit_notified: false,
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
@@ -1706,6 +1726,7 @@ mod tests {
             weight: crate::domain::task_weight::TaskWeight::Medium,
             worktree_path: None,
             ci_fix_count: 0,
+            ci_fix_limit_notified: false,
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
@@ -2184,6 +2205,90 @@ mod tests {
             issue_repo.call_count(),
             super::RETRY_DELAYS.len() as u32 + 1,
             "should exhaust all retries"
+        );
+    }
+
+    // ── Tests for PostCiFixLimitComment ──────────────────────────────────────
+
+    /// T-3.CFL.1: comment 成功時に ci_fix_limit_notified=true が永続化される
+    #[tokio::test]
+    async fn post_ci_fix_limit_comment_persists_notified_on_success() {
+        let github = MockGitHubForInit::new();
+        let (issue_repo, metadata_updates) = MockIssueRepoForCleanup::new();
+        let proc_repo = MockProcRepo::new();
+        let worktree = MockGitWorktreeForCleanup::new().0;
+        let file_gen = MockFileGenerator::with_log(Arc::new(Mutex::new(vec![])));
+        let mut session_mgr = crate::application::session_manager::SessionManager::new();
+        let mut init_mgr = crate::application::init_task_manager::InitTaskManager::new();
+        let config =
+            Config::default_with_repo("owner".to_string(), "repo".to_string(), "main".to_string());
+        let mut issue = make_test_issue("issue-1");
+
+        let effects = [Effect::PostCiFixLimitComment];
+        super::execute_effects(
+            &github,
+            &issue_repo,
+            &proc_repo,
+            &MockClaudeRunner,
+            &worktree,
+            &file_gen,
+            &mut session_mgr,
+            &mut init_mgr,
+            &config,
+            &mut issue,
+            &effects,
+        )
+        .await
+        .expect("execute_effects should succeed");
+
+        let updates = metadata_updates.lock().expect("lock");
+        assert_eq!(
+            updates.len(),
+            1,
+            "should call update_state_and_metadata once"
+        );
+        assert_eq!(
+            updates[0].ci_fix_limit_notified,
+            Some(true),
+            "should persist ci_fix_limit_notified=true"
+        );
+    }
+
+    /// T-3.CFL.2: comment 失敗時に永続化が呼ばれない（warn のみ）
+    #[tokio::test]
+    async fn post_ci_fix_limit_comment_skips_persist_on_comment_failure() {
+        let github = MockGitHubForInit::new().with_failing_comment();
+        let (issue_repo, metadata_updates) = MockIssueRepoForCleanup::new();
+        let proc_repo = MockProcRepo::new();
+        let worktree = MockGitWorktreeForCleanup::new().0;
+        let file_gen = MockFileGenerator::with_log(Arc::new(Mutex::new(vec![])));
+        let mut session_mgr = crate::application::session_manager::SessionManager::new();
+        let mut init_mgr = crate::application::init_task_manager::InitTaskManager::new();
+        let config =
+            Config::default_with_repo("owner".to_string(), "repo".to_string(), "main".to_string());
+        let mut issue = make_test_issue("issue-1");
+
+        let effects = [Effect::PostCiFixLimitComment];
+        super::execute_effects(
+            &github,
+            &issue_repo,
+            &proc_repo,
+            &MockClaudeRunner,
+            &worktree,
+            &file_gen,
+            &mut session_mgr,
+            &mut init_mgr,
+            &config,
+            &mut issue,
+            &effects,
+        )
+        .await
+        .expect("execute_effects should succeed (PostCiFixLimitComment is best-effort)");
+
+        let updates = metadata_updates.lock().expect("lock");
+        assert!(
+            updates.is_empty(),
+            "should not call update_state_and_metadata when comment fails"
         );
     }
 

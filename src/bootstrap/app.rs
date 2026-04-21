@@ -198,10 +198,36 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Doctor { config } => {
+            let db_path = config
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("cupola.db");
             let loader = TomlConfigLoader;
             let runner = ProcessCommandRunner;
-            let use_case = DoctorUseCase::new(loader, runner);
-            let results = use_case.run(&config);
+            let overrides = CliOverrides {
+                polling_interval_secs: None,
+                log_level: None,
+            };
+            let max_ci_fix_cycles = if config.exists() {
+                match load_toml(&config).and_then(|t| t.into_config(&overrides)) {
+                    Ok(cfg) => cfg.max_ci_fix_cycles,
+                    Err(_) => 3,
+                }
+            } else {
+                3
+            };
+            let db = SqliteConnection::open(&db_path).with_context(|| {
+                format!("failed to open sqlite database at {}", db_path.display())
+            })?;
+            db.init_schema().with_context(|| {
+                format!(
+                    "failed to initialize sqlite schema for doctor at {}",
+                    db_path.display()
+                )
+            })?;
+            let issue_repo = SqliteIssueRepository::new(db);
+            let use_case = DoctorUseCase::new(loader, runner, issue_repo, max_ci_fix_cycles);
+            let results = use_case.run(&config).await;
 
             use crate::application::doctor_result::DoctorSection;
 
@@ -414,25 +440,25 @@ pub async fn run(cli: Cli) -> Result<()> {
             let repo = SqliteIssueRepository::new(db.clone());
             let process_run_repo = SqliteProcessRunRepository::new(db);
 
-            // Load config for max_concurrent_sessions display
+            // Load config for max_concurrent_sessions and max_ci_fix_cycles display
             let config_path = Path::new(".cupola/cupola.toml");
-            let max_sessions = if config_path.exists() {
+            let (max_sessions, max_ci_fix_cycles) = if config_path.exists() {
                 let overrides = CliOverrides {
                     polling_interval_secs: None,
                     log_level: None,
                 };
                 match load_toml(config_path).and_then(|t| t.into_config(&overrides)) {
-                    Ok(cfg) => cfg.max_concurrent_sessions,
+                    Ok(cfg) => (cfg.max_concurrent_sessions, Some(cfg.max_ci_fix_cycles)),
                     Err(e) => {
                         tracing::warn!(
                             error = %e,
                             "設定ファイルの読み込みに失敗しました。一部のステータス情報が表示されない場合があります。"
                         );
-                        None
+                        (None, None)
                     }
                 }
             } else {
-                None
+                (None, None)
             };
 
             let pid_file_manager =
@@ -443,6 +469,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 &process_run_repo,
                 &repo,
                 max_sessions,
+                max_ci_fix_cycles,
             )
             .await
         }
@@ -746,6 +773,7 @@ async fn handle_status<W: std::io::Write>(
     process_run_repo: &impl crate::application::port::process_run_repository::ProcessRunRepository,
     repo: &impl IssueRepository,
     max_sessions: Option<u32>,
+    max_ci_fix_cycles: Option<u32>,
 ) -> Result<()> {
     use crate::application::port::pid_file::ProcessMode;
 
@@ -806,13 +834,25 @@ async fn handle_status<W: std::io::Write>(
         }
 
         for issue in &issues {
-            writeln!(
-                out,
-                "  #{:<5} {:<30} wt:{}",
-                issue.github_issue_number,
-                issue.state.to_string(),
-                issue.worktree_path.as_deref().unwrap_or("none"),
-            )?;
+            let pending_notification = max_ci_fix_cycles
+                .is_some_and(|max| issue.ci_fix_count > max && !issue.ci_fix_limit_notified);
+            if pending_notification {
+                writeln!(
+                    out,
+                    "  #{:<5} {:<30} wt:{} ⚠ ci-fix-limit notification pending",
+                    issue.github_issue_number,
+                    issue.state.to_string(),
+                    issue.worktree_path.as_deref().unwrap_or("none"),
+                )?;
+            } else {
+                writeln!(
+                    out,
+                    "  #{:<5} {:<30} wt:{}",
+                    issue.github_issue_number,
+                    issue.state.to_string(),
+                    issue.worktree_path.as_deref().unwrap_or("none"),
+                )?;
+            }
         }
     }
     Ok(())
@@ -1155,6 +1195,7 @@ mod tests {
             weight: crate::domain::task_weight::TaskWeight::Medium,
             worktree_path: None,
             ci_fix_count: 0,
+            ci_fix_limit_notified: false,
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
@@ -1186,6 +1227,7 @@ mod tests {
             weight: crate::domain::task_weight::TaskWeight::Medium,
             worktree_path: Some(".cupola/worktrees/42".into()),
             ci_fix_count: 0,
+            ci_fix_limit_notified: false,
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
@@ -1292,6 +1334,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -1318,6 +1361,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -1341,6 +1385,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -1372,6 +1417,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -1407,6 +1453,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -1436,6 +1483,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -1463,6 +1511,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -1494,6 +1543,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -1621,6 +1671,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -1645,6 +1696,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -1672,6 +1724,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -1696,6 +1749,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -1724,6 +1778,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -1759,6 +1814,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -1788,6 +1844,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -2020,6 +2077,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -2048,6 +2106,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -2074,6 +2133,7 @@ mod tests {
             &MockProcessRunRepository::new(),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -2098,6 +2158,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await
@@ -2125,6 +2186,7 @@ mod tests {
             &MockProcessRunRepository::with_running_count(2),
             &repo,
             Some(5),
+            None,
         )
         .await
         .expect("handle");
@@ -2150,6 +2212,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::with_running_count(3),
             &repo,
+            None,
             None,
         )
         .await
@@ -2181,6 +2244,7 @@ mod tests {
             &MockProcessRunRepository::with_running_count(4),
             &repo,
             None,
+            None,
         )
         .await
         .expect("handle");
@@ -2208,6 +2272,7 @@ mod tests {
             &pid_mgr,
             &MockProcessRunRepository::new(),
             &repo,
+            None,
             None,
         )
         .await

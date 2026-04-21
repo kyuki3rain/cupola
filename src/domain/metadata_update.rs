@@ -10,6 +10,7 @@ pub struct MetadataUpdates {
     pub state: Option<State>,
     pub weight: Option<TaskWeight>,
     pub ci_fix_count: Option<u32>,
+    pub ci_fix_limit_notified: Option<bool>,
     pub close_finished: Option<bool>,
     pub feature_name: Option<String>,
     pub consecutive_failures_epoch: Option<Option<DateTime<Utc>>>,
@@ -30,6 +31,9 @@ impl MetadataUpdates {
         }
         if let Some(ci_fix_count) = self.ci_fix_count {
             issue.ci_fix_count = ci_fix_count;
+        }
+        if let Some(ci_fix_limit_notified) = self.ci_fix_limit_notified {
+            issue.ci_fix_limit_notified = ci_fix_limit_notified;
         }
         if let Some(close_finished) = self.close_finished {
             issue.close_finished = close_finished;
@@ -64,6 +68,7 @@ mod tests {
             state: Some(State::DesignRunning),
             weight: Some(TaskWeight::Heavy),
             ci_fix_count: Some(2),
+            ci_fix_limit_notified: Some(true),
             close_finished: Some(true),
             feature_name: Some("feat".to_string()),
             consecutive_failures_epoch: Some(Some(Utc::now())),
@@ -73,6 +78,7 @@ mod tests {
         assert!(m.state.is_some());
         assert!(m.weight.is_some());
         assert!(m.ci_fix_count.is_some());
+        assert!(m.ci_fix_limit_notified.is_some());
         assert!(m.close_finished.is_some());
         assert!(m.feature_name.is_some());
         assert!(m.consecutive_failures_epoch.is_some());
@@ -112,6 +118,32 @@ mod tests {
         assert_eq!(issue.weight, TaskWeight::Heavy);
         // close_finished was not in updates, should be unchanged
         assert!(!issue.close_finished);
+    }
+
+    #[test]
+    fn apply_to_sets_ci_fix_limit_notified_when_some() {
+        let mut issue = make_issue();
+        assert!(!issue.ci_fix_limit_notified);
+
+        let updates = MetadataUpdates {
+            ci_fix_limit_notified: Some(true),
+            ..Default::default()
+        };
+        updates.apply_to(&mut issue);
+        assert!(issue.ci_fix_limit_notified);
+    }
+
+    #[test]
+    fn apply_to_leaves_ci_fix_limit_notified_unchanged_when_none() {
+        let mut issue = make_issue();
+        issue.ci_fix_limit_notified = true;
+
+        let updates = MetadataUpdates {
+            ci_fix_limit_notified: None,
+            ..Default::default()
+        };
+        updates.apply_to(&mut issue);
+        assert!(issue.ci_fix_limit_notified);
     }
 
     #[test]
