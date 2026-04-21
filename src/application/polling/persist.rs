@@ -28,6 +28,7 @@ pub async fn persist_decision<I: IssueRepository>(
         && updates.feature_name.is_none()
         && updates.consecutive_failures_epoch.is_none()
         && updates.worktree_path.is_none()
+        && updates.body_hash.is_none()
     {
         return Ok(());
     }
@@ -130,6 +131,7 @@ mod tests {
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
+            body_hash: None,
             feature_name: "issue-42".to_string(),
             weight: crate::domain::task_weight::TaskWeight::Medium,
             created_at: chrono::Utc::now(),
@@ -189,5 +191,29 @@ mod tests {
         assert_eq!(c[0].1.ci_fix_count, Some(1));
         // state should not be written since it didn't change
         assert!(c[0].1.state.is_none());
+    }
+
+    /// T-1.3: body_hash のみが設定された MetadataUpdates で DB 書き込みがスキップされない
+    #[tokio::test]
+    async fn persist_does_not_skip_when_only_body_hash_set() {
+        let (repo, calls) = MockIssueRepo::new();
+        let issue = make_issue(State::DesignRunning);
+        let updates = MetadataUpdates {
+            body_hash: Some(Some("abc123".to_string())),
+            ..Default::default()
+        };
+        let decision = Decision::new(State::DesignRunning, updates, vec![]);
+
+        persist_decision(&repo, &issue, &decision)
+            .await
+            .expect("persist");
+
+        let c = calls.lock().unwrap();
+        assert_eq!(c.len(), 1, "should write DB when body_hash is set");
+        assert_eq!(
+            c[0].1.body_hash,
+            Some(Some("abc123".to_string())),
+            "body_hash should be written"
+        );
     }
 }

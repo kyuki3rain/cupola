@@ -15,8 +15,11 @@ pub struct Issue {
     pub close_finished: bool,
     pub consecutive_failures_epoch: Option<DateTime<Utc>>,
     /// 最後に fixing トリガーとして採用した PR レベルレビューの submittedAt タイムスタンプ。
-    /// NULL の場合は未処理（すべての PR レベルレビューを新規として扱う）。
+    /// NULL の場合は未処理（すべての PR レビューを新規として扱う）。
     pub last_pr_review_submitted_at: Option<DateTime<Utc>>,
+    /// agent:ready 付与時点の Issue 本文 SHA-256 hex ダイジェスト（承認スナップショット）。
+    /// None は SpawnInit 未完了または本機能導入前の Issue（後方互換のためハッシュ比較をスキップ）。
+    pub body_hash: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -35,6 +38,7 @@ impl Issue {
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
+            body_hash: None,
             created_at: now,
             updated_at: now,
         }
@@ -60,6 +64,7 @@ mod tests {
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
+            body_hash: None,
             created_at: now,
             updated_at: now,
         };

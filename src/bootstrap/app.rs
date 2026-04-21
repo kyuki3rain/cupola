@@ -1159,6 +1159,7 @@ mod tests {
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
+            body_hash: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }
@@ -1190,6 +1191,7 @@ mod tests {
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
+            body_hash: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };

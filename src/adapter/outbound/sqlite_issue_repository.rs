@@ -29,7 +29,7 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
-                        created_at, updated_at, last_pr_review_submitted_at
+                        created_at, updated_at, last_pr_review_submitted_at, body_hash
                  FROM issues WHERE id = ?1",
             )?;
             let issue = stmt
@@ -54,7 +54,7 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
-                        created_at, updated_at, last_pr_review_submitted_at
+                        created_at, updated_at, last_pr_review_submitted_at, body_hash
                  FROM issues WHERE github_issue_number = ?1",
             )?;
             let issue = stmt
@@ -79,7 +79,7 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
-                        created_at, updated_at, last_pr_review_submitted_at
+                        created_at, updated_at, last_pr_review_submitted_at, body_hash
                  FROM issues WHERE state NOT IN ('completed', 'cancelled')",
             )?;
             let issues = stmt
@@ -104,7 +104,7 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
-                        created_at, updated_at, last_pr_review_submitted_at
+                        created_at, updated_at, last_pr_review_submitted_at, body_hash
                  FROM issues",
             )?;
             let issues = stmt
@@ -280,6 +280,14 @@ impl IssueRepository for SqliteIssueRepository {
                     param_values.len()
                 ));
             }
+            if let Some(ref body_hash) = updates.body_hash {
+                let v = body_hash
+                    .as_ref()
+                    .map(|h| rusqlite::types::Value::Text(h.clone()))
+                    .unwrap_or(rusqlite::types::Value::Null);
+                param_values.push(v);
+                set_clauses.push(format!("body_hash = ?{}", param_values.len()));
+            }
 
             // WHERE id comes after all SET params; index is len+1 before pushing.
             let where_idx = param_values.len() + 1;
@@ -316,7 +324,7 @@ impl IssueRepository for SqliteIssueRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, github_issue_number, state, feature_name, weight,
                         worktree_path, ci_fix_count, close_finished, consecutive_failures_epoch,
-                        created_at, updated_at, last_pr_review_submitted_at
+                        created_at, updated_at, last_pr_review_submitted_at, body_hash
                  FROM issues WHERE state = ?1",
             )?;
             let issues = stmt
@@ -393,6 +401,7 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
         },
         consecutive_failures_epoch,
         last_pr_review_submitted_at,
+        body_hash: row.get(12)?,
         created_at: parse_sqlite_datetime(9, &created_str)?,
         updated_at: parse_sqlite_datetime(10, &updated_str)?,
     })
@@ -655,6 +664,64 @@ mod tests {
         }
     }
 
+    /// T-1.2.bh.1: body_hash を保存して find_by_id で正しく取得できること
+    #[tokio::test]
+    async fn body_hash_roundtrip() {
+        let (_db, repo) = setup();
+        let id = repo.save(&new_issue(300)).await.expect("save");
+
+        // 初期値は None
+        let found = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert!(found.body_hash.is_none());
+
+        // body_hash を設定
+        let hash = "abc123def456".to_string();
+        let updates = MetadataUpdates {
+            body_hash: Some(Some(hash.clone())),
+            ..Default::default()
+        };
+        repo.update_state_and_metadata(id, &updates)
+            .await
+            .expect("update");
+
+        let found = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert_eq!(found.body_hash.as_deref(), Some(hash.as_str()));
+
+        // body_hash を NULL クリア
+        let updates_clear = MetadataUpdates {
+            body_hash: Some(None),
+            ..Default::default()
+        };
+        repo.update_state_and_metadata(id, &updates_clear)
+            .await
+            .expect("update");
+
+        let found = repo.find_by_id(id).await.expect("find").expect("exists");
+        assert!(found.body_hash.is_none());
+    }
+
+    /// T-1.2.bh.2: body_hash マイグレーション冪等性（2 回実行しても失敗しない）
+    #[test]
+    fn body_hash_migration_is_idempotent() {
+        let db = SqliteConnection::open_in_memory().expect("open");
+        db.init_schema().expect("first init");
+        db.init_schema().expect("second init should succeed");
+
+        // body_hash カラムが存在することを確認
+        let conn = db.conn().lock().expect("mutex");
+        let has_col: bool = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('issues') WHERE name = 'body_hash'",
+                [],
+                |row| {
+                    let count: i64 = row.get(0)?;
+                    Ok(count > 0)
+                },
+            )
+            .expect("pragma query");
+        assert!(has_col, "body_hash column should exist after migration");
+    }
+
     /// T-2.IR.7: update_state_and_metadata updates only the target row, not adjacent rows.
     ///
     /// This guards against dynamic SQL binding fragility: if `?N` placeholder indices
@@ -679,6 +746,7 @@ mod tests {
             )),
             worktree_path: Some(Some("/tmp/wt".to_string())),
             last_pr_review_submitted_at: None,
+            body_hash: None,
         };
         repo.update_state_and_metadata(id2, &updates)
             .await
