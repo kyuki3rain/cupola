@@ -5,27 +5,36 @@ use serde::Deserialize;
 use crate::application::doctor_result::{CheckStatus, DoctorCheckResult, DoctorSection};
 use crate::application::port::command_runner::CommandRunner;
 use crate::application::port::config_loader::ConfigLoader;
+use crate::application::port::issue_repository::IssueRepository;
 
-pub struct DoctorUseCase<C: ConfigLoader, R: CommandRunner> {
+pub struct DoctorUseCase<C: ConfigLoader, R: CommandRunner, I: IssueRepository> {
     config_loader: C,
     command_runner: R,
+    issue_repo: I,
+    max_ci_fix_cycles: u32,
 }
 
-impl<C: ConfigLoader, R: CommandRunner> DoctorUseCase<C, R> {
-    pub fn new(config_loader: C, command_runner: R) -> Self {
+impl<C: ConfigLoader, R: CommandRunner, I: IssueRepository> DoctorUseCase<C, R, I> {
+    pub fn new(config_loader: C, command_runner: R, issue_repo: I, max_ci_fix_cycles: u32) -> Self {
         Self {
             config_loader,
             command_runner,
+            issue_repo,
+            max_ci_fix_cycles,
         }
     }
 
-    pub fn run(&self, config_path: &Path) -> Vec<DoctorCheckResult> {
+    pub async fn run(&self, config_path: &Path) -> Vec<DoctorCheckResult> {
         let steering_path = Path::new(".cupola").join("steering");
         let db_path = Path::new(".cupola").join("cupola.db");
         let commands_path = Path::new(".claude").join("commands").join("cupola");
         let settings_path = Path::new(".cupola").join("settings");
 
         let [agent_ready_result, weight_labels_result] = check_labels(&self.command_runner);
+
+        let pending_check =
+            check_pending_ci_fix_limit_notifications(&self.issue_repo, self.max_ci_fix_cycles)
+                .await;
 
         vec![
             // Start Readiness
@@ -39,7 +48,51 @@ impl<C: ConfigLoader, R: CommandRunner> DoctorUseCase<C, R> {
             check_steering(&steering_path),
             agent_ready_result,
             weight_labels_result,
+            pending_check,
         ]
+    }
+}
+
+async fn check_pending_ci_fix_limit_notifications(
+    issue_repo: &impl IssueRepository,
+    max_cycles: u32,
+) -> DoctorCheckResult {
+    match issue_repo.find_all().await {
+        Ok(issues) => {
+            let pending_count = issues
+                .iter()
+                .filter(|i| i.ci_fix_count > max_cycles && !i.ci_fix_limit_notified)
+                .count();
+
+            if pending_count > 0 {
+                DoctorCheckResult {
+                    section: DoctorSection::OperationalReadiness,
+                    name: "ci-fix-limit notification".to_string(),
+                    status: CheckStatus::Warn(format!(
+                        "CI 修正上限通知が未送信の Issue が {pending_count} 件あります"
+                    )),
+                    remediation: Some(
+                        "GitHub の通信状況を確認の上、cupola start で再度ポーリングを実行してください"
+                            .to_string(),
+                    ),
+                }
+            } else {
+                DoctorCheckResult {
+                    section: DoctorSection::OperationalReadiness,
+                    name: "ci-fix-limit notification".to_string(),
+                    status: CheckStatus::Ok(
+                        "CI 修正上限通知の未送信 Issue はありません".to_string(),
+                    ),
+                    remediation: None,
+                }
+            }
+        }
+        Err(e) => DoctorCheckResult {
+            section: DoctorSection::OperationalReadiness,
+            name: "ci-fix-limit notification".to_string(),
+            status: CheckStatus::Warn(format!("Issue 一覧の取得に失敗しました: {e}")),
+            remediation: Some("cupola init で DB を初期化してください".to_string()),
+        },
     }
 }
 
@@ -398,6 +451,80 @@ mod tests {
     use super::*;
     use crate::application::port::command_runner::test_support::MockCommandRunner;
     use crate::application::port::config_loader::{ConfigLoadError, DoctorConfigSummary};
+    use crate::domain::issue::Issue;
+    use crate::domain::state::State;
+
+    // --- MockIssueRepository ---
+
+    struct MockIssueRepository {
+        issues: Vec<Issue>,
+    }
+
+    impl MockIssueRepository {
+        fn empty() -> Self {
+            Self { issues: vec![] }
+        }
+
+        fn with_issues(issues: Vec<Issue>) -> Self {
+            Self { issues }
+        }
+    }
+
+    impl crate::application::port::issue_repository::IssueRepository for MockIssueRepository {
+        async fn find_by_id(&self, id: i64) -> anyhow::Result<Option<Issue>> {
+            Ok(self.issues.iter().find(|i| i.id == id).cloned())
+        }
+
+        async fn find_by_issue_number(&self, issue_number: u64) -> anyhow::Result<Option<Issue>> {
+            Ok(self
+                .issues
+                .iter()
+                .find(|i| i.github_issue_number == issue_number)
+                .cloned())
+        }
+
+        async fn find_active(&self) -> anyhow::Result<Vec<Issue>> {
+            Ok(self
+                .issues
+                .iter()
+                .filter(|i| i.state != State::Completed && i.state != State::Cancelled)
+                .cloned()
+                .collect())
+        }
+
+        async fn find_all(&self) -> anyhow::Result<Vec<Issue>> {
+            Ok(self.issues.clone())
+        }
+
+        async fn save(&self, _issue: &Issue) -> anyhow::Result<i64> {
+            Ok(0)
+        }
+
+        async fn update_state(&self, _id: i64, _state: State) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn update(&self, _issue: &Issue) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn update_state_and_metadata(
+            &self,
+            _issue_id: i64,
+            _updates: &crate::domain::metadata_update::MetadataUpdates,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn find_by_state(&self, state: State) -> anyhow::Result<Vec<Issue>> {
+            Ok(self
+                .issues
+                .iter()
+                .filter(|i| i.state == state)
+                .cloned()
+                .collect())
+        }
+    }
 
     // --- MockConfigLoader ---
 
@@ -826,17 +953,17 @@ mod tests {
 
     // --- DoctorUseCase integration test ---
 
-    #[test]
-    fn doctor_use_case_returns_all_sections() {
+    #[tokio::test]
+    async fn doctor_use_case_returns_all_sections() {
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("cupola.toml");
         let loader = MockConfigLoader::ok();
         let runner = MockCommandRunner::new();
-        let use_case = DoctorUseCase::new(loader, runner);
-        let results = use_case.run(&config_path);
+        let use_case = DoctorUseCase::new(loader, runner, MockIssueRepository::empty(), 3);
+        let results = use_case.run(&config_path).await;
 
-        // 9 checks: 5 Start Readiness + 4 Operational Readiness
-        assert_eq!(results.len(), 9);
+        // 10 checks: 5 Start Readiness + 5 Operational Readiness (includes ci-fix-limit check)
+        assert_eq!(results.len(), 10);
 
         let start_count = results
             .iter()
@@ -847,18 +974,18 @@ mod tests {
             .filter(|r| matches!(r.section, DoctorSection::OperationalReadiness))
             .count();
         assert_eq!(start_count, 5);
-        assert_eq!(op_count, 4);
+        assert_eq!(op_count, 5);
     }
 
-    #[test]
-    fn doctor_use_case_toml_fail_with_mock_loader() {
+    #[tokio::test]
+    async fn doctor_use_case_toml_fail_with_mock_loader() {
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("cupola.toml");
 
         let loader = MockConfigLoader::not_found(config_path.to_str().unwrap());
         let runner = MockCommandRunner::new();
-        let use_case = DoctorUseCase::new(loader, runner);
-        let results = use_case.run(&config_path);
+        let use_case = DoctorUseCase::new(loader, runner, MockIssueRepository::empty(), 3);
+        let results = use_case.run(&config_path).await;
 
         assert!(matches!(results[0].status, CheckStatus::Fail(_)));
     }
@@ -866,14 +993,14 @@ mod tests {
     // --- T-6.DR.* tests ---
 
     /// T-6.DR.1: Start Readiness セクションに config/git/github_token/claude/database チェックが含まれる
-    #[test]
-    fn t_6_dr_1_start_readiness_contains_required_checks() {
+    #[tokio::test]
+    async fn t_6_dr_1_start_readiness_contains_required_checks() {
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("cupola.toml");
         let loader = MockConfigLoader::ok();
         let runner = MockCommandRunner::new();
-        let use_case = DoctorUseCase::new(loader, runner);
-        let results = use_case.run(&config_path);
+        let use_case = DoctorUseCase::new(loader, runner, MockIssueRepository::empty(), 3);
+        let results = use_case.run(&config_path).await;
 
         let start_checks: Vec<&str> = results
             .iter()
@@ -903,14 +1030,14 @@ mod tests {
     }
 
     /// T-6.DR.2: Start Readiness に失敗があれば exit non-zero（DoctorCheckResult の status が Fail）
-    #[test]
-    fn t_6_dr_2_start_readiness_fail_means_non_zero_exit() {
+    #[tokio::test]
+    async fn t_6_dr_2_start_readiness_fail_means_non_zero_exit() {
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("cupola.toml");
         let loader = MockConfigLoader::not_found(config_path.to_str().unwrap());
         let runner = MockCommandRunner::new();
-        let use_case = DoctorUseCase::new(loader, runner);
-        let results = use_case.run(&config_path);
+        let use_case = DoctorUseCase::new(loader, runner, MockIssueRepository::empty(), 3);
+        let results = use_case.run(&config_path).await;
 
         let has_start_failure = results
             .iter()
@@ -923,14 +1050,14 @@ mod tests {
     }
 
     /// T-6.DR.3: Operational Readiness セクションに assets/steering/labels チェックが含まれる（Fail はしない）
-    #[test]
-    fn t_6_dr_3_operational_readiness_contains_required_checks() {
+    #[tokio::test]
+    async fn t_6_dr_3_operational_readiness_contains_required_checks() {
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("cupola.toml");
         let loader = MockConfigLoader::ok();
         let runner = MockCommandRunner::new();
-        let use_case = DoctorUseCase::new(loader, runner);
-        let results = use_case.run(&config_path);
+        let use_case = DoctorUseCase::new(loader, runner, MockIssueRepository::empty(), 3);
+        let results = use_case.run(&config_path).await;
 
         let op_checks: Vec<&str> = results
             .iter()
@@ -952,6 +1079,72 @@ mod tests {
             }),
             "should have assets/steering/labels checks: {op_checks:?}"
         );
+    }
+
+    /// T-6.DR.7: pending notification が存在する場合に Warn が返ること
+    #[tokio::test]
+    async fn check_pending_notifications_returns_warn_when_pending_exists() {
+        let mut issue = Issue::new(1, "test".to_string());
+        issue.ci_fix_count = 4;
+        issue.ci_fix_limit_notified = false;
+        let repo = MockIssueRepository::with_issues(vec![issue]);
+
+        let result = check_pending_ci_fix_limit_notifications(&repo, 3).await;
+        assert!(
+            matches!(result.status, CheckStatus::Warn(_)),
+            "should warn when pending"
+        );
+        assert!(matches!(
+            result.section,
+            DoctorSection::OperationalReadiness
+        ));
+        assert!(result.remediation.is_some());
+        if let CheckStatus::Warn(msg) = &result.status {
+            assert!(msg.contains("1"), "should mention count");
+        }
+    }
+
+    /// T-6.DR.8: pending notification が存在しない場合に Ok が返ること
+    #[tokio::test]
+    async fn check_pending_notifications_returns_ok_when_no_pending() {
+        let mut issue = Issue::new(1, "test".to_string());
+        issue.ci_fix_count = 4;
+        issue.ci_fix_limit_notified = true;
+        let repo = MockIssueRepository::with_issues(vec![issue]);
+
+        let result = check_pending_ci_fix_limit_notifications(&repo, 3).await;
+        assert!(
+            matches!(result.status, CheckStatus::Ok(_)),
+            "should be ok when already notified"
+        );
+        assert!(matches!(
+            result.section,
+            DoctorSection::OperationalReadiness
+        ));
+        assert!(result.remediation.is_none());
+    }
+
+    /// T-6.DR.9: ci_fix_count が max_ci_fix_cycles 以下の場合は Ok が返ること
+    #[tokio::test]
+    async fn check_pending_notifications_returns_ok_when_count_not_exceeded() {
+        let mut issue = Issue::new(1, "test".to_string());
+        issue.ci_fix_count = 3;
+        issue.ci_fix_limit_notified = false;
+        let repo = MockIssueRepository::with_issues(vec![issue]);
+
+        let result = check_pending_ci_fix_limit_notifications(&repo, 3).await;
+        assert!(
+            matches!(result.status, CheckStatus::Ok(_)),
+            "should be ok when count not exceeded"
+        );
+    }
+
+    /// T-6.DR.10: 空の Issue 一覧で Ok が返ること
+    #[tokio::test]
+    async fn check_pending_notifications_returns_ok_when_no_issues() {
+        let repo = MockIssueRepository::empty();
+        let result = check_pending_ci_fix_limit_notifications(&repo, 3).await;
+        assert!(matches!(result.status, CheckStatus::Ok(_)));
     }
 
     /// T-6.DR.5: 出力に ✅ / ⚠️ / ❌ シンボルが使用されている（DoctorUseCase はシンボルを返さないが、

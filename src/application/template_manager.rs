@@ -141,15 +141,25 @@ mod tests {
     #[test]
     fn build_settings_base_only() {
         let settings = TemplateManager::build_settings(&[]).expect("build");
-        assert!(!settings.permissions.allow.is_empty(), "base should have allow entries");
-        assert!(!settings.permissions.deny.is_empty(), "base should have deny entries");
+        assert!(
+            !settings.permissions.allow.is_empty(),
+            "base should have allow entries"
+        );
+        assert!(
+            !settings.permissions.deny.is_empty(),
+            "base should have deny entries"
+        );
     }
 
     #[test]
     fn build_settings_with_rust_template() {
         let settings = TemplateManager::build_settings(&["rust"]).expect("build");
         assert!(
-            settings.permissions.allow.iter().any(|a| a.contains("cargo")),
+            settings
+                .permissions
+                .allow
+                .iter()
+                .any(|a| a.contains("cargo")),
             "rust template should add cargo commands"
         );
     }
@@ -158,7 +168,11 @@ mod tests {
     fn build_settings_with_multiple_templates() {
         let settings = TemplateManager::build_settings(&["rust", "typescript"]).expect("build");
         assert!(
-            settings.permissions.allow.iter().any(|a| a.contains("cargo")),
+            settings
+                .permissions
+                .allow
+                .iter()
+                .any(|a| a.contains("cargo")),
             "rust template should be present"
         );
         assert!(
@@ -184,8 +198,7 @@ mod tests {
         let settings_explicit = TemplateManager::build_settings(&["base"]).expect("build");
         let settings_implicit = TemplateManager::build_settings(&[]).expect("build");
         assert_eq!(
-            settings_explicit.permissions.allow,
-            settings_implicit.permissions.allow,
+            settings_explicit.permissions.allow, settings_implicit.permissions.allow,
             "explicit 'base' should not be applied twice"
         );
     }

@@ -251,6 +251,13 @@ impl FileGenerator for MockFileGenerator {
     ) -> Result<bool> {
         Ok(false)
     }
+
+    fn write_claude_settings(
+        &self,
+        _settings: &cupola::domain::claude_settings::ClaudeSettings,
+    ) -> Result<bool> {
+        Ok(false)
+    }
 }
 
 // === Helpers ===
@@ -267,6 +274,7 @@ fn _new_issue(issue_number: u64) -> Issue {
         state: State::Idle,
         worktree_path: None,
         ci_fix_count: 0,
+        ci_fix_limit_notified: false,
         close_finished: false,
         consecutive_failures_epoch: None,
         last_pr_review_submitted_at: None,
@@ -625,6 +633,7 @@ async fn two_concurrent_sessions_github_error_isolated_per_session() {
         weight: TaskWeight::Medium,
         worktree_path: None,
         ci_fix_count: 0,
+        ci_fix_limit_notified: false,
         close_finished: false,
         consecutive_failures_epoch: None,
         last_pr_review_submitted_at: None,
@@ -642,6 +651,7 @@ async fn two_concurrent_sessions_github_error_isolated_per_session() {
         weight: TaskWeight::Medium,
         worktree_path: None,
         ci_fix_count: 0,
+        ci_fix_limit_notified: false,
         close_finished: false,
         consecutive_failures_epoch: None,
         last_pr_review_submitted_at: None,
@@ -759,7 +769,10 @@ fn panic_hook_deletes_pid_file_in_spawned_thread() {
 
     // Save and then install our hook in the main thread (hooks are global).
     let saved_hook = std::panic::take_hook();
-    cupola::bootstrap::app::install_panic_hook(pid_path.clone());
+    cupola::bootstrap::app::install_panic_hook(
+        pid_path.clone(),
+        cupola::application::session_manager::ChildProcessRegistry::new(),
+    );
 
     // Spawn a thread that panics.  Because the hook is already installed,
     // it will run when the thread panics, deleting the PID file.
@@ -792,7 +805,10 @@ fn panic_hook_safe_when_pid_file_absent_in_thread() {
     assert!(!pid_path.exists());
 
     let saved_hook = std::panic::take_hook();
-    cupola::bootstrap::app::install_panic_hook(pid_path.clone());
+    cupola::bootstrap::app::install_panic_hook(
+        pid_path.clone(),
+        cupola::application::session_manager::ChildProcessRegistry::new(),
+    );
 
     let handle = std::thread::spawn(|| {
         panic!("deliberate panic – absent pid file");

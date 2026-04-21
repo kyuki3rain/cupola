@@ -235,10 +235,7 @@ mod tests {
         let db_existed_before_first = db_path.exists();
         let db1 = SqliteConnection::open(&db_path).expect("open db");
         let file_gen1 = InitFileGenerator::new(tmp.path().to_path_buf());
-        let runner1 = MockCommandRunner::new().with_failure(
-            "claude",
-            &["-p", "/cupola:steering", "--dangerously-skip-permissions"],
-        );
+        let runner1 = MockCommandRunner::new().with_failure("claude", &["-p", "/cupola:steering"]);
         let uc1 = InitUseCase::new(
             tmp.path().to_path_buf(),
             db_existed_before_first,
@@ -259,10 +256,7 @@ mod tests {
         let db_existed_before_second = db_path.exists();
         let db2 = SqliteConnection::open(&db_path).expect("open db");
         let file_gen2 = InitFileGenerator::new(tmp.path().to_path_buf());
-        let runner2 = MockCommandRunner::new().with_failure(
-            "claude",
-            &["-p", "/cupola:steering", "--dangerously-skip-permissions"],
-        );
+        let runner2 = MockCommandRunner::new().with_failure("claude", &["-p", "/cupola:steering"]);
         let uc2 = InitUseCase::new(
             tmp.path().to_path_buf(),
             db_existed_before_second,
