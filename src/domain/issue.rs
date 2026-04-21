@@ -12,6 +12,7 @@ pub struct Issue {
     pub weight: TaskWeight,
     pub worktree_path: Option<String>,
     pub ci_fix_count: u32,
+    pub ci_fix_limit_notified: bool,
     pub close_finished: bool,
     pub consecutive_failures_epoch: Option<DateTime<Utc>>,
     /// 最後に fixing トリガーとして採用した PR レベルレビューの submittedAt タイムスタンプ。
@@ -32,6 +33,7 @@ impl Issue {
             weight: TaskWeight::Medium,
             worktree_path: None,
             ci_fix_count: 0,
+            ci_fix_limit_notified: false,
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
@@ -57,6 +59,7 @@ mod tests {
             weight: TaskWeight::Medium,
             worktree_path: None,
             ci_fix_count: 0,
+            ci_fix_limit_notified: false,
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,

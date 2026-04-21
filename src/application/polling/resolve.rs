@@ -280,12 +280,20 @@ where
     if !session.exit_status.success() {
         // permission denied 検知: 専用エラーログとヒントを出力する
         if let Some(tool) = detect_permission_denied(&session.stdout, &session.stderr) {
-            tracing::error!(
-                issue_id,
-                tool = %tool,
-                "permission denied by Claude Code: add \"{}\" to permissions.allow in .claude/settings.json",
-                tool
-            );
+            if tool == "unknown tool" {
+                tracing::error!(
+                    issue_id,
+                    tool = %tool,
+                    "permission denied by Claude Code: inspect the stderr/stdout snippet or the blocked command entry (for example, a Bash(...) permission) and add the appropriate entry to permissions.allow in .claude/settings.json"
+                );
+            } else {
+                tracing::error!(
+                    issue_id,
+                    tool = %tool,
+                    "permission denied by Claude Code: add \"{}\" to permissions.allow in .claude/settings.json",
+                    tool
+                );
+            }
         }
 
         // Process failed: capture exit code + stderr snippet for diagnostics.
@@ -912,6 +920,7 @@ mod tests {
             weight: TaskWeight::Medium,
             worktree_path: None,
             ci_fix_count: 0,
+            ci_fix_limit_notified: false,
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
@@ -1299,15 +1308,22 @@ mod tests {
 
     #[test]
     fn detect_permission_denied_json_error_message() {
-        let stdout = r#"{"type":"result","is_error":true,"message":"Permission denied: Bash(cargo test*)"}"#;
+        let stdout =
+            r#"{"type":"result","is_error":true,"message":"Permission denied: Bash(cargo test*)"}"#;
         let result = detect_permission_denied(stdout, "");
-        assert!(result.is_some(), "should detect permission denied via message");
+        assert!(
+            result.is_some(),
+            "should detect permission denied via message"
+        );
     }
 
     #[test]
     fn detect_permission_denied_stderr_text() {
         let result = detect_permission_denied("", "Error: permission denied for tool Bash(rm)");
-        assert!(result.is_some(), "should detect permission denied in stderr");
+        assert!(
+            result.is_some(),
+            "should detect permission denied in stderr"
+        );
     }
 
     #[test]

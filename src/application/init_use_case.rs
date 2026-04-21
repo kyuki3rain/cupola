@@ -95,8 +95,8 @@ impl<D: DbInitializer, F: FileGenerator, R: CommandRunner> InitUseCase<D, F, R> 
 
         // Step 6: settings.json 生成 (TemplateManager 経由)
         let template_keys: Vec<&str> = self.templates.iter().map(String::as_str).collect();
-        let claude_settings = TemplateManager::build_settings(&template_keys)
-            .map_err(anyhow::Error::new)?;
+        let claude_settings =
+            TemplateManager::build_settings(&template_keys).map_err(anyhow::Error::new)?;
         let settings_json_written = self
             .file_gen
             .write_claude_settings(&claude_settings)
@@ -529,7 +529,5 @@ mod tests {
             "user customized toml",
             "user-owned cupola.toml must not be overwritten"
         );
-    }
-}
     }
 }

@@ -509,22 +509,27 @@ impl InitFileGenerator {
     pub fn write_claude_settings(&self, settings: &ClaudeSettings) -> Result<bool> {
         let claude_dir = self.base_dir.join(".claude");
         std::fs::create_dir_all(&claude_dir).with_context(|| {
-            format!("failed to create .claude directory at {}", claude_dir.display())
+            format!(
+                "failed to create .claude directory at {}",
+                claude_dir.display()
+            )
         })?;
 
         let settings_path = claude_dir.join("settings.json");
-        let managed = serde_json::to_value(settings).context("failed to serialize ClaudeSettings")?;
+        let managed =
+            serde_json::to_value(settings).context("failed to serialize ClaudeSettings")?;
 
         let existing = if settings_path.exists() {
-            let content = std::fs::read_to_string(&settings_path).with_context(|| {
-                format!("failed to read {}", settings_path.display())
-            })?;
-            Some(serde_json::from_str::<serde_json::Value>(&content).with_context(|| {
-                format!(
-                    "failed to parse existing {}: please fix the JSON manually",
-                    settings_path.display()
-                )
-            })?)
+            let content = std::fs::read_to_string(&settings_path)
+                .with_context(|| format!("failed to read {}", settings_path.display()))?;
+            Some(
+                serde_json::from_str::<serde_json::Value>(&content).with_context(|| {
+                    format!(
+                        "failed to parse existing {}: please fix the JSON manually",
+                        settings_path.display()
+                    )
+                })?,
+            )
         } else {
             None
         };
@@ -535,16 +540,18 @@ impl InitFileGenerator {
             managed
         };
 
-        if existing.as_ref().is_some_and(|existing_val| existing_val == &merged) {
+        if existing
+            .as_ref()
+            .is_some_and(|existing_val| existing_val == &merged)
+        {
             return Ok(false);
         }
 
         let new_content =
             serde_json::to_string_pretty(&merged).context("failed to serialize settings")?;
 
-        std::fs::write(&settings_path, &new_content).with_context(|| {
-            format!("failed to write {}", settings_path.display())
-        })?;
+        std::fs::write(&settings_path, &new_content)
+            .with_context(|| format!("failed to write {}", settings_path.display()))?;
         tracing::info!(path = %settings_path.display(), "wrote .claude/settings.json");
         Ok(true)
     }
@@ -1086,11 +1093,18 @@ mod tests {
         let (tmp, generator) = setup();
 
         let settings = make_settings(&["Read"], &[]);
-        generator.write_claude_settings(&settings).expect("first write");
+        generator
+            .write_claude_settings(&settings)
+            .expect("first write");
 
-        let result = generator.write_claude_settings(&settings).expect("second write");
+        let result = generator
+            .write_claude_settings(&settings)
+            .expect("second write");
         let _ = tmp;
-        assert!(!result, "second write with same content should return false");
+        assert!(
+            !result,
+            "second write with same content should return false"
+        );
     }
 
     #[test]
@@ -1111,10 +1125,9 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&content).expect("parse");
         let allow = parsed["permissions"]["allow"].as_array().expect("array");
         let read_count = allow.iter().filter(|v| v.as_str() == Some("Read")).count();
-        assert_eq!(read_count, 1, "Read should appear only once after union merge");
-    }
-}
-ow.iter().filter(|v| v.as_str() == Some("Read")).count();
-        assert_eq!(read_count, 1, "Read should appear only once after union merge");
+        assert_eq!(
+            read_count, 1,
+            "Read should appear only once after union merge"
+        );
     }
 }

@@ -52,7 +52,3 @@ mod tests {
         assert!(parsed.permissions.deny.is_empty());
     }
 }
-argo build*)"]);
-        assert!(parsed.permissions.deny.is_empty());
-    }
-}
