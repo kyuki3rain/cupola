@@ -100,7 +100,10 @@ impl TemplateManager {
 
     /// 利用可能なテンプレートキー一覧を返す。
     pub fn list_available() -> &'static [&'static str] {
-        &["base", "rust", "typescript", "python", "go"]
+        static AVAILABLE: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+        AVAILABLE
+            .get_or_init(|| TEMPLATES.iter().map(|(key, _)| *key).collect())
+            .as_slice()
     }
 
     fn find_template(key: &str) -> Result<(), TemplateError> {

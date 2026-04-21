@@ -1,6 +1,4 @@
 /// `.claude/settings.json` の `permissions` セクションを表す値オブジェクト。
-///
-/// 不変条件: マージ後の `allow`/`deny` 配列に重複なし。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClaudeSettings {
     pub permissions: ClaudePermissions,
@@ -51,6 +49,10 @@ mod tests {
         let json = r#"{"permissions": {"allow": ["Bash(cargo build*)"] }}"#;
         let parsed: ClaudeSettings = serde_json::from_str(json).expect("deserialize");
         assert_eq!(parsed.permissions.allow, vec!["Bash(cargo build*)"]);
+        assert!(parsed.permissions.deny.is_empty());
+    }
+}
+argo build*)"]);
         assert!(parsed.permissions.deny.is_empty());
     }
 }

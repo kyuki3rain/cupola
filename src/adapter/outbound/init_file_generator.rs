@@ -515,31 +515,32 @@ impl InitFileGenerator {
         let settings_path = claude_dir.join("settings.json");
         let managed = serde_json::to_value(settings).context("failed to serialize ClaudeSettings")?;
 
-        let merged = if settings_path.exists() {
+        let existing = if settings_path.exists() {
             let content = std::fs::read_to_string(&settings_path).with_context(|| {
                 format!("failed to read {}", settings_path.display())
             })?;
-            let existing: serde_json::Value = serde_json::from_str(&content).with_context(|| {
+            Some(serde_json::from_str::<serde_json::Value>(&content).with_context(|| {
                 format!(
                     "failed to parse existing {}: please fix the JSON manually",
                     settings_path.display()
                 )
-            })?;
-            deep_merge_json(existing, managed)
+            })?)
+        } else {
+            None
+        };
+
+        let merged = if let Some(existing_val) = existing.as_ref() {
+            deep_merge_json(existing_val.clone(), managed)
         } else {
             managed
         };
 
+        if existing.as_ref().is_some_and(|existing_val| existing_val == &merged) {
+            return Ok(false);
+        }
+
         let new_content =
             serde_json::to_string_pretty(&merged).context("failed to serialize settings")?;
-
-        if settings_path.exists() {
-            let existing = std::fs::read_to_string(&settings_path)
-                .unwrap_or_default();
-            if existing == new_content {
-                return Ok(false);
-            }
-        }
 
         std::fs::write(&settings_path, &new_content).with_context(|| {
             format!("failed to write {}", settings_path.display())
@@ -557,22 +558,28 @@ impl InitFileGenerator {
 /// - ネストオブジェクト: 再帰的に同ルールを適用
 /// - 配列（上記 allow/deny 以外）: existing 優先
 fn deep_merge_json(existing: serde_json::Value, managed: serde_json::Value) -> serde_json::Value {
-    deep_merge_json_inner(existing, managed, false)
+    deep_merge_json_inner(existing, managed, false, false)
 }
 
 fn deep_merge_json_inner(
     existing: serde_json::Value,
     managed: serde_json::Value,
-    is_array_field: bool,
+    in_permissions: bool,
+    union_merge: bool,
 ) -> serde_json::Value {
     use serde_json::Value;
     match (existing, managed) {
         (Value::Object(mut existing_map), Value::Object(managed_map)) => {
             for (key, managed_val) in managed_map {
-                let in_permissions = key == "allow" || key == "deny";
+                let child_in_permissions = key == "permissions";
+                let child_union_merge = in_permissions && (key == "allow" || key == "deny");
                 if let Some(existing_val) = existing_map.remove(&key) {
-                    let merged =
-                        deep_merge_json_inner(existing_val, managed_val, in_permissions);
+                    let merged = deep_merge_json_inner(
+                        existing_val,
+                        managed_val,
+                        child_in_permissions,
+                        child_union_merge,
+                    );
                     existing_map.insert(key, merged);
                 } else {
                     existing_map.insert(key, managed_val);
@@ -581,7 +588,7 @@ fn deep_merge_json_inner(
             Value::Object(existing_map)
         }
         // allow/deny: union merge
-        (Value::Array(existing_arr), Value::Array(managed_arr)) if is_array_field => {
+        (Value::Array(existing_arr), Value::Array(managed_arr)) if union_merge => {
             let mut seen: HashSet<String> = HashSet::new();
             let mut result: Vec<Value> = Vec::new();
             for v in existing_arr.iter().chain(managed_arr.iter()) {
@@ -1081,12 +1088,9 @@ mod tests {
         let settings = make_settings(&["Read"], &[]);
         generator.write_claude_settings(&settings).expect("first write");
 
-        // Second write with same content should not change file
         let result = generator.write_claude_settings(&settings).expect("second write");
         let _ = tmp;
-        // Note: due to JSON pretty-print ordering, second write may still differ
-        // The assertion here is just that it doesn't error
-        let _ = result;
+        assert!(!result, "second write with same content should return false");
     }
 
     #[test]
@@ -1107,6 +1111,10 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&content).expect("parse");
         let allow = parsed["permissions"]["allow"].as_array().expect("array");
         let read_count = allow.iter().filter(|v| v.as_str() == Some("Read")).count();
+        assert_eq!(read_count, 1, "Read should appear only once after union merge");
+    }
+}
+ow.iter().filter(|v| v.as_str() == Some("Read")).count();
         assert_eq!(read_count, 1, "Read should appear only once after union merge");
     }
 }
