@@ -6,12 +6,14 @@ use crate::application::init_agent::InitAgent;
 use crate::application::port::command_runner::CommandRunner;
 use crate::application::port::db_initializer::DbInitializer;
 use crate::application::port::file_generator::FileGenerator;
+use crate::application::template_manager::TemplateManager;
 
 pub struct InitReport {
     pub db_initialized: bool,
     pub toml_created: bool,
     pub agent_assets_installed: bool,
     pub gitignore_updated: bool,
+    pub settings_json_written: bool,
     pub steering_bootstrap_message: Option<String>,
 }
 
@@ -27,6 +29,8 @@ pub struct InitUseCase<D: DbInitializer, F: FileGenerator, R: CommandRunner> {
     init_agent: InitAgent,
     /// `--upgrade` フラグ: Cupola 管理ファイルを最新版で上書きするかどうか。
     upgrade: bool,
+    /// `--template` で指定されたテンプレートキー一覧。
+    templates: Vec<String>,
 }
 
 impl<D: DbInitializer, F: FileGenerator, R: CommandRunner> InitUseCase<D, F, R> {
@@ -47,7 +51,13 @@ impl<D: DbInitializer, F: FileGenerator, R: CommandRunner> InitUseCase<D, F, R> 
             command_runner,
             init_agent,
             upgrade,
+            templates: Vec::new(),
         }
+    }
+
+    pub fn with_templates(mut self, templates: Vec<String>) -> Self {
+        self.templates = templates;
+        self
     }
 
     pub fn run(&self) -> Result<InitReport> {
@@ -83,6 +93,15 @@ impl<D: DbInitializer, F: FileGenerator, R: CommandRunner> InitUseCase<D, F, R> 
             .append_gitignore_entries(self.upgrade)
             .context("failed to append .gitignore entries")?;
 
+        // Step 6: settings.json 生成 (TemplateManager 経由)
+        let template_keys: Vec<&str> = self.templates.iter().map(String::as_str).collect();
+        let claude_settings = TemplateManager::build_settings(&template_keys)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let settings_json_written = self
+            .file_gen
+            .write_claude_settings(&claude_settings)
+            .context("failed to write .claude/settings.json")?;
+
         let steering_bootstrap_message = self.bootstrap_steering()?;
 
         Ok(InitReport {
@@ -90,6 +109,7 @@ impl<D: DbInitializer, F: FileGenerator, R: CommandRunner> InitUseCase<D, F, R> 
             toml_created,
             agent_assets_installed,
             gitignore_updated,
+            settings_json_written,
             steering_bootstrap_message,
         })
     }
@@ -101,7 +121,7 @@ impl<D: DbInitializer, F: FileGenerator, R: CommandRunner> InitUseCase<D, F, R> 
 
         let output = self.command_runner.run_in_dir(
             "claude",
-            &["-p", "/cupola:steering", "--dangerously-skip-permissions"],
+            &["-p", "/cupola:steering"],
             &self.base_dir,
         )?;
 
@@ -139,10 +159,7 @@ mod tests {
         let tmp = TempDir::new().expect("temp dir");
         let db = SqliteConnection::open_in_memory().expect("open db");
         let file_gen = InitFileGenerator::new(tmp.path().to_path_buf());
-        let runner = MockCommandRunner::new().with_failure(
-            "claude",
-            &["-p", "/cupola:steering", "--dangerously-skip-permissions"],
-        );
+        let runner = MockCommandRunner::new().with_failure("claude", &["-p", "/cupola:steering"]);
         let uc = InitUseCase::new(
             tmp.path().to_path_buf(),
             false,
@@ -183,10 +200,7 @@ mod tests {
 
         let db = SqliteConnection::open_in_memory().expect("open db");
         let file_gen = InitFileGenerator::new(tmp.path().to_path_buf());
-        let runner = MockCommandRunner::new().with_failure(
-            "claude",
-            &["-p", "/cupola:steering", "--dangerously-skip-permissions"],
-        );
+        let runner = MockCommandRunner::new().with_failure("claude", &["-p", "/cupola:steering"]);
         let uc = InitUseCase::new(
             tmp.path().to_path_buf(),
             false,
@@ -290,11 +304,8 @@ mod tests {
         let tmp = TempDir::new().expect("temp dir");
         let db = SqliteConnection::open_in_memory().expect("open db");
         let file_gen = InitFileGenerator::new(tmp.path().to_path_buf());
-        let runner = MockCommandRunner::new().with_success(
-            "claude",
-            &["-p", "/cupola:steering", "--dangerously-skip-permissions"],
-            "",
-        );
+        let runner =
+            MockCommandRunner::new().with_success("claude", &["-p", "/cupola:steering"], "");
         let uc = InitUseCase::new(
             tmp.path().to_path_buf(),
             false,

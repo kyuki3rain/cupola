@@ -71,6 +71,11 @@ pub enum Command {
         /// User-owned files (cupola.toml, steering/, specs/) are never overwritten.
         #[arg(long, default_value_t = false)]
         upgrade: bool,
+        /// Permission template keys (comma-separated, e.g. "rust" or "rust,typescript").
+        /// Available: base, rust, typescript, python, go.
+        /// base is always applied; specifying it explicitly is allowed but not required.
+        #[arg(long, value_delimiter = ',')]
+        template: Vec<String>,
     },
     /// Show status of all issues
     Status,
@@ -216,9 +221,14 @@ mod tests {
     fn parse_init_command() {
         let cli = Cli::parse_from(["cupola", "init"]);
         match cli.command {
-            Command::Init { agent, upgrade } => {
+            Command::Init {
+                agent,
+                upgrade,
+                template,
+            } => {
                 assert_eq!(agent, InitAgent::ClaudeCode);
                 assert!(!upgrade, "--upgrade should default to false");
+                assert!(template.is_empty(), "--template should default to empty");
             }
             _ => panic!("expected Init command"),
         }
@@ -228,7 +238,7 @@ mod tests {
     fn parse_init_with_agent() {
         let cli = Cli::parse_from(["cupola", "init", "--agent", "claude-code"]);
         match cli.command {
-            Command::Init { agent, upgrade } => {
+            Command::Init { agent, upgrade, .. } => {
                 assert_eq!(agent, InitAgent::ClaudeCode);
                 assert!(!upgrade);
             }
@@ -251,9 +261,31 @@ mod tests {
     fn parse_init_with_agent_and_upgrade() {
         let cli = Cli::parse_from(["cupola", "init", "--agent", "claude-code", "--upgrade"]);
         match cli.command {
-            Command::Init { agent, upgrade } => {
+            Command::Init { agent, upgrade, .. } => {
                 assert_eq!(agent, InitAgent::ClaudeCode);
                 assert!(upgrade);
+            }
+            _ => panic!("expected Init command"),
+        }
+    }
+
+    #[test]
+    fn parse_init_with_single_template() {
+        let cli = Cli::parse_from(["cupola", "init", "--template", "rust"]);
+        match cli.command {
+            Command::Init { template, .. } => {
+                assert_eq!(template, vec!["rust"]);
+            }
+            _ => panic!("expected Init command"),
+        }
+    }
+
+    #[test]
+    fn parse_init_with_multiple_templates_comma_separated() {
+        let cli = Cli::parse_from(["cupola", "init", "--template", "rust,typescript"]);
+        match cli.command {
+            Command::Init { template, .. } => {
+                assert_eq!(template, vec!["rust", "typescript"]);
             }
             _ => panic!("expected Init command"),
         }
