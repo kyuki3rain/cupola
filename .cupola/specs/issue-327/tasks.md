@@ -6,7 +6,8 @@
 - [ ] 1.1 SqliteConnection に dump_schema() を追加する
   - `src/adapter/outbound/sqlite_connection.rs` の既存 `#[cfg(test)] mod tests` の直前に `#[cfg(test)]` impl ブロックを追加する
   - `dump_schema()` メソッドは `conn_lock()` で Mutex ガードを取得し、`sqlite_master` から `type IN ('table', 'index') AND sql IS NOT NULL` の DDL 文を `ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name ASC` で取得し、`";\n"` で連結して末尾に `";"` を付与して返す
-  - `#[cfg_attr(test, allow(clippy::expect_used))]` が既に有効なので `.expect()` を使用してよい
+  - この実装箇所はライブラリクレート内の `#[cfg(test)]` コードなので、既存の `#![cfg_attr(test, allow(clippy::expect_used))]` の適用対象であり `.expect()` を使用してよい
+  - ただし `tests/` 配下の統合テストにはこの allow は波及しないため、`tests/migrations/mod.rs` で `.expect()` を使う場合はファイル先頭に `#![allow(clippy::expect_used)]` を追加する。追加しない場合は `.expect()` を避ける
   - _Requirements: 1.1, 1.2_
 
 - [ ] 1.2 (P) normalize_schema ヘルパー関数を実装する

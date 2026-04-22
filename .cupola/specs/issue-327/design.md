@@ -24,7 +24,8 @@
 
 | 要件 | 概要 | コンポーネント | フロー |
 |-----|------|--------------|------|
-| 1.1–1.3 | dump_schema() ヘルパー | SqliteConnection (#[cfg(test)]) | — |
+| 1.1–1.2 | dump_schema() ヘルパー | SqliteConnection (#[cfg(test)]) | — |
+| 1.3 | normalize_schema() ヘルパー | MigrationTestInfra (tests/migrations/mod.rs) | — |
 | 2.1–2.4 | テストインフラ構築 | MigrationTestInfra | — |
 | 3.1–3.2 | スキーマスナップショット管理 | MigrationTestInfra | snapshot 生成フロー |
 | 4.1–4.3 | v0001 フィクスチャ | MigrationTestInfra | fixture 生成フロー |
@@ -107,9 +108,10 @@ sequenceDiagram
     T->>SC: dump_schema()
     SC->>SM: SELECT sql FROM sqlite_master ORDER BY ...
     SM-->>SC: DDL 文字列群
-    SC-->>T: 正規化済みスキーマ文字列
+    SC-->>T: スキーマ DDL 文字列
 
-    T->>T: normalize_schema(current-schema.sql)
+    T->>T: actual_norm = normalize_schema(dump_schema())
+    T->>T: expected_norm = normalize_schema(current-schema.sql)
     T->>T: assert_eq!(actual_norm, expected_norm)
 ```
 
@@ -137,7 +139,7 @@ sequenceDiagram
 
 | コンポーネント | レイヤー | 概要 | 要件カバレッジ | 主要依存 |
 |-------------|---------|------|-------------|--------|
-| SqliteConnection (cfg_test 追加) | adapter/outbound | dump_schema() / normalize_schema() の追加 | 1.1, 1.2, 1.3 | rusqlite |
+| SqliteConnection (cfg_test 追加) | adapter/outbound | dump_schema() の追加 | 1.1, 1.2 | rusqlite |
 | MigrationTestInfra | tests/migrations | mod.rs 全体 (load_fixture, テスト 2 本, 生成ヘルパー) | 2.1–2.4, 3.1–3.2, 4.1–4.3, 5.1–5.4 | SqliteConnection, tempfile |
 | Cargo.toml [[test]] | 設定 | migrations ターゲット登録 | 6.1, 6.2 | — |
 | CHANGELOG.md | ドキュメント | 運用ルール追記 | 7.1 | — |
@@ -167,14 +169,14 @@ sequenceDiagram
 ##### Service Interface (Rust)
 
 ```rust
-// #[cfg(test)] impl ブロック内に追加
+// sqlite_connection.rs の #[cfg(test)] impl ブロック内に追加
 impl SqliteConnection {
     /// sqlite_master の全 DDL 文をテーブル先・名前昇順で連結して返す
     pub fn dump_schema(&self) -> String;
 }
 
-/// スキーマ文字列の正規化 (CRLF→LF、末尾空白除去、空行除去)
-fn normalize_schema(sql: &str) -> String;
+// tests/migrations/mod.rs に置くテストインフラ側の自由関数
+// (MigrationTestInfra セクション参照)
 ```
 
 - **Preconditions**: `init_schema()` が少なくとも 1 回呼ばれていること
@@ -269,7 +271,10 @@ issues テーブル (pre-migration)
 
 ### エラー戦略
 
-テストコードであるため `.expect("reason")` による即時パニックを基本とする (`src/lib.rs` の `#[cfg_attr(test, allow(clippy::expect_used))]` が適用される)。
+テストコードであるため `.expect("reason")` による即時パニックを基本とする。ただし、適用スコープに注意が必要:
+
+- `src/adapter/outbound/sqlite_connection.rs` 内の `#[cfg(test)]` コードは、`src/lib.rs` の `#[cfg_attr(test, allow(clippy::expect_used))]` の適用対象であるため `.expect()` を使用してよい
+- `tests/migrations/mod.rs` は統合テスト (`tests/` 配下) のため上記 allow が波及しない。ファイル先頭に `#![allow(clippy::expect_used)]` を追加するか、`.expect()` を避ける必要がある
 
 ### エラーカテゴリ
 
