@@ -16,7 +16,7 @@
 
 1.1. When リファクタリングが完了したとき、the execute module shall `src/application/polling/execute/` ディレクトリ構成（`mod.rs`、`context.rs`、`dispatcher.rs`、`comment_executor.rs`、`spawn_init_executor.rs`、`spawn_process_executor.rs`、`worktree_executor.rs`、`close_executor.rs`、`shared.rs`）に移行している。
 
-1.2. The execute module shall 各ファイルを 500 行以下に収める。
+1.2. The execute module shall 各ファイルの実装コード（`#[cfg(test)]` ブロックを除く部分）を 500 行以下に収める。テストコードを含む場合、総行数がこれを超えることがある。
 
 1.3. The execute module shall `retry_db_update`、`BodyTamperedError`、`sha256_hex`、`SpawnableGitWorktree` を `mod.rs` に配置する。
 

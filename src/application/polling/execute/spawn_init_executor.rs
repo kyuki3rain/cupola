@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::Result;
 
@@ -141,20 +141,19 @@ where
     }
 
     let handle = tokio::spawn(async move {
-        let wt_path_for_task = wt_path.clone();
+        let params = InitSyncParams {
+            wt_path,
+            issue_number,
+            issue_body,
+            language,
+            feature_name,
+            default_branch,
+            is_resume,
+        };
         tokio::task::spawn_blocking(move || {
-            perform_init_sync(
-                &worktree_clone,
-                &file_gen_clone,
-                &wt_path_for_task,
-                issue_number,
-                &issue_body,
-                &language,
-                &feature_name,
-                &default_branch,
-                is_resume,
-            )?;
-            Ok::<String, anyhow::Error>(wt_path_for_task.to_string_lossy().into_owned())
+            let path_str = params.wt_path.to_string_lossy().into_owned();
+            perform_init_sync(&worktree_clone, &file_gen_clone, &params)?;
+            Ok::<String, anyhow::Error>(path_str)
         })
         .await
         .map_err(|e| anyhow::anyhow!("init blocking task panicked: {e}"))?
@@ -163,36 +162,44 @@ where
     Ok((handle, body_hash, run_id))
 }
 
-#[allow(clippy::too_many_arguments)]
+struct InitSyncParams {
+    wt_path: PathBuf,
+    issue_number: u64,
+    issue_body: String,
+    language: String,
+    feature_name: String,
+    default_branch: String,
+    is_resume: bool,
+}
+
 fn perform_init_sync<W: GitWorktree, F: FileGenerator>(
     worktree: &W,
     file_gen: &F,
-    wt_path: &Path,
-    issue_number: u64,
-    issue_body: &str,
-    language: &str,
-    feature_name: &str,
-    default_branch: &str,
-    is_resume: bool,
+    params: &InitSyncParams,
 ) -> Result<()> {
     worktree.fetch()?;
 
-    if is_resume {
+    if params.is_resume {
         tracing::info!(
-            path = %wt_path.display(),
+            path = %params.wt_path.display(),
             "worktree already exists; resuming init with idempotent setup steps"
         );
     }
 
-    let main_branch = format!("cupola/{feature_name}/main");
-    let start_point = format!("origin/{default_branch}");
-    worktree.create(wt_path, &main_branch, &start_point)?;
-    worktree.push(wt_path, &main_branch)?;
+    let main_branch = format!("cupola/{}/main", params.feature_name);
+    let start_point = format!("origin/{}", params.default_branch);
+    worktree.create(&params.wt_path, &main_branch, &start_point)?;
+    worktree.push(&params.wt_path, &main_branch)?;
 
-    let design_branch = format!("cupola/{feature_name}/design");
-    worktree.create_branch(wt_path, &design_branch)?;
-    worktree.push(wt_path, &design_branch)?;
-    file_gen.generate_spec_directory_at(wt_path, issue_number, issue_body, language)?;
+    let design_branch = format!("cupola/{}/design", params.feature_name);
+    worktree.create_branch(&params.wt_path, &design_branch)?;
+    worktree.push(&params.wt_path, &design_branch)?;
+    file_gen.generate_spec_directory_at(
+        &params.wt_path,
+        params.issue_number,
+        &params.issue_body,
+        &params.language,
+    )?;
 
     Ok(())
 }
@@ -204,7 +211,7 @@ mod tests {
 
     use anyhow::Result;
 
-    use super::{perform_init_sync, prepare_init_handle};
+    use super::{InitSyncParams, perform_init_sync, prepare_init_handle};
     use crate::application::port::file_generator::FileGenerator;
     use crate::application::port::git_worktree::GitWorktree;
     use crate::application::port::github_client::{
@@ -590,13 +597,15 @@ mod tests {
         perform_init_sync(
             &worktree,
             &file_gen,
-            wt_path,
-            193,
-            "Issue body",
-            "ja",
-            "issue-193",
-            "main",
-            false,
+            &InitSyncParams {
+                wt_path: wt_path.to_path_buf(),
+                issue_number: 193,
+                issue_body: "Issue body".to_string(),
+                language: "ja".to_string(),
+                feature_name: "issue-193".to_string(),
+                default_branch: "main".to_string(),
+                is_resume: false,
+            },
         )
         .expect("perform init");
 
@@ -634,13 +643,15 @@ mod tests {
         perform_init_sync(
             &worktree,
             &file_gen,
-            wt_path,
-            193,
-            "Issue body",
-            "ja",
-            "issue-193",
-            "main",
-            true,
+            &InitSyncParams {
+                wt_path: wt_path.to_path_buf(),
+                issue_number: 193,
+                issue_body: "Issue body".to_string(),
+                language: "ja".to_string(),
+                feature_name: "issue-193".to_string(),
+                default_branch: "main".to_string(),
+                is_resume: true,
+            },
         )
         .expect("perform init resume");
 
