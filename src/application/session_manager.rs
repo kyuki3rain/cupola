@@ -10,7 +10,6 @@ use crate::domain::state::State;
 
 const LOG_DIR: &str = ".cupola/logs/process-runs";
 
-
 /// アクティブな子プロセスの PID 共有レジストリ。
 /// SessionManager と panic hook の間でプロセス PID を共有する。
 /// Arc<Mutex<_>> でラップされているため、clone() で安価に複数の所有者に配布できる。

@@ -259,7 +259,9 @@ where
                 .ok()
                 .map(|f| {
                     let mut buf = String::new();
-                    let _ = std::io::BufReader::new(f).take(8192).read_to_string(&mut buf);
+                    let _ = std::io::BufReader::new(f)
+                        .take(8192)
+                        .read_to_string(&mut buf);
                     buf
                 })
                 .unwrap_or_default()
@@ -270,7 +272,9 @@ where
                 .ok()
                 .map(|f| {
                     let mut buf = String::new();
-                    let _ = std::io::BufReader::new(f).take(8192).read_to_string(&mut buf);
+                    let _ = std::io::BufReader::new(f)
+                        .take(8192)
+                        .read_to_string(&mut buf);
                     buf
                 })
                 .unwrap_or_default()
