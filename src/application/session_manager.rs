@@ -377,6 +377,10 @@ impl SessionManager {
                     reg.unregister(pid);
                 }
 
+                if let Some(ref reg) = self.registry {
+                    reg.unregister(pid);
+                }
+
                 results.push(ExitedSession {
                     issue_id,
                     exit_status,

@@ -251,6 +251,13 @@ impl FileGenerator for MockFileGenerator {
     ) -> Result<bool> {
         Ok(false)
     }
+
+    fn write_claude_settings(
+        &self,
+        _settings: &cupola::domain::claude_settings::ClaudeSettings,
+    ) -> Result<bool> {
+        Ok(false)
+    }
 }
 
 // === Helpers ===

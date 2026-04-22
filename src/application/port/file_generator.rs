@@ -1,6 +1,8 @@
 use anyhow::Result;
 use std::path::Path;
 
+use crate::domain::claude_settings::ClaudeSettings;
+
 /// ファイル生成操作を抽象化する outbound ポート。
 /// 各メソッドは `true` を返す（操作を実行した）または `false` を返す（既存のためスキップ）。
 pub trait FileGenerator: Send + Sync {
@@ -30,4 +32,11 @@ pub trait FileGenerator: Send + Sync {
         issue_body: &str,
         language: &str,
     ) -> Result<bool>;
+
+    /// `.claude/settings.json` に `ClaudeSettings` を書き込む（既存ファイルとディープマージ）。
+    ///
+    /// - `Ok(true)`: ファイルを新規作成または更新した
+    /// - `Ok(false)`: 変更なし
+    /// - `Err(...)`: 既存ファイルの JSON パース失敗等
+    fn write_claude_settings(&self, settings: &ClaudeSettings) -> Result<bool>;
 }

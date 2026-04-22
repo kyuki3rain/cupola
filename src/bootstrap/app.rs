@@ -115,7 +115,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
 
-        Command::Init { agent, upgrade } => {
+        Command::Init {
+            agent,
+            upgrade,
+            template,
+        } => {
             let base_dir = std::env::current_dir().context("failed to get current directory")?;
             let cupola_dir = base_dir.join(".cupola");
             std::fs::create_dir_all(&cupola_dir)
@@ -133,7 +137,8 @@ pub async fn run(cli: Cli) -> Result<()> {
                 runner,
                 agent.into(),
                 upgrade,
-            );
+            )
+            .with_templates(template);
             let report = uc.run()?;
 
             println!("cupola init completed:");
@@ -179,6 +184,14 @@ pub async fn run(cli: Cli) -> Result<()> {
                     "updated"
                 } else {
                     "skipped (already has cupola entries)"
+                }
+            );
+            println!(
+                "  settings.json: {}",
+                if report.settings_json_written {
+                    "written"
+                } else {
+                    "up to date"
                 }
             );
             println!(
