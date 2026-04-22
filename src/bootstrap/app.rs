@@ -583,7 +583,7 @@ async fn start_foreground(
         }
 
         let exec_log_repo = SqliteExecutionLogRepository::new(db);
-        let claude_runner = ClaudeCodeProcess::new("claude");
+        let claude_runner = ClaudeCodeProcess::new("claude", cfg.claude_code_env.clone());
         let worktree = GitWorktreeManager::new(".");
         let file_gen = InitFileGenerator::new(std::env::current_dir()?);
 
@@ -751,7 +751,7 @@ async fn start_daemon_child(
         }
 
         let exec_log_repo = SqliteExecutionLogRepository::new(db);
-        let claude_runner = ClaudeCodeProcess::new("claude");
+        let claude_runner = ClaudeCodeProcess::new("claude", cfg.claude_code_env.clone());
         let worktree = GitWorktreeManager::new(".");
         let file_gen = InitFileGenerator::new(config_dir.clone());
 
@@ -1212,6 +1212,7 @@ mod tests {
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
+            body_hash: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }
@@ -1244,6 +1245,7 @@ mod tests {
             close_finished: false,
             consecutive_failures_epoch: None,
             last_pr_review_submitted_at: None,
+            body_hash: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };

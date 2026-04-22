@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::domain::author_association::TrustedAssociations;
+use crate::domain::claude_code_env_config::ClaudeCodeEnvConfig;
 use crate::domain::model_config::ModelConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +34,7 @@ pub struct Config {
     /// `None` = 全セッション完了まで無限待機（shutdown_timeout_secs = 0 の場合）。
     /// `Some(d)` = 指定秒数後に強制終了。デフォルト 300 秒。
     pub shutdown_timeout: Option<Duration>,
+    pub claude_code_env: ClaudeCodeEnvConfig,
 }
 
 impl Config {
@@ -53,6 +55,7 @@ impl Config {
             trusted_associations: TrustedAssociations::default(),
             trusted_reviewers: vec!["copilot-pull-request-reviewer".to_string()],
             shutdown_timeout: Some(Duration::from_secs(300)),
+            claude_code_env: ClaudeCodeEnvConfig::default(),
         }
     }
 

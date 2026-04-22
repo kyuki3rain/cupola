@@ -7,3 +7,4 @@ issue_comment:
   cleanup_done: "cleanup を実行しました"
   retry_exhausted: "リトライ上限に到達しました（%{count} 回）。cleanup を実行しました。\n\nエラー: %{error}"
   unknown_error: "不明"
+  body_tampered: "⚠️ **Issue 本文の改変が検出されました**\n\n`agent:ready` ラベル付与後に Issue 本文が編集されたため、セキュリティ上の理由から処理を中止しました。\n\n**処理を再開するには:**\n1. Issue 本文の内容を確認してください\n2. 問題なければ、信頼されたユーザーが `agent:ready` ラベルを再付与してください\n\nラベルを再付与すると、現在の本文内容で処理が再開されます。"

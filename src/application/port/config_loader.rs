@@ -5,6 +5,7 @@ pub struct DoctorConfigSummary {
     pub owner: String,
     pub repo: String,
     pub default_branch: String,
+    pub claude_code_extra_allow: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]

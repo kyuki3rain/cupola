@@ -72,6 +72,66 @@ association:
    association levels are trusted.
 3. The Issue is skipped in the current polling cycle.
 
+## Issue Body Approval and Tampering Detection
+
+### The Trust Model
+
+The `agent:ready` label acts as an **approval gate**: the person who applies the label
+takes responsibility for approving the Issue body content **at the time of labeling**.
+
+Key points:
+
+- **Issue authors can always edit their own Issue body**, regardless of their
+  `author_association`. A user with `NONE` association who creates an Issue can modify
+  its content even after a trusted collaborator applies `agent:ready`.
+
+- **Collaborators and higher also have edit permissions** on Issue bodies. Granting
+  collaborator status to a user effectively extends the trust boundary to them.
+
+### Hash-Based Tampering Detection
+
+To prevent post-approval body modifications from reaching Claude Code, Cupola implements
+SHA-256 hash-based body tampering detection:
+
+1. **Snapshot on approval**: When `SpawnInit` runs (triggered by `agent:ready`), Cupola
+   fetches the current Issue body and computes its SHA-256 hex digest. This hash is stored
+   as the **approval snapshot**.
+
+2. **Verification before each spawn**: Before each subsequent Claude Code spawn
+   (`SpawnProcess`), Cupola re-fetches the Issue body and recomputes the hash. If the hash
+   differs from the stored snapshot, the body has been modified.
+
+3. **Automatic cancellation on detection**: If tampering is detected, Cupola:
+   - Transitions the Issue state to `Cancelled` in the database
+   - Removes the `agent:ready` label (best-effort; failure is logged as a warning)
+   - Posts a notification comment explaining the cancellation and how to resume (best-effort)
+   - Emits a `warn!` trace event with the Issue number
+
+### Re-approval Flow
+
+If an Issue body change is intentional and acceptable, a trusted user can resume processing:
+
+1. Review the **current** Issue body content.
+2. If the content is acceptable, re-apply the `agent:ready` label.
+3. Cupola will run `SpawnInit` again, fetching the current body and saving a new approval
+   snapshot. Subsequent spawns will be validated against this new snapshot.
+
+### Important Notes
+
+- **`body_hash = NULL` issues are backward-compatible**: Issues initialized before this
+  feature was introduced will have no stored hash. For these issues, hash comparison is
+  skipped and processing continues normally. The hash will be set on the next `SpawnInit`
+  (i.e., when `agent:ready` is re-applied).
+
+- **In-flight changes are not covered**: Only changes made *between* `SpawnInit` and a
+  subsequent `SpawnProcess` are detected. Changes made during an active Claude Code session
+  are not intercepted (the session uses already-written input files).
+
+- **PR review comments are handled separately** via Cupola's comment trust check, which
+  accepts comments from authors whose association is allowed by `trusted_associations` or
+  whose login is explicitly listed in `trusted_reviewers`. Do not use Issue body edits to
+  send change requests to the agent; use PR review comments instead.
+
 ## Reporting Security Vulnerabilities
 
 Please report security vulnerabilities by opening a GitHub Issue with the `security` label,
