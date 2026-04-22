@@ -16,3 +16,4 @@ pub mod retry_policy;
 pub mod session_manager;
 pub mod start_use_case;
 pub mod stop_use_case;
+pub mod template_manager;

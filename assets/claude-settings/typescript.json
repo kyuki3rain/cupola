@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install*)",
+      "Bash(npm run*)",
+      "Bash(npm test*)",
+      "Bash(npm build*)",
+      "Bash(npx*)",
+      "Bash(yarn*)",
+      "Bash(pnpm*)",
+      "Bash(tsc*)",
+      "Bash(node*)",
+      "Bash(ts-node*)",
+      "Bash(vitest*)",
+      "Bash(jest*)",
+      "Bash(eslint*)",
+      "Bash(prettier*)"
+    ]
+  }
+}

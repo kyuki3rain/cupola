@@ -179,7 +179,6 @@ impl ClaudeCodeProcess {
             .arg(prompt)
             .arg("--output-format")
             .arg("json")
-            .arg("--dangerously-skip-permissions")
             .arg("--model")
             .arg(model);
 
@@ -255,10 +254,13 @@ mod tests {
                 "hello",
                 "--output-format",
                 "json",
-                "--dangerously-skip-permissions",
                 "--model",
                 "sonnet",
             ]
+        );
+        assert!(
+            !args.contains(&OsStr::new("--dangerously-skip-permissions")),
+            "--dangerously-skip-permissions must not be passed"
         );
     }
 
