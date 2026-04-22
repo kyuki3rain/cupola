@@ -2042,22 +2042,8 @@ mod tests {
         let db = SqliteConnection::open_in_memory().expect("open");
         db.init_schema().expect("init");
         let repo = SqliteIssueRepository::new(db);
-        let issue = Issue {
-            id: 0,
-            github_issue_number: 100,
-            state: State::DesignRunning,
-            feature_name: "issue-100".to_string(),
-            weight: crate::domain::task_weight::TaskWeight::Medium,
-            worktree_path: None,
-            ci_fix_count: 2,
-            ci_fix_limit_notified: false,
-            close_finished: false,
-            consecutive_failures_epoch: None,
-            last_pr_review_submitted_at: None,
-            body_hash: None,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        };
+        let mut issue = make_issue(100, State::DesignRunning, None);
+        issue.ci_fix_count = 2;
         repo.save(&issue).await.expect("save");
         let pid_mgr = MockPidFilePort::new();
 
@@ -2084,22 +2070,7 @@ mod tests {
         let db = SqliteConnection::open_in_memory().expect("open");
         db.init_schema().expect("init");
         let repo = SqliteIssueRepository::new(db);
-        let issue = Issue {
-            id: 0,
-            github_issue_number: 101,
-            state: State::DesignRunning,
-            feature_name: "issue-101".to_string(),
-            weight: crate::domain::task_weight::TaskWeight::Medium,
-            worktree_path: None,
-            ci_fix_count: 0,
-            ci_fix_limit_notified: false,
-            close_finished: false,
-            consecutive_failures_epoch: None,
-            last_pr_review_submitted_at: None,
-            body_hash: None,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        };
+        let issue = make_issue(101, State::DesignRunning, None);
         repo.save(&issue).await.expect("save");
         let pid_mgr = MockPidFilePort::new();
 
@@ -2126,22 +2097,8 @@ mod tests {
         let db = SqliteConnection::open_in_memory().expect("open");
         db.init_schema().expect("init");
         let repo = SqliteIssueRepository::new(db);
-        let issue = Issue {
-            id: 0,
-            github_issue_number: 102,
-            state: State::DesignRunning,
-            feature_name: "issue-102".to_string(),
-            weight: crate::domain::task_weight::TaskWeight::Medium,
-            worktree_path: None,
-            ci_fix_count: 3,
-            ci_fix_limit_notified: false,
-            close_finished: false,
-            consecutive_failures_epoch: None,
-            last_pr_review_submitted_at: None,
-            body_hash: None,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        };
+        let mut issue = make_issue(102, State::DesignRunning, None);
+        issue.ci_fix_count = 3;
         repo.save(&issue).await.expect("save");
         let pid_mgr = MockPidFilePort::new();
 
@@ -2172,22 +2129,8 @@ mod tests {
         let db = SqliteConnection::open_in_memory().expect("open");
         db.init_schema().expect("init");
         let repo = SqliteIssueRepository::new(db);
-        let issue = Issue {
-            id: 0,
-            github_issue_number: 103,
-            state: State::DesignRunning,
-            feature_name: "issue-103".to_string(),
-            weight: crate::domain::task_weight::TaskWeight::Medium,
-            worktree_path: None,
-            ci_fix_count: 6,
-            ci_fix_limit_notified: false,
-            close_finished: false,
-            consecutive_failures_epoch: None,
-            last_pr_review_submitted_at: None,
-            body_hash: None,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        };
+        let mut issue = make_issue(103, State::DesignRunning, None);
+        issue.ci_fix_count = 6;
         repo.save(&issue).await.expect("save");
         let pid_mgr = MockPidFilePort::new();
 
