@@ -19,11 +19,11 @@
 
 #### Acceptance Criteria
 
-1.1. When 5 件の issue が異なる State で同時に `resolve_exited_sessions` に投入されたとき、the テストシステム shall 各 issue の ProcessRun が期待する State (succeeded/failed) へ遷移し、session_mgr の上限 (max_concurrent_sessions = 3) により 3 件が active・2 件が次サイクル待ちになることを検証する。
+1.1. When 5 件の issue が異なる State で同時に `resolve_exited_sessions` に投入されたとき、the テストシステム shall 各 issue の exited session を逐次処理し、対応する ProcessRun が期待する State (succeeded/failed) へ遷移して最終的に persist されることを検証する。
 
 1.2. When 複数の issue が並行して `resolve_exited_sessions` を実行したとき、the テストシステム shall DB lock contention が発生しても全 issue の ProcessRun が最終的に persist (succeeded または failed) されることを検証する。
 
-1.3. When `max_concurrent_sessions = 2` で 5 件の issue を session_mgr に登録しようとしたとき、the テストシステム shall `try_reserve` が上限到達後に `false` を返し、超過分の issue がセッション確保に失敗することを検証する。
+1.3. When `max_concurrent_sessions = 2` で 5 件の issue を `spawn_process` 経由で session_mgr に登録しようとしたとき、the テストシステム shall `SessionManager::try_reserve` が上限到達後に `false` を返し、超過分の issue がセッション確保に失敗することを検証する。
 
 1.4. The テストシステム shall 並行テストを `tokio::join!` または `Vec<JoinHandle>` で構成し、`--test-threads=1` を要求しない独立実行可能な形式で実装する。
 

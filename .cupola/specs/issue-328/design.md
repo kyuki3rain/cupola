@@ -137,7 +137,7 @@ sequenceDiagram
 
 | Requirement | 概要 | コンポーネント | 配置先 |
 |-------------|------|----------------|--------|
-| 1.1 | 5 issue 並行・上限制御の検証 | `five_concurrent_issues_isolated_progress` | `tests/integration_test.rs` |
+| 1.1 | 5 issue 並行・exited session 処理の検証 | `five_concurrent_issues_isolated_progress` | `tests/integration_test.rs` |
 | 1.2 | DB 並行書き込みの正確性 | `concurrent_issues_db_write_accuracy` | `tests/integration_test.rs` |
 | 1.3 | session 上限 reject の検証 | `concurrent_session_limit_rejects_excess` | `tests/integration_test.rs` |
 | 1.4 | tokio::join! による並行構成 | 各テストの実装方針 | — |
@@ -159,7 +159,7 @@ sequenceDiagram
 
 | コンポーネント | 配置 | 意図 | 要件カバレッジ |
 |--------------|------|------|---------------|
-| `five_concurrent_issues_isolated_progress` | `tests/integration_test.rs` | 5 issue 並行・upper limit 検証 | 1.1, 1.4, 1.5 |
+| `five_concurrent_issues_isolated_progress` | `tests/integration_test.rs` | 5 issue 並行・exited session 処理の検証 | 1.1, 1.4, 1.5 |
 | `concurrent_issues_db_write_accuracy` | `tests/integration_test.rs` | 並行書き込みの正確性 | 1.2, 1.4, 1.5 |
 | `concurrent_session_limit_rejects_excess` | `tests/integration_test.rs` | session 上限 reject | 1.3, 1.5 |
 | `find_stalled_at_exact_threshold` | `session_manager.rs` | 境界値 == | 2.1, 2.5 |
@@ -185,8 +185,8 @@ sequenceDiagram
 - session_mgr の上限 (3) を検証する場合は max_concurrent_sessions を 3 に設定した Config を使用
 
 **Implementation Notes**
-- 既存の `test_config()` ヘルパーに `max_concurrent_sessions` を設定可能にするか、テスト内で Config を直接構築する
-- プロセスの終了待機は `std::thread::sleep(Duration::from_millis(300))` で統一（既存パターン踏襲）
+- 既存の `test_config()` ヘルパーを使用するか、テスト内で Config を直接構築する
+- プロセスの終了待機は既存パターンに合わせた短い sleep で統一する
 
 #### `concurrent_issues_db_write_accuracy`
 
@@ -224,10 +224,10 @@ sequenceDiagram
 | Requirements | 2.1, 2.2, 2.3, 2.4, 2.5 |
 
 **Responsibilities & Constraints**
-- `spawn_sleep` で長時間プロセスを register 直後に `find_stalled` を呼ぶ
-- `Duration::ZERO` → 全件検出（`elapsed > 0` は常に成立するため）
-- `Duration::MAX` → 全件非検出
-- `Duration::from_nanos(1)` → 登録直後でも検出される（Instant の精度に依存するが通常 true）
+- 長時間プロセスを register し、各境界条件で stall 検出を呼ぶ
+- `timeout=0` → 登録後に十分な経過時間を確保してから全件検出（`elapsed > 0` が成立することを保証した上で検証する）
+- `timeout=Duration::MAX` → 全件非検出（登録直後の elapsed は到達不可能な値のため）
+- 十分小さい timeout → elapsed が timeout を確実に超える条件を設定して全件検出（`Instant::now()` の精度に依存しない十分な時間差を用意する）
 - 「ちょうど境界」は `Instant` の精度上正確なシミュレートが困難なため、`>` の仕様をコメントで明記して代替テストで境界の意図を示す
 
 #### `stalled_session_is_killed_and_marked_failed_next_cycle`
@@ -252,8 +252,8 @@ sequenceDiagram
 ### 単体テスト（session_manager.rs）
 
 - `find_stalled_at_exact_threshold`: `Duration::ZERO` timeout 直後は全件検出、意図コメントあり
-- `find_stalled_just_under_threshold`: `Duration::from_nanos(1)` で登録直後に検出されることを確認
-- `find_stalled_just_over_threshold`: `Duration::MAX` で全件非検出を確認
+- `find_stalled_just_under_threshold`: `Duration::MAX` で登録直後は全件非検出を確認
+- `find_stalled_just_over_threshold`: `Duration::from_nanos(1)` で登録直後に検出されることを確認
 - `find_stalled_with_zero_timeout`: `Duration::ZERO` で全件検出を確認（冗長性あり、明示的に境界 0 を表現）
 
 ### 統合テスト（integration_test.rs）
