@@ -11,7 +11,7 @@
 - **Discovery Scope**: Simple Addition
 - **Key Findings**:
   - 本番コード (`--lib`) に `.unwrap()` は実測で 0 件。即時適用にコスト不要
-  - テストコード (`--all-targets`) には 257 件存在するが、既存の `expect_used` と同じパターンで `cfg_attr(test, allow(...))` により除外可能
+  - テストコード (`--all-targets`) には 257 件存在するが、`src/lib.rs` の `cfg_attr(test, allow(...))` はライブラリクレートの unit test にのみ有効であり、`tests/` 配下の integration test クレートには適用されない。`devbox run clippy`（`--all-targets` 含む）を通すには integration test 側でも個別に `allow` を追加するか `.unwrap()` を除去する必要がある
   - `Cargo.toml` と `src/lib.rs` の 2 箇所のみ変更。他ファイルへの影響なし
 
 ## Research Log
@@ -46,12 +46,12 @@
 - **Selected Approach**: オプション 2。`src/lib.rs` の `cfg_attr` 属性を拡張して `clippy::unwrap_used` を追加する。
 - **Rationale**: `expect_used` と完全対称であり、Rust 慣習（テストでは unwrap/expect 許容）とも整合する。変更コストが最小。
 - **Trade-offs**: テストコードでの `.unwrap()` 使用は継続して許容されるため、テスト品質向上の観点では `.expect()` への移行が望ましい場面もあるが、今回の scope 外。
-- **Follow-up**: 将来的に新規テストでは `.expect("reason")` を推奨する慣行を維持する（既存 `rust-testing.md` のガイドラインで対応済み）。
+- **Follow-up**: 将来的に新規テストでは `.expect("reason")` を推奨する慣行を維持する（`tech.md` のコード品質基準と整合）。
 
 ## Risks & Mitigations
 
 - 本番コードに `.unwrap()` が追加された場合、clippy エラーで即座に検出される — これは意図した挙動であり、リスクではなく目的
-- `cfg_attr` の対象が `#[cfg(test)]` モジュールのみのため、integration tests (`tests/` ディレクトリ) が適切に除外されるか — `--lib` フラグと `cfg(test)` の組み合わせは Cargo の標準動作で保証されており問題なし
+- `src/lib.rs` の `cfg_attr(test, allow(...))` はライブラリクレートの unit test にのみ有効であり、`tests/` 配下の integration test クレートには適用されない。`cargo clippy --all-targets`（`devbox run clippy` を含む）を通すためには、integration test クレート側にも `#![allow(clippy::unwrap_used)]` を追加するか `.unwrap()` を除去する対応が別途必要。受け入れ条件として `devbox run clippy` を通過することを求める場合、integration test の対応も実装フェーズのスコープに含める必要がある
 
 ## References
 

@@ -4,17 +4,19 @@
 
 本機能は、`Cargo.toml` の `[lints.clippy]` セクションに `unwrap_used = "deny"` を追加し、`src/lib.rs` のテスト用 `allow` 属性を拡張することで、本番コードへの `.unwrap()` 混入を型システムレベルで防ぐ防御的措置を実施する。
 
-実測により本番コードに `.unwrap()` が 0 件であることが確認済みのため、既存コードの修正は一切不要。設定ファイル 2 箇所への計 2 行追加のみで完結する。
+本ドキュメントは設計アーティファクトであり、実際の実装変更（`Cargo.toml` / `src/lib.rs` / integration test への `allow` 追加）は実装フェーズの PR に含まれる。
+
+実測により本番コードに `.unwrap()` が 0 件であることが確認済みのため、本番コードの修正は一切不要。変更対象は設定ファイルおよびクレートレベル属性のみ。
 
 ### Goals
 
 - `Cargo.toml` に `unwrap_used = "deny"` を追加し、本番コードへの `.unwrap()` 混入を clippy でブロックする
-- テストコードでは `cfg_attr(test, allow(...))` により `.unwrap()` を引き続き許容する
-- `devbox run clippy` および `devbox run test` がエラーなく通過する
+- ライブラリの unit test では `src/lib.rs` の `cfg_attr(test, allow(...))` により `.unwrap()` を引き続き許容する
+- `tests/` 配下の integration test については、各 test クレート側に `allow` を入れるか `.unwrap()` を使用しないことで、`devbox run clippy` および `devbox run test` がエラーなく通過する状態を実現する
 
 ### Non-Goals
 
-- テストコード内の既存 `.unwrap()` を `.expect()` に書き換えること（scope 外）
+- テストコード内の既存 `.unwrap()` を一律 `.expect()` に書き換えること（scope 外）
 - 本番コードの修正（実測で 0 件のため不要）
 
 ## Architecture
@@ -27,16 +29,17 @@
 - `Cargo.toml[lints.clippy]`: `expect_used = "deny"` が設定済み
 - `src/lib.rs`: `#![cfg_attr(test, allow(clippy::expect_used))]` が設定済み
 
-本変更はこれらと完全対称のパターンを踏襲する。
+ただし、このクレートレベル属性が適用されるのはライブラリクレート自身の unit test のみであり、`tests/` 配下の integration test には継承されない。本変更は `expect_used` と `unwrap_used` の対称性を維持しつつ、この適用範囲の違いを前提条件として明記する。
 
 ### Architecture Pattern & Boundary Map
 
-変更対象は設定ファイルのみ。アーキテクチャ境界に変更なし。
+変更対象は設定ファイルとクレートレベル属性のみ。アーキテクチャ境界に変更なし。
 
 | 変更対象 | 変更内容 | 影響範囲 |
 |---------|---------|---------|
 | `Cargo.toml` | `unwrap_used = "deny"` を `[lints.clippy]` に追加 | プロジェクト全体の clippy lint 設定 |
-| `src/lib.rs` | `cfg_attr` の allow リストに `clippy::unwrap_used` を追加 | テストコードのみ |
+| `src/lib.rs` | `cfg_attr` の allow リストに `clippy::unwrap_used` を追加 | ライブラリクレートの unit test のみ |
+| `tests/*`（存在する場合） | 各 integration test クレートで `#![allow(clippy::unwrap_used)]` を追加、または `.unwrap()` を使用しない制約を適用 | `cargo clippy --all-targets` 実行時の integration test |
 
 ### Technology Stack
 

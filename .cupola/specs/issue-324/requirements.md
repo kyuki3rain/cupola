@@ -22,7 +22,7 @@
 - `src/lib.rs:1`: `#![cfg_attr(test, allow(clippy::expect_used))]` ✓ テストで allow
 - `unwrap_used`: 未設定
 
-`rust-coding-style.md` / `rust-testing.md` でも「test では unwrap/expect 許容、prefer `.expect("reason")` for clarity」とされており、現状の使い分けは Rust 慣習と整合している。
+実測では `.unwrap()` は本番コードで 0 件、違反 257 件はすべてテストコードに限られるため、本番コードでは `unwrap_used = "deny"` を有効にしつつ、テストでは既存の `expect_used` と同様に allow する方針は現状の運用と整合している（`tech.md` の「Code Quality」セクション参照）。
 
 ## 対応
 
@@ -65,8 +65,6 @@ unwrap_used = "deny"  # ← 追加
 - **#316** (PostCiFixLimitComment): 本 issue 完了後、新しいコードが `.unwrap()` を含められないため、実装時の型安全性が自然に保たれる
 
 
-## Requirements
-
 ## はじめに
 
 本ドキュメントは、`clippy::unwrap_used` を Cargo.toml の lint 設定で deny に追加し、テストコードでは引き続き許容するための要件を定義する。既存の `expect_used = "deny"` と対称的な設定を追加することで、本番コードへの `.unwrap()` 混入を型システムレベルで防ぐ防御的措置である。
@@ -84,13 +82,15 @@ unwrap_used = "deny"  # ← 追加
 3. If 本番コードに `.unwrap()` が追加された場合, the Clippy shall `clippy::unwrap_used` エラーを報告しビルドを失敗させる。
 4. The `Cargo.toml` shall 既存の `expect_used = "deny"` エントリを変更せず保持する。
 
-### Requirement 2: テストコードでの unwrap_used 許容
+### Requirement 2: ライブラリ内テストコードでの unwrap_used 許容
 
-**Objective:** 開発者として、`src/lib.rs` の `cfg_attr(test, allow(...))` 属性に `clippy::unwrap_used` を追加したい。これにより、テストコードで従来どおり `.unwrap()` を使用できる状態を維持する。
+**Objective:** 開発者として、`src/lib.rs` の `cfg_attr(test, allow(...))` 属性に `clippy::unwrap_used` を追加したい。これにより、ライブラリクレート内の `#[cfg(test)]` テストコードでは従来どおり `.unwrap()` を使用できる状態を維持する。
+
+なお、`src/lib.rs` の `cfg_attr(test, allow(...))` が効くのはライブラリクレート自身の unit test のみであり、`tests/` 配下の integration test には適用されない。`devbox run clippy`（`--all-targets` 含む）を通過するためには、integration test クレート側にも個別に `#![allow(clippy::unwrap_used)]` を付与するか、integration test では `.unwrap()` を使用しない制約を設けることが別途必要である。
 
 #### Acceptance Criteria
 
 1. The `src/lib.rs` shall `#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]` を先頭に含む。
-2. When `devbox run test` を実行した場合, the テストスイート shall `clippy::unwrap_used` に関するエラーなく全テストが通過する。
-3. While テストコード (`#[cfg(test)]` ブロックおよび `tests/` ディレクトリ) が実行される場合, the Clippy shall `.unwrap()` 使用を許容する。
-4. The `src/lib.rs` shall 既存の `clippy::expect_used` の allow 設定を変更せず保持する。
+2. When `devbox run test` を実行した場合, the テストスイート shall `clippy::unwrap_used` に起因する失敗なく全テストが通過する。
+3. While `src/lib.rs` 内の `#[cfg(test)]` ブロックが実行される場合, the Clippy shall `.unwrap()` 使用を許容する。
+4. The `src/lib.rs` shall 既存の `clippy::expect_used` の allow 設定を変更せず保持し、この allow はライブラリクレート内テストに対して適用される。
