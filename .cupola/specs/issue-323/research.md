@@ -12,7 +12,7 @@
 - **Feature**: execute.rs 分割と ExecuteContext 導入（issue-323）
 - **Discovery Scope**: Extension（既存コードの機械的リファクタ。ロジック変更なし）
 - **Key Findings**:
-  - `execute.rs` は 2869 行に成長しており、12 の関数が 1 ファイルに集約されている
+  - `execute.rs` は約2,870行に成長しており、12 の関数が 1 ファイルに集約されている
   - `execute_effects` / `execute_one` / `spawn_init_task` / `perform_init_sync` / `spawn_process` / `prepare_process_spawn` の 6 関数に `#[allow(clippy::too_many_arguments)]` が点在
   - 呼び出し元は `polling_use_case.rs` のみ（パブリック API は `execute_effects` 関数 1 本）
   - テストは `#[cfg(test)]` mod 内で非公開関数を `super::` 経由で直接参照しており、モジュール分割後は各 executor ファイルにテストを移動する必要がある
@@ -22,7 +22,7 @@
 ### execute.rs の現状構造分析
 
 - **Context**: 分割対象ファイルの全関数・行数・依存関係を把握するため調査
-- **Sources Consulted**: `src/application/polling/execute.rs` 全体（2869 行）を直接読解
+- **Sources Consulted**: `src/application/polling/execute.rs` 全体（約2,870行）を直接読解
 - **Findings**:
   - `execute_effects`（L109-170）: エントリポイント、9 引数、`#[allow(clippy::too_many_arguments)]`
   - `execute_one`（L173-391）: 内部ディスパッチ、9 引数、210 行超の match、`#[allow(clippy::too_many_arguments)]`
@@ -36,7 +36,7 @@
   - `state_from_phase`（L891-906）: 共通ヘルパー
   - `phase_for_type`（L908-917）: 共通ヘルパー
   - `find_last_error`（L919-932）: 共通ヘルパー
-  - `tests` モジュール（L934-2869）: 非公開関数を `super::` 経由でテスト
+  - `tests` モジュール（L934 以降）: 非公開関数を `super::` 経由でテスト
 - **Implications**: テスト移動が必須。各 executor ファイルに独自のモック型が必要
 
 ### テストの可視性分析
@@ -116,7 +116,7 @@
 
 ## References
 
-- `src/application/polling/execute.rs` — 分割対象ファイル（2869 行）
+- `src/application/polling/execute.rs` — 分割対象ファイル（約2,870行）
 - Issue #338 — 将来の EffectLog port 追加の構想（#323 が前提）
 - Issue #322 — decide.rs 分割（対をなすリファクタ）
 - Issue #316 — PostCiFixLimitComment 通知欠落（comment_executor.rs に集約）

@@ -2,7 +2,7 @@
 
 ## はじめに
 
-`src/application/polling/execute.rs`（2869 行）を Effect 種別ごとの executor モジュールに分割し、`ExecuteContext` generic struct を導入する機械的リファクタリング。ロジック変更は一切なく、コードの保守性・拡張性の向上が目的である。
+`src/application/polling/execute.rs`（約2,870行）を Effect 種別ごとの executor モジュールに分割し、`ExecuteContext` generic struct を導入する機械的リファクタリング。ロジック変更は一切なく、コードの保守性・拡張性の向上が目的である。
 
 `pub async fn execute_effects(...)` のシグネチャは完全に維持され、呼び出し元（`polling_use_case.rs`、統合テスト）への影響はゼロ。将来の #338（EffectLog port 追加）に備えた前提構造として `ExecuteContext` を整備する。
 
