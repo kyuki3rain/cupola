@@ -358,6 +358,13 @@ mod tests {
             ));
             Ok(true)
         }
+
+        fn write_claude_settings(
+            &self,
+            _settings: &crate::domain::claude_settings::ClaudeSettings,
+        ) -> Result<bool> {
+            Ok(false)
+        }
     }
 
     #[derive(Clone)]
