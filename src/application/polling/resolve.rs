@@ -18,6 +18,63 @@ use crate::domain::state::State;
 /// Longer stderr payloads are truncated; the full output remains in the log file.
 const STDERR_SNIPPET_MAX: usize = 512;
 
+/// Claude Code が permission denied を返したかどうかを判定し、
+/// ツール名を抽出して返す。
+///
+/// Claude Code の `--output-format json` 出力の中に `permission_denied` パターンを探す。
+fn detect_permission_denied(stdout: &str, stderr: &str) -> Option<String> {
+    // stdout の各行を JSON として試みる
+    for line in stdout.lines().chain(stderr.lines()) {
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        // "permission_denied" という type/error_type フィールド
+        let is_denied = val
+            .get("error_type")
+            .and_then(|v| v.as_str())
+            .is_some_and(|t| t.contains("permission_denied"))
+            || val
+                .get("type")
+                .and_then(|v| v.as_str())
+                .is_some_and(|t| t.contains("permission_denied"))
+            || val
+                .pointer("/error/type")
+                .and_then(|v| v.as_str())
+                .is_some_and(|t| t.contains("permission_denied"))
+            || val
+                .pointer("/error/message")
+                .and_then(|v| v.as_str())
+                .is_some_and(|m| m.to_lowercase().contains("permission denied"))
+            || val
+                .get("message")
+                .and_then(|v| v.as_str())
+                .is_some_and(|m| m.to_lowercase().contains("permission denied"))
+            || val
+                .get("result")
+                .and_then(|v| v.as_str())
+                .is_some_and(|m| m.to_lowercase().contains("permission denied"));
+
+        if is_denied {
+            // ツール名を取得しようとする
+            let tool = val
+                .pointer("/error/data/tool_name")
+                .or_else(|| val.pointer("/error/tool"))
+                .or_else(|| val.get("tool"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            return Some(tool.unwrap_or_else(|| "unknown tool".to_string()));
+        }
+    }
+
+    // テキストベースのフォールバック
+    let combined = format!("{stdout}\n{stderr}");
+    if combined.to_lowercase().contains("permission denied") {
+        Some("unknown tool".to_string())
+    } else {
+        None
+    }
+}
+
 /// Remove GitHub "closing keyword" references (e.g. `Closes #42`, `fixes owner/repo#5`)
 /// from a PR body. Used for **design PRs only** — merging a design PR must not auto-close
 /// the parent issue, because the issue lifecycle is owned by cupola (an impl PR merge
@@ -195,6 +252,50 @@ where
     );
 
     if !session.exit_status.success() {
+        // permission denied 検知: 専用エラーログとヒントを出力する
+        let perm_check_stdout = {
+            use std::io::Read as _;
+            std::fs::File::open(&session.stdout_path)
+                .ok()
+                .map(|f| {
+                    let mut buf = String::new();
+                    let _ = std::io::BufReader::new(f)
+                        .take(8192)
+                        .read_to_string(&mut buf);
+                    buf
+                })
+                .unwrap_or_default()
+        };
+        let perm_check_stderr = {
+            use std::io::Read as _;
+            std::fs::File::open(&session.stderr_path)
+                .ok()
+                .map(|f| {
+                    let mut buf = String::new();
+                    let _ = std::io::BufReader::new(f)
+                        .take(8192)
+                        .read_to_string(&mut buf);
+                    buf
+                })
+                .unwrap_or_default()
+        };
+        if let Some(tool) = detect_permission_denied(&perm_check_stdout, &perm_check_stderr) {
+            if tool == "unknown tool" {
+                tracing::error!(
+                    issue_id,
+                    tool = %tool,
+                    "permission denied by Claude Code: inspect the stderr/stdout snippet or the blocked command entry (for example, a Bash(...) permission) and add the appropriate entry to permissions.allow in .claude/settings.json"
+                );
+            } else {
+                tracing::error!(
+                    issue_id,
+                    tool = %tool,
+                    "permission denied by Claude Code: add \"{}\" to permissions.allow in .claude/settings.json",
+                    tool
+                );
+            }
+        }
+
         // Process failed: capture exit code + stderr snippet for diagnostics.
         let exit_repr = match session.exit_status.code() {
             Some(code) => format!("exit code {code}"),
@@ -1361,6 +1462,49 @@ mod tests {
         assert!(exited.is_empty(), "fresh process should not be killed");
 
         mgr.kill_all();
+    }
+
+    // --- detect_permission_denied tests ---
+
+    #[test]
+    fn detect_permission_denied_json_error_type() {
+        let stdout = r#"{"type":"error","error_type":"permission_denied","message":"Bash(rm -rf*) was blocked"}"#;
+        let result = detect_permission_denied(stdout, "");
+        assert!(result.is_some(), "should detect permission denied");
+    }
+
+    #[test]
+    fn detect_permission_denied_json_error_message() {
+        let stdout =
+            r#"{"type":"result","is_error":true,"message":"Permission denied: Bash(cargo test*)"}"#;
+        let result = detect_permission_denied(stdout, "");
+        assert!(
+            result.is_some(),
+            "should detect permission denied via message"
+        );
+    }
+
+    #[test]
+    fn detect_permission_denied_stderr_text() {
+        let result = detect_permission_denied("", "Error: permission denied for tool Bash(rm)");
+        assert!(
+            result.is_some(),
+            "should detect permission denied in stderr"
+        );
+    }
+
+    #[test]
+    fn detect_permission_denied_returns_none_for_normal_output() {
+        let stdout = r#"{"type":"result","result":"all done"}"#;
+        let result = detect_permission_denied(stdout, "");
+        assert!(result.is_none(), "should not detect false positive");
+    }
+
+    #[test]
+    fn detect_permission_denied_with_tool_name_in_nested_error() {
+        let stdout = r#"{"type":"error","error":{"type":"permission_denied","message":"blocked","data":{"tool_name":"Bash(curl*)"}}}"#;
+        let result = detect_permission_denied(stdout, "");
+        assert_eq!(result.as_deref(), Some("Bash(curl*)"));
     }
 
     // ── Unit tests: task 4.2 (ログ読み取り失敗 → mark_failed) ────────────────

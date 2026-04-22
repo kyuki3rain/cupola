@@ -348,6 +348,13 @@ mod tests {
             ));
             Ok(true)
         }
+
+        fn write_claude_settings(
+            &self,
+            _settings: &crate::domain::claude_settings::ClaudeSettings,
+        ) -> Result<bool> {
+            Ok(false)
+        }
     }
 
     /// T-3.EX.1: effects are executed in priority order
