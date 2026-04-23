@@ -849,21 +849,27 @@ async fn handle_status<W: std::io::Write>(
         for issue in &issues {
             let pending_notification = max_ci_fix_cycles
                 .is_some_and(|max| issue.ci_fix_count > max && !issue.ci_fix_limit_notified);
+            let ci_fix_label = match max_ci_fix_cycles {
+                Some(max) => format!("ci-fix: {}/{}", issue.ci_fix_count, max),
+                None => format!("ci-fix: {}", issue.ci_fix_count),
+            };
             if pending_notification {
                 writeln!(
                     out,
-                    "  #{:<5} {:<30} wt:{} ⚠ ci-fix-limit notification pending",
+                    "  #{:<5} {:<30} wt:{}  {} ⚠ ci-fix-limit notification pending",
                     issue.github_issue_number,
                     issue.state.to_string(),
                     issue.worktree_path.as_deref().unwrap_or("none"),
+                    ci_fix_label,
                 )?;
             } else {
                 writeln!(
                     out,
-                    "  #{:<5} {:<30} wt:{}",
+                    "  #{:<5} {:<30} wt:{}  {}",
                     issue.github_issue_number,
                     issue.state.to_string(),
                     issue.worktree_path.as_deref().unwrap_or("none"),
+                    ci_fix_label,
                 )?;
             }
         }
@@ -2026,6 +2032,123 @@ mod tests {
         assert!(
             !status.success(),
             "sleep pid={child_pid} should have been killed even with poisoned mutex"
+        );
+    }
+
+    // --- Task 1.1 / 2.2-2.4: ci-fix label display tests ---
+
+    #[tokio::test]
+    async fn test_ci_fix_label_with_max_shows_n_slash_max() {
+        let db = SqliteConnection::open_in_memory().expect("open");
+        db.init_schema().expect("init");
+        let repo = SqliteIssueRepository::new(db);
+        let mut issue = make_issue(100, State::DesignRunning, None);
+        issue.ci_fix_count = 2;
+        repo.save(&issue).await.expect("save");
+        let pid_mgr = MockPidFilePort::new();
+
+        let mut out = Vec::new();
+        super::handle_status(
+            &mut out,
+            &pid_mgr,
+            &MockProcessRunRepository::new(),
+            &repo,
+            None,
+            Some(5),
+        )
+        .await
+        .expect("handle");
+        let output = String::from_utf8(out).expect("utf8");
+        assert!(
+            output.contains("ci-fix: 2/5"),
+            "should show ci-fix: 2/5; output: {output}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ci_fix_label_with_max_and_zero_count() {
+        let db = SqliteConnection::open_in_memory().expect("open");
+        db.init_schema().expect("init");
+        let repo = SqliteIssueRepository::new(db);
+        let issue = make_issue(101, State::DesignRunning, None);
+        repo.save(&issue).await.expect("save");
+        let pid_mgr = MockPidFilePort::new();
+
+        let mut out = Vec::new();
+        super::handle_status(
+            &mut out,
+            &pid_mgr,
+            &MockProcessRunRepository::new(),
+            &repo,
+            None,
+            Some(5),
+        )
+        .await
+        .expect("handle");
+        let output = String::from_utf8(out).expect("utf8");
+        assert!(
+            output.contains("ci-fix: 0/5"),
+            "should show ci-fix: 0/5 even when count is 0; output: {output}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ci_fix_label_without_max() {
+        let db = SqliteConnection::open_in_memory().expect("open");
+        db.init_schema().expect("init");
+        let repo = SqliteIssueRepository::new(db);
+        let mut issue = make_issue(102, State::DesignRunning, None);
+        issue.ci_fix_count = 3;
+        repo.save(&issue).await.expect("save");
+        let pid_mgr = MockPidFilePort::new();
+
+        let mut out = Vec::new();
+        super::handle_status(
+            &mut out,
+            &pid_mgr,
+            &MockProcessRunRepository::new(),
+            &repo,
+            None,
+            None,
+        )
+        .await
+        .expect("handle");
+        let output = String::from_utf8(out).expect("utf8");
+        assert!(
+            output.contains("ci-fix: 3"),
+            "should show ci-fix: 3 when no max; output: {output}"
+        );
+        assert!(
+            !output.contains("ci-fix: 3/"),
+            "should not show slash when no max; output: {output}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ci_fix_label_pending_notification() {
+        let db = SqliteConnection::open_in_memory().expect("open");
+        db.init_schema().expect("init");
+        let repo = SqliteIssueRepository::new(db);
+        let mut issue = make_issue(103, State::DesignRunning, None);
+        issue.ci_fix_count = 6;
+        repo.save(&issue).await.expect("save");
+        let pid_mgr = MockPidFilePort::new();
+
+        let mut out = Vec::new();
+        super::handle_status(
+            &mut out,
+            &pid_mgr,
+            &MockProcessRunRepository::new(),
+            &repo,
+            None,
+            Some(5),
+        )
+        .await
+        .expect("handle");
+        let output = String::from_utf8(out).expect("utf8");
+        assert!(
+            output.contains("ci-fix: 6/5 ⚠ ci-fix-limit notification pending"),
+            "should show ci-fix: 6/5 with warning; output: {output}"
         );
     }
 
