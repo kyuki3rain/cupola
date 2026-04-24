@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 use crate::domain::author_association::{AuthorAssociation, TrustedAssociations};
 use crate::domain::claude_code_env_config::ClaudeCodeEnvConfig;
+use crate::domain::claude_code_permissions_config::ClaudeCodePermissionsConfig;
 use crate::domain::config::{Config, LogLevel};
 use crate::domain::model_config::{ModelConfig, PerPhaseModels, WeightModelConfig};
 
@@ -79,8 +80,16 @@ struct ClaudeCodeEnvToml {
 }
 
 #[derive(Debug, Deserialize)]
+struct ClaudeCodePermissionsToml {
+    templates: Option<Vec<String>>,
+    extra_allow: Option<Vec<String>>,
+    extra_deny: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ClaudeCodeToml {
     env: Option<ClaudeCodeEnvToml>,
+    permissions: Option<ClaudeCodePermissionsToml>,
 }
 
 /// CLI overrides that take priority over cupola.toml values.
@@ -152,10 +161,21 @@ impl CupolaToml {
         let claude_code_env = ClaudeCodeEnvConfig {
             extra_allow: self
                 .claude_code
-                .and_then(|cc| cc.env)
-                .and_then(|e| e.extra_allow)
+                .as_ref()
+                .and_then(|cc| cc.env.as_ref())
+                .and_then(|e| e.extra_allow.clone())
                 .unwrap_or_default(),
         };
+
+        let claude_code_permissions = self
+            .claude_code
+            .and_then(|cc| cc.permissions)
+            .map(|p| ClaudeCodePermissionsConfig {
+                templates: p.templates.unwrap_or_default(),
+                extra_allow: p.extra_allow.unwrap_or_default(),
+                extra_deny: p.extra_deny.unwrap_or_default(),
+            })
+            .unwrap_or_default();
 
         Ok(Config {
             owner: self.owner,
@@ -179,6 +199,7 @@ impl CupolaToml {
                 .unwrap_or_else(|| vec!["copilot-pull-request-reviewer".to_string()]),
             shutdown_timeout,
             claude_code_env,
+            claude_code_permissions,
         })
     }
 }
