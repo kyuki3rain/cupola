@@ -221,7 +221,7 @@ impl GitWorktree for MockGitWorktree {
 struct MockFileGenerator;
 
 impl FileGenerator for MockFileGenerator {
-    fn generate_toml_template(&self) -> Result<bool> {
+    fn generate_toml_template(&self, _templates: &[String]) -> Result<bool> {
         Ok(false)
     }
 
@@ -248,13 +248,6 @@ impl FileGenerator for MockFileGenerator {
         _issue_number: u64,
         _issue_body: &str,
         _language: &str,
-    ) -> Result<bool> {
-        Ok(false)
-    }
-
-    fn write_claude_settings(
-        &self,
-        _settings: &cupola::domain::claude_settings::ClaudeSettings,
     ) -> Result<bool> {
         Ok(false)
     }

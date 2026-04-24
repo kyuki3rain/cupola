@@ -1,13 +1,15 @@
 use anyhow::Result;
 use std::path::Path;
 
-use crate::domain::claude_settings::ClaudeSettings;
-
 /// ファイル生成操作を抽象化する outbound ポート。
 /// 各メソッドは `true` を返す（操作を実行した）または `false` を返す（既存のためスキップ）。
 pub trait FileGenerator: Send + Sync {
     /// cupola.toml テンプレートを生成する（冪等）。
-    fn generate_toml_template(&self) -> Result<bool>;
+    ///
+    /// `templates` は `[claude_code.permissions].templates` に書き込む
+    /// Claude Code permission テンプレートキー一覧。`cupola init --template rust,devbox`
+    /// 経由で指定された場合は `["rust", "devbox"]` 等が渡される。空の場合はセクションごと省略。
+    fn generate_toml_template(&self, templates: &[String]) -> Result<bool>;
     /// Claude Code 向けの Cupola assets を導入する（冪等）。
     /// `upgrade=true` の場合、既存の Cupola 管理ファイルを最新版で上書きする。
     fn install_claude_code_assets(&self, upgrade: bool) -> Result<bool>;
@@ -32,11 +34,4 @@ pub trait FileGenerator: Send + Sync {
         issue_body: &str,
         language: &str,
     ) -> Result<bool>;
-
-    /// `.claude/settings.json` に `ClaudeSettings` を書き込む（既存ファイルとディープマージ）。
-    ///
-    /// - `Ok(true)`: ファイルを新規作成または更新した
-    /// - `Ok(false)`: 変更なし
-    /// - `Err(...)`: 既存ファイルの JSON パース失敗等
-    fn write_claude_settings(&self, settings: &ClaudeSettings) -> Result<bool>;
 }

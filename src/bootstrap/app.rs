@@ -187,14 +187,6 @@ pub async fn run(cli: Cli) -> Result<()> {
                 }
             );
             println!(
-                "  settings.json: {}",
-                if report.settings_json_written {
-                    "written"
-                } else {
-                    "up to date"
-                }
-            );
-            println!(
                 "  steering bootstrap: {}",
                 match report.steering_bootstrap_message {
                     Some(ref msg) => msg,

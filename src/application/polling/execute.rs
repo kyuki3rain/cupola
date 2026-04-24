@@ -1092,7 +1092,7 @@ mod tests {
     }
 
     impl FileGenerator for MockFileGenerator {
-        fn generate_toml_template(&self) -> Result<bool> {
+        fn generate_toml_template(&self, _templates: &[String]) -> Result<bool> {
             Ok(false)
         }
 
@@ -1128,13 +1128,6 @@ mod tests {
                 language,
             ));
             Ok(true)
-        }
-
-        fn write_claude_settings(
-            &self,
-            _settings: &crate::domain::claude_settings::ClaudeSettings,
-        ) -> Result<bool> {
-            Ok(false)
         }
     }
 
