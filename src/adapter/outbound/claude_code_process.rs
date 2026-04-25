@@ -175,8 +175,7 @@ impl ClaudeCodeProcess {
         env_config: ClaudeCodeEnvConfig,
         permissions: &ClaudeCodePermissionsConfig,
     ) -> Result<Self, TemplateError> {
-        let template_keys: Vec<&str> =
-            permissions.templates.iter().map(String::as_str).collect();
+        let template_keys: Vec<&str> = permissions.templates.iter().map(String::as_str).collect();
         let settings = TemplateManager::build_settings(&template_keys)?;
 
         let mut allowed: Vec<String> = settings.permissions.allow;
@@ -269,7 +268,12 @@ mod tests {
     static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn default_process() -> ClaudeCodeProcess {
-        ClaudeCodeProcess::new("claude", ClaudeCodeEnvConfig::default(), &ClaudeCodePermissionsConfig::default()).expect("build")
+        ClaudeCodeProcess::new(
+            "claude",
+            ClaudeCodeEnvConfig::default(),
+            &ClaudeCodePermissionsConfig::default(),
+        )
+        .expect("build")
     }
 
     #[test]
@@ -316,7 +320,12 @@ mod tests {
 
     #[test]
     fn build_command_with_custom_executable() {
-        let proc = ClaudeCodeProcess::new("/usr/local/bin/claude", ClaudeCodeEnvConfig::default(), &ClaudeCodePermissionsConfig::default()).expect("build");
+        let proc = ClaudeCodeProcess::new(
+            "/usr/local/bin/claude",
+            ClaudeCodeEnvConfig::default(),
+            &ClaudeCodePermissionsConfig::default(),
+        )
+        .expect("build");
         let cmd = proc.build_command("prompt", Path::new("."), None, "sonnet");
         assert_eq!(cmd.get_program(), OsStr::new("/usr/local/bin/claude"));
     }
@@ -340,12 +349,8 @@ mod tests {
             extra_allow: Vec::new(),
             extra_deny: Vec::new(),
         };
-        let proc = ClaudeCodeProcess::new(
-            "claude",
-            ClaudeCodeEnvConfig::default(),
-            &permissions,
-        )
-        .expect("build");
+        let proc = ClaudeCodeProcess::new("claude", ClaudeCodeEnvConfig::default(), &permissions)
+            .expect("build");
 
         let cmd = proc.build_command("prompt", Path::new("/tmp"), None, "sonnet");
         let args: Vec<String> = cmd
@@ -353,7 +358,10 @@ mod tests {
             .map(|a| a.to_string_lossy().to_string())
             .collect();
 
-        let allow_csv_idx = args.iter().position(|a| a == "--allowedTools").expect("allow flag present");
+        let allow_csv_idx = args
+            .iter()
+            .position(|a| a == "--allowedTools")
+            .expect("allow flag present");
         let allow_csv = &args[allow_csv_idx + 1];
         assert!(
             allow_csv.contains("Read"),
@@ -373,12 +381,8 @@ mod tests {
             extra_allow: vec!["Bash(devbox*)".to_string()],
             extra_deny: vec!["Bash(sudo*)".to_string()],
         };
-        let proc = ClaudeCodeProcess::new(
-            "claude",
-            ClaudeCodeEnvConfig::default(),
-            &permissions,
-        )
-        .expect("build");
+        let proc = ClaudeCodeProcess::new("claude", ClaudeCodeEnvConfig::default(), &permissions)
+            .expect("build");
 
         let cmd = proc.build_command("p", Path::new("/tmp"), None, "sonnet");
         let args: Vec<String> = cmd
@@ -386,10 +390,16 @@ mod tests {
             .map(|a| a.to_string_lossy().to_string())
             .collect();
 
-        let allow_idx = args.iter().position(|a| a == "--allowedTools").expect("allow present");
+        let allow_idx = args
+            .iter()
+            .position(|a| a == "--allowedTools")
+            .expect("allow present");
         assert!(args[allow_idx + 1].contains("Bash(devbox*)"));
 
-        let deny_idx = args.iter().position(|a| a == "--disallowedTools").expect("deny present");
+        let deny_idx = args
+            .iter()
+            .position(|a| a == "--disallowedTools")
+            .expect("deny present");
         assert!(args[deny_idx + 1].contains("Bash(sudo*)"));
     }
 
@@ -467,7 +477,12 @@ mod tests {
 
     #[test]
     fn build_command_env_clear_applied_no_extra_allow() {
-        let proc = ClaudeCodeProcess::new("claude", ClaudeCodeEnvConfig::default(), &ClaudeCodePermissionsConfig::default()).expect("build");
+        let proc = ClaudeCodeProcess::new(
+            "claude",
+            ClaudeCodeEnvConfig::default(),
+            &ClaudeCodePermissionsConfig::default(),
+        )
+        .expect("build");
         let cmd = proc.build_command("hello", Path::new("/tmp"), None, "sonnet");
         // env_clear が適用されているため、BASE_ALLOWLIST に含まれない var は設定されない
         // get_envs() は env_clear() 後に明示的に設定された env var のみ返す
@@ -482,7 +497,12 @@ mod tests {
     #[test]
     fn build_command_base_allowlist_vars_inherited() {
         // PATH は親プロセスに存在すると仮定（CI 環境でも通常存在する）
-        let proc = ClaudeCodeProcess::new("claude", ClaudeCodeEnvConfig::default(), &ClaudeCodePermissionsConfig::default()).expect("build");
+        let proc = ClaudeCodeProcess::new(
+            "claude",
+            ClaudeCodeEnvConfig::default(),
+            &ClaudeCodePermissionsConfig::default(),
+        )
+        .expect("build");
         let cmd = proc.build_command("hello", Path::new("/tmp"), None, "sonnet");
         let envs: std::collections::HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
             cmd.get_envs().collect();
@@ -498,7 +518,12 @@ mod tests {
         let env_config = ClaudeCodeEnvConfig {
             extra_allow: vec!["ANTHROPIC_API_KEY".to_string()],
         };
-        let proc = ClaudeCodeProcess::new("claude", env_config, &ClaudeCodePermissionsConfig::default()).expect("build");
+        let proc = ClaudeCodeProcess::new(
+            "claude",
+            env_config,
+            &ClaudeCodePermissionsConfig::default(),
+        )
+        .expect("build");
         let cmd = proc.build_command("hello", Path::new("/tmp"), None, "sonnet");
         let envs: std::collections::HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
             cmd.get_envs().collect();
@@ -525,7 +550,12 @@ mod tests {
         let env_config = ClaudeCodeEnvConfig {
             extra_allow: vec!["CUPOLA_TEST_WILDCARD_*".to_string()],
         };
-        let proc = ClaudeCodeProcess::new("claude", env_config, &ClaudeCodePermissionsConfig::default()).expect("build");
+        let proc = ClaudeCodeProcess::new(
+            "claude",
+            env_config,
+            &ClaudeCodePermissionsConfig::default(),
+        )
+        .expect("build");
         let cmd = proc.build_command("hello", Path::new("/tmp"), None, "sonnet");
         let envs: std::collections::HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
             cmd.get_envs().collect();
@@ -553,7 +583,12 @@ mod tests {
         let env_config = ClaudeCodeEnvConfig {
             extra_allow: vec!["OTHER_*".to_string()],
         };
-        let proc = ClaudeCodeProcess::new("claude", env_config, &ClaudeCodePermissionsConfig::default()).expect("build");
+        let proc = ClaudeCodeProcess::new(
+            "claude",
+            env_config,
+            &ClaudeCodePermissionsConfig::default(),
+        )
+        .expect("build");
         let cmd = proc.build_command("hello", Path::new("/tmp"), None, "sonnet");
         let envs: std::collections::HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
             cmd.get_envs().collect();

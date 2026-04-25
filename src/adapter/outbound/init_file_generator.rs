@@ -523,7 +523,6 @@ impl InitFileGenerator {
         );
         Ok(true)
     }
-
 }
 
 impl FileGenerator for InitFileGenerator {
@@ -926,5 +925,4 @@ mod tests {
                 .exists()
         );
     }
-
 }
