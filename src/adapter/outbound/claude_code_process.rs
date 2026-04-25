@@ -4,9 +4,24 @@ use std::process::{Child, Command, Stdio};
 use anyhow::{Context, Result};
 
 use crate::application::port::claude_code_runner::ClaudeCodeRunner;
-use crate::application::template_manager::{TemplateError, TemplateManager};
+use crate::application::template_manager::TemplateManager;
 use crate::domain::claude_code_env_config::{BASE_ALLOWLIST, ClaudeCodeEnvConfig};
 use crate::domain::claude_code_permissions_config::ClaudeCodePermissionsConfig;
+
+/// `ClaudeCodeProcess::new` の構築失敗を表すエラー。
+///
+/// テンプレート解決失敗（`TemplateError`）と、resolved 後の各エントリに
+/// CLI フラグの CSV 表現を壊す文字（`,` / 改行）が含まれている場合の
+/// バリデーション失敗を区別して報告する。
+#[derive(Debug, thiserror::Error)]
+pub enum ClaudeCodeProcessError {
+    #[error("failed to resolve permission template: {0}")]
+    TemplateError(#[from] crate::application::template_manager::TemplateError),
+    #[error(
+        "permission entry contains '{forbidden}' which would break CLI CSV encoding: {entry:?}"
+    )]
+    InvalidEntry { entry: String, forbidden: String },
+}
 
 /// Claude のプロセス出力から構造化データを取り出すためのパーサ。
 /// --output-format json で出力される JSON の result フィールドを解析する。
@@ -163,6 +178,22 @@ pub struct ClaudeCodeProcess {
     disallowed_tools: String,
 }
 
+fn validate_entry(entry: &str) -> Result<(), ClaudeCodeProcessError> {
+    if entry.contains(',') {
+        return Err(ClaudeCodeProcessError::InvalidEntry {
+            entry: entry.to_string(),
+            forbidden: ",".to_string(),
+        });
+    }
+    if entry.contains('\n') || entry.contains('\r') {
+        return Err(ClaudeCodeProcessError::InvalidEntry {
+            entry: entry.to_string(),
+            forbidden: "newline".to_string(),
+        });
+    }
+    Ok(())
+}
+
 impl ClaudeCodeProcess {
     /// `ClaudeCodeProcess` を初期化する。
     ///
@@ -174,7 +205,7 @@ impl ClaudeCodeProcess {
         executable: impl Into<String>,
         env_config: ClaudeCodeEnvConfig,
         permissions: &ClaudeCodePermissionsConfig,
-    ) -> Result<Self, TemplateError> {
+    ) -> Result<Self, ClaudeCodeProcessError> {
         let template_keys: Vec<&str> = permissions.templates.iter().map(String::as_str).collect();
         let settings = TemplateManager::build_settings(&template_keys)?;
 
@@ -182,6 +213,14 @@ impl ClaudeCodeProcess {
         allowed.extend(permissions.extra_allow.iter().cloned());
         let mut disallowed: Vec<String> = settings.permissions.deny;
         disallowed.extend(permissions.extra_deny.iter().cloned());
+
+        // 各エントリの validation: --allowedTools / --disallowedTools は CSV 形式で
+        // 受け取るため、エントリ内に `,` または改行があるとパースが破綻し、意図しない
+        // 権限セットになる。設定ファイル / テンプレートの誤りを起動時に明示的に
+        // エラーとして検出する（黙って壊れた CSV を渡すより早期 failure が安全）。
+        for entry in allowed.iter().chain(disallowed.iter()) {
+            validate_entry(entry)?;
+        }
 
         Ok(Self {
             executable: executable.into(),
@@ -371,6 +410,50 @@ mod tests {
             allow_csv.contains("Bash(cargo build*)"),
             "rust template should contribute Bash(cargo build*): {allow_csv}"
         );
+    }
+
+    /// `extra_allow` にカンマを含むエントリが渡された場合、CSV 表現を壊すため
+    /// `ClaudeCodeProcess::new` がエラーを返すことを確認する。
+    #[test]
+    fn new_rejects_entry_containing_comma() {
+        let permissions = ClaudeCodePermissionsConfig {
+            templates: Vec::new(),
+            extra_allow: vec!["Bash(echo a,b)".to_string()],
+            extra_deny: Vec::new(),
+        };
+        let result = ClaudeCodeProcess::new("claude", ClaudeCodeEnvConfig::default(), &permissions);
+        let err = match result {
+            Ok(_) => panic!("comma in entry should be rejected"),
+            Err(e) => e,
+        };
+        match err {
+            ClaudeCodeProcessError::InvalidEntry { entry, forbidden } => {
+                assert_eq!(forbidden, ",");
+                assert!(entry.contains("Bash(echo a,b)"));
+            }
+            other => panic!("expected InvalidEntry, got {other:?}"),
+        }
+    }
+
+    /// `extra_deny` に改行を含むエントリが渡された場合も同様にエラーになる。
+    #[test]
+    fn new_rejects_entry_containing_newline() {
+        let permissions = ClaudeCodePermissionsConfig {
+            templates: Vec::new(),
+            extra_allow: Vec::new(),
+            extra_deny: vec!["Bash(line1\nline2)".to_string()],
+        };
+        let result = ClaudeCodeProcess::new("claude", ClaudeCodeEnvConfig::default(), &permissions);
+        let err = match result {
+            Ok(_) => panic!("newline in entry should be rejected"),
+            Err(e) => e,
+        };
+        match err {
+            ClaudeCodeProcessError::InvalidEntry { forbidden, .. } => {
+                assert_eq!(forbidden, "newline");
+            }
+            other => panic!("expected InvalidEntry, got {other:?}"),
+        }
     }
 
     /// `extra_allow` / `extra_deny` がテンプレート解決結果に append されることを確認する。

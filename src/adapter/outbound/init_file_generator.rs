@@ -606,6 +606,52 @@ mod tests {
     }
 
     #[test]
+    fn toml_template_with_empty_templates_omits_permissions_section() {
+        let (tmp, generator) = setup();
+        generator.generate_toml_template(&[]).expect("generate");
+        let content =
+            fs::read_to_string(tmp.path().join(".cupola").join("cupola.toml")).expect("read");
+        assert!(
+            !content.contains("[claude_code.permissions]"),
+            "empty templates should omit the [claude_code.permissions] section"
+        );
+    }
+
+    #[test]
+    fn toml_template_with_single_template_writes_permissions_section() {
+        let (tmp, generator) = setup();
+        generator
+            .generate_toml_template(&["rust".to_string()])
+            .expect("generate");
+        let content =
+            fs::read_to_string(tmp.path().join(".cupola").join("cupola.toml")).expect("read");
+        assert!(
+            content.contains("[claude_code.permissions]"),
+            "non-empty templates should add [claude_code.permissions] section"
+        );
+        assert!(
+            content.contains("templates = ["),
+            "should write templates array"
+        );
+        assert!(
+            content.contains("\"rust\""),
+            "should include rust as a quoted entry"
+        );
+    }
+
+    #[test]
+    fn toml_template_with_multiple_templates_writes_all_entries() {
+        let (tmp, generator) = setup();
+        generator
+            .generate_toml_template(&["rust".to_string(), "devbox".to_string()])
+            .expect("generate");
+        let content =
+            fs::read_to_string(tmp.path().join(".cupola").join("cupola.toml")).expect("read");
+        assert!(content.contains("\"rust\""));
+        assert!(content.contains("\"devbox\""));
+    }
+
+    #[test]
     fn install_assets_writes_embedded_files() {
         let (tmp, generator) = setup();
         let result = generator
