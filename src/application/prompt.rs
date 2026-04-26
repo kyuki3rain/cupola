@@ -99,10 +99,9 @@ fn build_design_prompt(issue_number: u64, language: &str, feature_name: &str) ->
 
 2. {quality_check}
 
-3. Commit and push the artifacts
+3. Commit the artifacts (push is handled by the system)
    git add .cupola/specs/ .cupola/steering/
    git commit -m "docs: add design for #{issue_number}"
-   git push
 
 ## Output to output-schema
 
@@ -138,8 +137,9 @@ fn build_implementation_prompt(issue_number: u64, language: &str, feature_name: 
 
 2. {quality_check}
 
-3. Commit and push the artifacts
-   Finally run git push
+3. Commit the artifacts (push is handled by the system)
+   git add -A
+   git commit -m "implement: #{issue_number} implementation"
 
 ## Output to output-schema
 
