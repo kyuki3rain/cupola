@@ -647,7 +647,7 @@ async fn two_concurrent_sessions_github_error_isolated_per_session() {
         state: State::DesignRunning,
         feature_name: "feat-b".to_string(),
         weight: TaskWeight::Medium,
-        worktree_path: Some("/tmp/wt-a".into()),
+        worktree_path: Some("/tmp/wt-b".into()),
         ci_fix_count: 0,
         ci_fix_limit_notified: false,
         close_finished: false,

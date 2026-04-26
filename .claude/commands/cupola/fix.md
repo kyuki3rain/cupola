@@ -7,20 +7,20 @@ argument-hint: <design|impl>
 # Fix Agent
 
 <background_information>
-- **Mission**: Address issues on a Cupola-managed PR — review comments, CI failures, and merge conflicts — and push the fixes
+- **Mission**: Address issues on a Cupola-managed PR — review comments, CI failures, and merge conflicts — and commit the fixes locally (push is handled by Cupola)
 - **Target**: `$1` is either `design` (Design PR) or `impl` (Implementation PR)
 - **Success Criteria**:
   - All review threads addressed and replied to (if review_threads.json exists)
   - CI failures resolved (if ci_errors.txt exists)
   - Merge conflicts resolved (if conflict markers exist)
-  - Fixes committed and pushed
+  - Fixes committed locally (Cupola will push and reply to threads)
   - Output schema populated with thread responses
 </background_information>
 
 <instructions>
 ## Core Task
 
-Address outstanding issues on the `$1` PR and push the fixes.
+Address outstanding issues on the `$1` PR and commit the fixes locally. Cupola will push the branch and reply to threads after this skill finishes.
 
 ## Step 1: Load Context
 
@@ -62,7 +62,7 @@ For each thread in `review_threads.json`:
 
 Run quality checks described in AGENTS.md / CLAUDE.md. Fix any issues before committing.
 
-## Step 6: Commit and Push
+## Step 6: Commit Locally
 
 ```bash
 git diff --name-only   # confirm changed files
@@ -81,11 +81,11 @@ git commit -m "docs: <dynamic message describing the actual changes>"
 
 # If $1 is impl:
 git commit -m "fix: <dynamic message describing the actual changes>"
-
-git push
 ```
 
 Stage only relevant files. Do not use `git add -A` or `git add .`.
+
+Do **not** run `git push`. Cupola pushes the branch from the resolve phase after this skill exits.
 
 ## Output to output-schema
 
