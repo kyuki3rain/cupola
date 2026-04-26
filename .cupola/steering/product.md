@@ -9,7 +9,7 @@ Design and implementation are executed through bundled `/cupola:*` skills (Claud
 - **Issue Detection → Automated Design Generation**: Detects Issues with the `agent:ready` label via polling and automatically generates requirements / design / tasks via the bundled `/cupola:spec-design` skill
 - **PR-Based Review Flow**: Automatically creates design PRs and implementation PRs, and automates fixes, replies, and resolution on review threads
 - **State Machine Driven**: Manages the entire workflow through a multi-state state machine, supporting idempotent re-execution and graceful shutdown
-- **Separation of Responsibilities**: Cupola handles all GitHub API operations; Claude Code (via bundled skills) handles design generation, implementation, and git operations
+- **Separation of Responsibilities**: Cupola handles all GitHub API operations (push, PR creation, review replies, thread resolution); Claude Code (via bundled skills) handles design generation, implementation, and local git operations (add, commit) only
 
 ## Bundled Skills (`/cupola:*`)
 

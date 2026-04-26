@@ -173,7 +173,8 @@ SpawnProcess が Claude Code を起動する際、状態に応じたプロンプ
 - **指示内容**:
   1. `/cupola:spec-design {feature_name}` を実行して spec 成果物を生成
   2. AGENTS.md / CLAUDE.md の品質チェックを実行
-  3. `git add .cupola/specs/ .cupola/steering/ && git commit && git push`
+  3. `git add .cupola/specs/ .cupola/steering/ && git commit`
+  4. push と PR 作成は system が担当するため、local commit までで完了
 - **出力**: `pr_title` / `pr_body`（PR は system が作成）。PR body に `Related: #{issue_number}` を含める。auto-close キーワード（`Closes` 等）は使わない
 - **インプットファイル**: `.cupola/inputs/issue.md`（Issue 本文）
 
@@ -183,7 +184,8 @@ SpawnProcess が Claude Code を起動する際、状態に応じたプロンプ
 - **指示内容**:
   1. `/cupola:spec-impl {feature_name}` を実行して TDD でタスクを実装
   2. AGENTS.md / CLAUDE.md の品質チェックを実行
-  3. `git push`
+  3. `git add -A && git commit`
+  4. push と PR 作成は system が担当するため、local commit までで完了
 - **出力**: `pr_title` / `pr_body`（PR は system が作成）。PR body に `Closes #{issue_number}` を含める
 - **前提**: design 成果物（requirements.md / design.md / tasks.md）が現在のブランチにマージ済み
 

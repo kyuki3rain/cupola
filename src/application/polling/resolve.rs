@@ -6,11 +6,13 @@ use anyhow::Result;
 
 use crate::application::init_task_manager::InitTaskManager;
 use crate::application::io::{parse_fixing_output, parse_pr_creation_output};
+use crate::application::port::git_worktree::GitWorktree;
 use crate::application::port::github_client::GitHubClient;
 use crate::application::port::issue_repository::IssueRepository;
 use crate::application::port::process_run_repository::ProcessRunRepository;
 use crate::application::session_manager::{ExitedSession, SessionManager};
 use crate::domain::config::Config;
+use crate::domain::issue::Issue;
 use crate::domain::metadata_update::MetadataUpdates;
 use crate::domain::state::State;
 
@@ -173,10 +175,11 @@ fn strip_closing_keywords(body: &str) -> String {
 }
 
 /// Process all exited sessions and update ProcessRun + Issue metadata.
-pub async fn resolve_exited_sessions<G, I, P>(
+pub async fn resolve_exited_sessions<G, I, P, W>(
     github: &G,
     issue_repo: &I,
     process_repo: &P,
+    worktree: &W,
     config: &Config,
     session_mgr: &mut SessionManager,
 ) -> Result<()>
@@ -184,12 +187,14 @@ where
     G: GitHubClient,
     I: IssueRepository,
     P: ProcessRunRepository,
+    W: GitWorktree,
 {
     let exited = session_mgr.collect_exited();
 
     for session in exited {
         if let Err(e) =
-            process_exited_session(github, issue_repo, process_repo, config, &session).await
+            process_exited_session(github, issue_repo, process_repo, worktree, config, &session)
+                .await
         {
             tracing::warn!(
                 issue_id = session.issue_id,
@@ -202,10 +207,11 @@ where
     Ok(())
 }
 
-async fn process_exited_session<G, I, P>(
+async fn process_exited_session<G, I, P, W>(
     github: &G,
     issue_repo: &I,
     process_repo: &P,
+    worktree: &W,
     config: &Config,
     session: &ExitedSession,
 ) -> Result<()>
@@ -213,6 +219,7 @@ where
     G: GitHubClient,
     I: IssueRepository,
     P: ProcessRunRepository,
+    W: GitWorktree,
 {
     let issue_id = session.issue_id;
     let run_id = session.run_id;
@@ -414,6 +421,14 @@ where
             )
         };
 
+        // Claude Code commits locally; Cupola is responsible for pushing the
+        // branch before any GitHub API call that needs the remote to be in sync.
+        if !push_worktree_branch(worktree, process_repo, &current_issue, &head_branch, run_id)
+            .await?
+        {
+            return Ok(());
+        }
+
         // Idempotent: check if PR already exists on this branch
         let find_result = github.find_pr_by_branches(&head_branch, &base_branch).await;
 
@@ -486,6 +501,21 @@ where
             }
         };
 
+        // Push fixing commits to origin before replying. Otherwise reviewers see
+        // a thread reply that claims the issue is fixed while the PR diff is
+        // unchanged (Bash(git push*) is denied for Claude Code).
+        let is_design_fix = session.registered_state == State::DesignFixing;
+        let head_branch = if is_design_fix {
+            format!("cupola/{}/design", current_issue.feature_name)
+        } else {
+            format!("cupola/{}/main", current_issue.feature_name)
+        };
+        if !push_worktree_branch(worktree, process_repo, &current_issue, &head_branch, run_id)
+            .await?
+        {
+            return Ok(());
+        }
+
         let output = parse_fixing_output(&stdout);
         if let Some(fixing) = output {
             for thread in &fixing.threads {
@@ -514,6 +544,83 @@ where
     }
 
     Ok(())
+}
+
+/// Push the worktree branch to origin so the upcoming GitHub API call (PR
+/// creation or thread reply) sees the local commits made by Claude Code.
+///
+/// Returns `Ok(true)` on success, `Ok(false)` when the caller should skip the
+/// remaining post-processing for this session — in that case the run has been
+/// marked failed and no further GitHub API calls should fire.
+async fn push_worktree_branch<W, P>(
+    worktree: &W,
+    process_repo: &P,
+    issue: &Issue,
+    head_branch: &str,
+    run_id: i64,
+) -> Result<bool>
+where
+    W: GitWorktree,
+    P: ProcessRunRepository,
+{
+    let issue_number = issue.github_issue_number;
+    let feature_name = issue.feature_name.as_str();
+
+    let Some(wt_path_str) = issue.worktree_path.as_deref() else {
+        let error_message = format!(
+            "issue #{issue_number} ({feature_name}): worktree_path missing in DB but issue is in a Running/Fixing state — cannot push branch {head_branch}"
+        );
+        tracing::error!(
+            issue_id = issue.id,
+            issue_number,
+            feature_name,
+            head_branch,
+            "{error_message}"
+        );
+        if run_id > 0 {
+            process_repo
+                .mark_failed(run_id, Some(error_message))
+                .await?;
+        }
+        return Ok(false);
+    };
+
+    let wt_path = std::path::Path::new(wt_path_str);
+    // Resolve processes exited sessions sequentially and every other GitWorktree
+    // call (fetch / merge / pull / create / remove) is also a synchronous
+    // std::process::Command. Wrapping just push in spawn_blocking would
+    // re-introduce a `Clone + 'static` bound on W with no measurable benefit,
+    // so we keep it synchronous like the rest of the worktree port.
+    let push_result = worktree.push(wt_path, head_branch);
+
+    if let Err(e) = push_result {
+        tracing::warn!(
+            issue_id = issue.id,
+            issue_number,
+            feature_name,
+            head_branch,
+            error = %e,
+            "failed to push branch"
+        );
+        if run_id > 0 {
+            process_repo
+                .mark_failed(
+                    run_id,
+                    Some(format!("git push failed for {head_branch}: {e}")),
+                )
+                .await?;
+        }
+        return Ok(false);
+    }
+
+    tracing::info!(
+        issue_id = issue.id,
+        issue_number,
+        feature_name,
+        head_branch,
+        "branch pushed to origin"
+    );
+    Ok(true)
 }
 
 /// Process completed init tasks from InitTaskManager.
@@ -730,6 +837,53 @@ mod tests {
             Ok(vec![])
         }
         async fn update_state(&self, _id: i64, _state: ProcessRunState) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    // ── Mock GitWorktree ─────────────────────────────────────────────────────
+
+    #[derive(Clone)]
+    struct MockGitWorktree;
+
+    impl GitWorktree for MockGitWorktree {
+        fn fetch(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn merge(&self, _worktree_path: &std::path::Path, _branch: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn exists(&self, _path: &std::path::Path) -> bool {
+            true
+        }
+        fn create(
+            &self,
+            _path: &std::path::Path,
+            _branch: &str,
+            _start_point: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn remove(&self, _path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn create_branch(
+            &self,
+            _worktree_path: &std::path::Path,
+            _branch: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn checkout(&self, _worktree_path: &std::path::Path, _branch: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn pull(&self, _worktree_path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn push(&self, _worktree_path: &std::path::Path, _branch: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn delete_branch(&self, _branch: &str) -> anyhow::Result<()> {
             Ok(())
         }
     }
@@ -1040,6 +1194,10 @@ mod tests {
     }
 
     fn make_issue(state: State) -> Issue {
+        make_issue_with_worktree(state, None)
+    }
+
+    fn make_issue_with_worktree(state: State, worktree_path: Option<String>) -> Issue {
         let now = Utc::now();
         Issue {
             id: 1,
@@ -1047,7 +1205,7 @@ mod tests {
             state,
             feature_name: "test-feature".to_string(),
             weight: TaskWeight::Medium,
-            worktree_path: None,
+            worktree_path,
             ci_fix_count: 0,
             ci_fix_limit_notified: false,
             close_finished: false,
@@ -1070,7 +1228,7 @@ mod tests {
     async fn find_pr_error_calls_mark_failed_and_returns_ok() {
         let github = GhFindPrError;
         let issue_repo = MockIssueRepo {
-            issue: make_issue(State::DesignRunning),
+            issue: make_issue_with_worktree(State::DesignRunning, Some("/tmp/wt".into())),
         };
         let process_repo = MockProcessRepo::new();
         let calls = process_repo.calls.clone();
@@ -1081,6 +1239,7 @@ mod tests {
             &github,
             &issue_repo,
             &process_repo,
+            &MockGitWorktree,
             &config,
             &fixture.session,
         )
@@ -1115,7 +1274,7 @@ mod tests {
     async fn create_pr_error_calls_mark_failed_and_returns_ok() {
         let github = GhCreatePrError;
         let issue_repo = MockIssueRepo {
-            issue: make_issue(State::ImplementationRunning),
+            issue: make_issue_with_worktree(State::ImplementationRunning, Some("/tmp/wt".into())),
         };
         let process_repo = MockProcessRepo::new();
         let calls = process_repo.calls.clone();
@@ -1126,6 +1285,7 @@ mod tests {
             &github,
             &issue_repo,
             &process_repo,
+            &MockGitWorktree,
             &config,
             &fixture.session,
         )
@@ -1160,7 +1320,7 @@ mod tests {
     async fn github_error_with_run_id_zero_skips_mark_failed() {
         let github = GhFindPrError;
         let issue_repo = MockIssueRepo {
-            issue: make_issue(State::DesignRunning),
+            issue: make_issue_with_worktree(State::DesignRunning, Some("/tmp/wt".into())),
         };
         let process_repo = MockProcessRepo::new();
         let calls = process_repo.calls.clone();
@@ -1171,6 +1331,7 @@ mod tests {
             &github,
             &issue_repo,
             &process_repo,
+            &MockGitWorktree,
             &config,
             &fixture.session,
         )
@@ -1263,7 +1424,7 @@ mod tests {
         let github = GhBranchRecorder::new();
         let calls = github.calls.clone();
         let issue_repo = MockIssueRepo {
-            issue: make_issue(State::DesignRunning),
+            issue: make_issue_with_worktree(State::DesignRunning, Some("/tmp/wt".into())),
         };
         let process_repo = MockProcessRepo::new();
         let config = unit_config();
@@ -1273,6 +1434,7 @@ mod tests {
             &github,
             &issue_repo,
             &process_repo,
+            &MockGitWorktree,
             &config,
             &fixture.session,
         )
@@ -1294,7 +1456,7 @@ mod tests {
         let github = GhBranchRecorder::new();
         let calls = github.calls.clone();
         let issue_repo = MockIssueRepo {
-            issue: make_issue(State::ImplementationRunning),
+            issue: make_issue_with_worktree(State::ImplementationRunning, Some("/tmp/wt".into())),
         };
         let process_repo = MockProcessRepo::new();
         let config = unit_config();
@@ -1304,6 +1466,7 @@ mod tests {
             &github,
             &issue_repo,
             &process_repo,
+            &MockGitWorktree,
             &config,
             &fixture.session,
         )
@@ -1416,6 +1579,7 @@ mod tests {
                     &github,
                     &issue_repo,
                     &process_repo,
+                    &MockGitWorktree,
                     &config,
                     &fixture.session,
                 )
@@ -1514,7 +1678,7 @@ mod tests {
     async fn stdout_log_unavailable_calls_mark_failed_in_running_phase() {
         let github = GhBranchRecorder::new();
         let issue_repo = MockIssueRepo {
-            issue: make_issue(State::DesignRunning),
+            issue: make_issue_with_worktree(State::DesignRunning, Some("/tmp/wt".into())),
         };
         let process_repo = MockProcessRepo::new();
         let calls = process_repo.calls.clone();
@@ -1525,6 +1689,7 @@ mod tests {
             &github,
             &issue_repo,
             &process_repo,
+            &MockGitWorktree,
             &config,
             &fixture.session,
         )
@@ -1557,7 +1722,7 @@ mod tests {
     async fn stderr_log_unavailable_calls_mark_failed_on_process_failure() {
         let github = GhBranchRecorder::new();
         let issue_repo = MockIssueRepo {
-            issue: make_issue(State::DesignRunning),
+            issue: make_issue_with_worktree(State::DesignRunning, Some("/tmp/wt".into())),
         };
         let process_repo = MockProcessRepo::new();
         let calls = process_repo.calls.clone();
@@ -1568,6 +1733,7 @@ mod tests {
             &github,
             &issue_repo,
             &process_repo,
+            &MockGitWorktree,
             &config,
             &fixture.session,
         )
@@ -1588,6 +1754,347 @@ mod tests {
                 .unwrap_or("")
                 .contains("stderr log unavailable"),
             "error_message should indicate stderr log unavailable"
+        );
+    }
+
+    // ── Tests: Fixing phase push contract ────────────────────────────────────
+
+    use std::path::PathBuf;
+
+    /// GitWorktree mock that records every push call and can be configured to
+    /// fail. Other operations are no-ops.
+    struct RecordingGitWorktree {
+        pushes: Arc<Mutex<Vec<(PathBuf, String)>>>,
+        fail_push: bool,
+    }
+
+    impl RecordingGitWorktree {
+        fn new(fail_push: bool) -> Self {
+            Self {
+                pushes: Arc::new(Mutex::new(Vec::new())),
+                fail_push,
+            }
+        }
+    }
+
+    impl GitWorktree for RecordingGitWorktree {
+        fn fetch(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn merge(&self, _worktree_path: &std::path::Path, _branch: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn exists(&self, _path: &std::path::Path) -> bool {
+            true
+        }
+        fn create(
+            &self,
+            _path: &std::path::Path,
+            _branch: &str,
+            _start_point: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn remove(&self, _path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn create_branch(
+            &self,
+            _worktree_path: &std::path::Path,
+            _branch: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn checkout(&self, _worktree_path: &std::path::Path, _branch: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn pull(&self, _worktree_path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn push(&self, worktree_path: &std::path::Path, branch: &str) -> anyhow::Result<()> {
+            self.pushes
+                .lock()
+                .unwrap()
+                .push((worktree_path.to_path_buf(), branch.to_string()));
+            if self.fail_push {
+                Err(anyhow::anyhow!("simulated push failure"))
+            } else {
+                Ok(())
+            }
+        }
+        fn delete_branch(&self, _branch: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// GitHub mock that records reply_to_thread / resolve_thread calls so we can
+    /// assert the Fixing phase does NOT touch threads when push has failed.
+    #[derive(Default)]
+    struct ThreadCallLog {
+        replies: Vec<String>,
+        resolves: Vec<String>,
+    }
+
+    struct GhThreadRecorder {
+        calls: Arc<Mutex<ThreadCallLog>>,
+    }
+
+    impl GhThreadRecorder {
+        fn new() -> Self {
+            Self {
+                calls: Arc::new(Mutex::new(ThreadCallLog::default())),
+            }
+        }
+    }
+
+    impl GitHubClient for GhThreadRecorder {
+        async fn list_open_issues(
+            &self,
+        ) -> Result<Vec<crate::application::port::github_client::OpenIssueInfo>> {
+            Ok(vec![])
+        }
+        async fn get_issue(&self, _n: u64) -> Result<GitHubIssueDetail> {
+            Ok(GitHubIssueDetail {
+                number: 1,
+                title: String::new(),
+                body: String::new(),
+                labels: vec![],
+            })
+        }
+        async fn find_pr_by_branches(&self, _h: &str, _b: &str) -> Result<Option<GitHubPr>> {
+            Ok(None)
+        }
+        async fn is_pr_merged(&self, _n: u64) -> Result<bool> {
+            Ok(false)
+        }
+        async fn list_unresolved_threads(&self, _n: u64) -> Result<Vec<ReviewThread>> {
+            Ok(vec![])
+        }
+        async fn create_pr(&self, _h: &str, _b: &str, _t: &str, _body: &str) -> Result<u64> {
+            Ok(1)
+        }
+        async fn reply_to_thread(&self, id: &str, _body: &str) -> Result<()> {
+            self.calls.lock().unwrap().replies.push(id.to_string());
+            Ok(())
+        }
+        async fn resolve_thread(&self, id: &str) -> Result<()> {
+            self.calls.lock().unwrap().resolves.push(id.to_string());
+            Ok(())
+        }
+        async fn comment_on_issue(&self, _n: u64, _body: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn close_issue(&self, _n: u64) -> Result<()> {
+            Ok(())
+        }
+        async fn get_job_logs(&self, _id: u64) -> Result<String> {
+            Ok(String::new())
+        }
+        async fn get_pr_details(&self, _n: u64) -> Result<GitHubPrDetails> {
+            Ok(GitHubPrDetails {
+                merged: false,
+                mergeable: Some(true),
+            })
+        }
+        async fn fetch_label_actor_login(&self, _n: u64, _label: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+        async fn fetch_user_permission(&self, _username: &str) -> Result<RepositoryPermission> {
+            Ok(RepositoryPermission::Read)
+        }
+        async fn remove_label(&self, _n: u64, _label: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn observe_pr(
+            &self,
+            _n: u64,
+        ) -> Result<Option<crate::application::port::github_client::PrObservation>> {
+            Ok(None)
+        }
+    }
+
+    fn make_session_with_stdout(run_id: i64, state: State, stdout: &str) -> SessionFixture {
+        let tmpdir = tempfile::tempdir().expect("temp dir");
+        let stdout_path = tmpdir.path().join("stdout.log");
+        let stderr_path = tmpdir.path().join("stderr.log");
+        std::fs::write(&stdout_path, stdout).expect("write stdout");
+        std::fs::write(&stderr_path, "").expect("write stderr");
+
+        SessionFixture {
+            _tmpdir: tmpdir,
+            session: ExitedSession {
+                issue_id: 1,
+                exit_status: success_exit_status(),
+                stdout_path,
+                stderr_path,
+                log_id: 0,
+                run_id,
+                registered_state: state,
+            },
+        }
+    }
+
+    fn fixing_stdout_with_thread() -> &'static str {
+        // structured_output matching FixingOutput / ThreadResponse schema.
+        r#"{"session_id":"abc","result":"ok","structured_output":{"threads":[{"thread_id":"T-1","response":"fixed","resolved":true}]}}"#
+    }
+
+    /// DesignFixing succeeded → Cupola pushes cupola/{feature}/design before
+    /// touching review threads, then mark_succeeded fires.
+    #[tokio::test]
+    async fn fixing_design_pushes_design_branch_before_replying() {
+        let github = GhThreadRecorder::new();
+        let thread_calls = github.calls.clone();
+        let issue_repo = MockIssueRepo {
+            issue: make_issue_with_worktree(State::DesignFixing, Some("/tmp/wt".into())),
+        };
+        let process_repo = MockProcessRepo::new();
+        let proc_calls = process_repo.calls.clone();
+        let worktree = RecordingGitWorktree::new(false);
+        let pushes = worktree.pushes.clone();
+        let config = unit_config();
+        let fixture =
+            make_session_with_stdout(11, State::DesignFixing, fixing_stdout_with_thread());
+
+        let result = process_exited_session(
+            &github,
+            &issue_repo,
+            &process_repo,
+            &worktree,
+            &config,
+            &fixture.session,
+        )
+        .await;
+
+        assert!(result.is_ok(), "expected Ok(()), got {result:?}");
+        let push_log = pushes.lock().unwrap();
+        assert_eq!(push_log.len(), 1, "push should be called exactly once");
+        assert_eq!(push_log[0].0, std::path::PathBuf::from("/tmp/wt"));
+        assert_eq!(push_log[0].1, "cupola/test-feature/design");
+        let thread_log = thread_calls.lock().unwrap();
+        assert_eq!(thread_log.replies, vec!["T-1".to_string()]);
+        assert_eq!(thread_log.resolves, vec!["T-1".to_string()]);
+        let proc_log = proc_calls.lock().unwrap();
+        assert_eq!(proc_log.mark_succeeded.len(), 1);
+        assert!(proc_log.mark_failed.is_empty());
+    }
+
+    /// ImplementationFixing succeeded → Cupola pushes cupola/{feature}/main.
+    #[tokio::test]
+    async fn fixing_implementation_pushes_main_branch_before_replying() {
+        let github = GhThreadRecorder::new();
+        let issue_repo = MockIssueRepo {
+            issue: make_issue_with_worktree(State::ImplementationFixing, Some("/tmp/wt".into())),
+        };
+        let process_repo = MockProcessRepo::new();
+        let worktree = RecordingGitWorktree::new(false);
+        let pushes = worktree.pushes.clone();
+        let config = unit_config();
+        let fixture =
+            make_session_with_stdout(12, State::ImplementationFixing, fixing_stdout_with_thread());
+
+        let result = process_exited_session(
+            &github,
+            &issue_repo,
+            &process_repo,
+            &worktree,
+            &config,
+            &fixture.session,
+        )
+        .await;
+
+        assert!(result.is_ok(), "expected Ok(()), got {result:?}");
+        let push_log = pushes.lock().unwrap();
+        assert_eq!(push_log.len(), 1);
+        assert_eq!(push_log[0].1, "cupola/test-feature/main");
+    }
+
+    /// Fixing phase + push failure → mark_failed with descriptive error,
+    /// reply_to_thread / resolve_thread MUST NOT fire (otherwise reviewers see
+    /// a thread reply claiming a fix that is not actually on origin).
+    #[tokio::test]
+    async fn fixing_push_failure_skips_thread_reply_and_marks_failed() {
+        let github = GhThreadRecorder::new();
+        let thread_calls = github.calls.clone();
+        let issue_repo = MockIssueRepo {
+            issue: make_issue_with_worktree(State::DesignFixing, Some("/tmp/wt".into())),
+        };
+        let process_repo = MockProcessRepo::new();
+        let proc_calls = process_repo.calls.clone();
+        let worktree = RecordingGitWorktree::new(true); // push fails
+        let config = unit_config();
+        let fixture =
+            make_session_with_stdout(13, State::DesignFixing, fixing_stdout_with_thread());
+
+        let result = process_exited_session(
+            &github,
+            &issue_repo,
+            &process_repo,
+            &worktree,
+            &config,
+            &fixture.session,
+        )
+        .await;
+
+        assert!(result.is_ok(), "expected Ok(()), got {result:?}");
+        let thread_log = thread_calls.lock().unwrap();
+        assert!(
+            thread_log.replies.is_empty(),
+            "reply_to_thread must not fire when push failed"
+        );
+        assert!(
+            thread_log.resolves.is_empty(),
+            "resolve_thread must not fire when push failed"
+        );
+        let proc_log = proc_calls.lock().unwrap();
+        assert_eq!(proc_log.mark_failed.len(), 1);
+        let msg = proc_log.mark_failed[0].1.as_deref().unwrap_or("");
+        assert!(
+            msg.contains("git push failed") && msg.contains("cupola/test-feature/design"),
+            "error_message should describe the failed push, got: {msg}"
+        );
+        assert!(proc_log.mark_succeeded.is_empty());
+    }
+
+    /// Fixing phase + missing worktree_path → mark_failed with descriptive error
+    /// (issue number + feature_name) so operators can recover.
+    #[tokio::test]
+    async fn fixing_missing_worktree_path_marks_failed_with_descriptive_error() {
+        let github = GhThreadRecorder::new();
+        let issue_repo = MockIssueRepo {
+            issue: make_issue_with_worktree(State::ImplementationFixing, None),
+        };
+        let process_repo = MockProcessRepo::new();
+        let proc_calls = process_repo.calls.clone();
+        let worktree = RecordingGitWorktree::new(false);
+        let pushes = worktree.pushes.clone();
+        let config = unit_config();
+        let fixture =
+            make_session_with_stdout(14, State::ImplementationFixing, fixing_stdout_with_thread());
+
+        let result = process_exited_session(
+            &github,
+            &issue_repo,
+            &process_repo,
+            &worktree,
+            &config,
+            &fixture.session,
+        )
+        .await;
+
+        assert!(result.is_ok(), "expected Ok(()), got {result:?}");
+        assert!(
+            pushes.lock().unwrap().is_empty(),
+            "push must not be called when worktree_path is None"
+        );
+        let proc_log = proc_calls.lock().unwrap();
+        assert_eq!(proc_log.mark_failed.len(), 1);
+        let msg = proc_log.mark_failed[0].1.as_deref().unwrap_or("");
+        assert!(
+            msg.contains("worktree_path missing")
+                && msg.contains("test-feature")
+                && msg.contains("#42"),
+            "error_message should reference issue number + feature_name, got: {msg}"
         );
     }
 }

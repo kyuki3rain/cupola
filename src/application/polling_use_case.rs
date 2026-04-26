@@ -261,6 +261,7 @@ where
             &self.github,
             &self.issue_repo,
             &self.process_repo,
+            &self.worktree,
             &self.config,
             &mut self.session_mgr,
         )
