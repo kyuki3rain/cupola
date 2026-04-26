@@ -11,3 +11,6 @@ model = "sonnet"
 [log]
 level = "info"
 dir = ".cupola/logs"
+
+[claude_code.permissions]
+templates = ["rust", "devbox"]
