@@ -191,7 +191,7 @@ default = "claude-sonnet-4-6"
 2. `gh repo view "$OWNER/$NAME"` で衝突チェック、衝突したら random3 を再生成（最大 3 回）
 3. `gh repo create "$OWNER/$NAME" --private --add-readme`
 4. `gh repo clone "$OWNER/$NAME" "$RUN_DIR/target"`
-5. 2.6 の seed（TypeScript TODO CLI テンプレート）を `target/` に展開し `git commit -m "init: seed"` して `git push`
+5. 2.6 の seed（TypeScript TODO CLI テンプレート）を `target/` に展開し `git commit -m "init: seed"`（push は Cupola が担当）
 6. ラベル `agent:ready`, `weight:light`, `weight:heavy` を `gh label create`
 7. `$RUN_DIR/repo-name.txt` に `OWNER/NAME` を書き込む
 

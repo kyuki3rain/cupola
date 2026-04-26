@@ -33,6 +33,20 @@ Completed
 
 途中でレビューコメント・CI失敗・コンフリクトが発生した場合は Fixing 状態に遷移し、修正後に ReviewWaiting に戻ります（CI失敗・コンフリクトは修正上限到達時を除く）。レビューコメントは trusted actor（`trusted_associations` によるロール判定 OR `trusted_reviewers` によるユーザー名判定）の unresolved スレッドのみ対象です。trusted なコメントを含まないスレッドは存在自体が秘匿されます。REQUEST_CHANGES 等スレッドを伴わないレビュー決定は観測されません（詳細は [observations.md](./observations.md) の `has_review_comments` 定義を参照）。
 
+## 責務分担
+
+Cupola と Claude Code では以下の通り責務を分けています。
+
+| 処理 | 担当 |
+|------|------|
+| Git 操作（add / commit） | Claude Code |
+| Git push / PR 作成 | Cupola |
+| GitHub API 操作（label 操作、コメント投稿、Issue クローズ等） | Cupola |
+| Design / Implementation 生成（`/cupola:spec-design` 等） | Claude Code |
+| レビューコメント対応（`/cupola:fix`） | Claude Code |
+
+**理由**: Claude Code は worktree 内でファイル編集と local commit を行い、push と PR 作成は Cupola が担当します。これにより、Claude Code には push 権限が不要（安全性の向上）かつ、PR 作成失敗時のリトライ制御も Cupola 側で一元管理できます。
+
 ## 設計原則
 
 - **ポーリングループは5フェーズ**: Resolve（完了回収）→ Collect（純粋観測）→ Decide（純粋関数）→ Persist（DB コミット）→ Execute（副作用実行）
