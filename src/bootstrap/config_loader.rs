@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 use crate::domain::author_association::{AuthorAssociation, TrustedAssociations};
 use crate::domain::claude_code_env_config::ClaudeCodeEnvConfig;
+use crate::domain::claude_code_permissions_config::ClaudeCodePermissionsConfig;
 use crate::domain::config::{Config, LogLevel};
 use crate::domain::model_config::{ModelConfig, PerPhaseModels, WeightModelConfig};
 
@@ -79,8 +80,16 @@ struct ClaudeCodeEnvToml {
 }
 
 #[derive(Debug, Deserialize)]
+struct ClaudeCodePermissionsToml {
+    templates: Option<Vec<String>>,
+    extra_allow: Option<Vec<String>>,
+    extra_deny: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ClaudeCodeToml {
     env: Option<ClaudeCodeEnvToml>,
+    permissions: Option<ClaudeCodePermissionsToml>,
 }
 
 /// CLI overrides that take priority over cupola.toml values.
@@ -152,10 +161,21 @@ impl CupolaToml {
         let claude_code_env = ClaudeCodeEnvConfig {
             extra_allow: self
                 .claude_code
-                .and_then(|cc| cc.env)
-                .and_then(|e| e.extra_allow)
+                .as_ref()
+                .and_then(|cc| cc.env.as_ref())
+                .and_then(|e| e.extra_allow.clone())
                 .unwrap_or_default(),
         };
+
+        let claude_code_permissions = self
+            .claude_code
+            .and_then(|cc| cc.permissions)
+            .map(|p| ClaudeCodePermissionsConfig {
+                templates: p.templates.unwrap_or_default(),
+                extra_allow: p.extra_allow.unwrap_or_default(),
+                extra_deny: p.extra_deny.unwrap_or_default(),
+            })
+            .unwrap_or_default();
 
         Ok(Config {
             owner: self.owner,
@@ -179,6 +199,7 @@ impl CupolaToml {
                 .unwrap_or_else(|| vec!["copilot-pull-request-reviewer".to_string()]),
             shutdown_timeout,
             claude_code_env,
+            claude_code_permissions,
         })
     }
 }
@@ -870,6 +891,116 @@ default_branch = "main"
         assert!(
             config.claude_code_env.extra_allow.is_empty(),
             "extra_allow 未設定時は空リスト"
+        );
+    }
+
+    // --- [claude_code.permissions] セクション TOML 解析テスト ---
+
+    #[test]
+    fn parse_claude_code_permissions_section_with_all_fields() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+
+[claude_code.permissions]
+templates = ["rust", "devbox"]
+extra_allow = ["Bash(my-tool*)"]
+extra_deny = ["Bash(forbidden)"]
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides).expect("should succeed");
+        assert_eq!(
+            config.claude_code_permissions.templates,
+            vec!["rust".to_string(), "devbox".to_string()]
+        );
+        assert_eq!(
+            config.claude_code_permissions.extra_allow,
+            vec!["Bash(my-tool*)".to_string()]
+        );
+        assert_eq!(
+            config.claude_code_permissions.extra_deny,
+            vec!["Bash(forbidden)".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_claude_code_permissions_section_absent_defaults_to_empty() {
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides).expect("should succeed");
+        assert!(config.claude_code_permissions.templates.is_empty());
+        assert!(config.claude_code_permissions.extra_allow.is_empty());
+        assert!(config.claude_code_permissions.extra_deny.is_empty());
+    }
+
+    #[test]
+    fn parse_claude_code_permissions_section_partial_fields() {
+        // templates だけ指定、extra_allow / extra_deny は省略
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+
+[claude_code.permissions]
+templates = ["rust"]
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides).expect("should succeed");
+        assert_eq!(
+            config.claude_code_permissions.templates,
+            vec!["rust".to_string()]
+        );
+        assert!(config.claude_code_permissions.extra_allow.is_empty());
+        assert!(config.claude_code_permissions.extra_deny.is_empty());
+    }
+
+    #[test]
+    fn parse_claude_code_permissions_and_env_coexist() {
+        // [claude_code.env] と [claude_code.permissions] 両方が同居しても
+        // 互いに影響なくパースされることを確認
+        let toml_str = r#"
+owner = "user"
+repo = "repo"
+default_branch = "main"
+
+[claude_code.env]
+extra_allow = ["CLAUDE_*"]
+
+[claude_code.permissions]
+templates = ["rust"]
+extra_allow = ["Bash(my-tool*)"]
+"#;
+        let parsed: CupolaToml = toml::from_str(toml_str).expect("should parse");
+        let overrides = CliOverrides {
+            polling_interval_secs: None,
+            log_level: None,
+        };
+        let config = parsed.into_config(&overrides).expect("should succeed");
+        assert_eq!(config.claude_code_env.extra_allow, vec!["CLAUDE_*"]);
+        assert_eq!(
+            config.claude_code_permissions.templates,
+            vec!["rust".to_string()]
+        );
+        assert_eq!(
+            config.claude_code_permissions.extra_allow,
+            vec!["Bash(my-tool*)".to_string()]
         );
     }
 }

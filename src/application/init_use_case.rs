@@ -13,7 +13,6 @@ pub struct InitReport {
     pub toml_created: bool,
     pub agent_assets_installed: bool,
     pub gitignore_updated: bool,
-    pub settings_json_written: bool,
     pub steering_bootstrap_message: Option<String>,
 }
 
@@ -78,9 +77,19 @@ impl<D: DbInitializer, F: FileGenerator, R: CommandRunner> InitUseCase<D, F, R> 
         tracing::info!("SQLite schema initialized");
 
         // Step 3-5: ファイル生成
+        // cupola.toml には `--template` で指定されたテンプレートキーを
+        // `[claude_code.permissions].templates` として書き込む。実際の
+        // permission 解決は Cupola daemon 起動時に TemplateManager で行われ、
+        // Claude Code subprocess に --allowedTools / --disallowedTools 経由で渡される。
+        //
+        // ここで未知キーを先に検証することで `cupola init --template bogus`
+        // を早期に弾く（daemon 起動時の fail より init 時に失敗する方が UX 的に良い）。
+        let template_keys: Vec<&str> = self.templates.iter().map(String::as_str).collect();
+        TemplateManager::build_settings(&template_keys).map_err(anyhow::Error::new)?;
+
         let toml_created = self
             .file_gen
-            .generate_toml_template()
+            .generate_toml_template(&self.templates)
             .context("failed to generate cupola.toml template")?;
 
         let agent_assets_installed = self
@@ -93,15 +102,6 @@ impl<D: DbInitializer, F: FileGenerator, R: CommandRunner> InitUseCase<D, F, R> 
             .append_gitignore_entries(self.upgrade)
             .context("failed to append .gitignore entries")?;
 
-        // Step 6: settings.json 生成 (TemplateManager 経由)
-        let template_keys: Vec<&str> = self.templates.iter().map(String::as_str).collect();
-        let claude_settings =
-            TemplateManager::build_settings(&template_keys).map_err(anyhow::Error::new)?;
-        let settings_json_written = self
-            .file_gen
-            .write_claude_settings(&claude_settings)
-            .context("failed to write .claude/settings.json")?;
-
         let steering_bootstrap_message = self.bootstrap_steering()?;
 
         Ok(InitReport {
@@ -109,7 +109,6 @@ impl<D: DbInitializer, F: FileGenerator, R: CommandRunner> InitUseCase<D, F, R> 
             toml_created,
             agent_assets_installed,
             gitignore_updated,
-            settings_json_written,
             steering_bootstrap_message,
         })
     }

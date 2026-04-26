@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use crate::domain::author_association::TrustedAssociations;
 use crate::domain::claude_code_env_config::ClaudeCodeEnvConfig;
+use crate::domain::claude_code_permissions_config::ClaudeCodePermissionsConfig;
 use crate::domain::model_config::ModelConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +36,7 @@ pub struct Config {
     /// `Some(d)` = 指定秒数後に強制終了。デフォルト 300 秒。
     pub shutdown_timeout: Option<Duration>,
     pub claude_code_env: ClaudeCodeEnvConfig,
+    pub claude_code_permissions: ClaudeCodePermissionsConfig,
 }
 
 impl Config {
@@ -56,6 +58,7 @@ impl Config {
             trusted_reviewers: vec!["copilot-pull-request-reviewer".to_string()],
             shutdown_timeout: Some(Duration::from_secs(300)),
             claude_code_env: ClaudeCodeEnvConfig::default(),
+            claude_code_permissions: ClaudeCodePermissionsConfig::default(),
         }
     }
 

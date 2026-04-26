@@ -79,7 +79,8 @@ devbox run cupola logs         # View log files
 
 - **std::process vs tokio::process**: Adopted std::process + try_wait() for natural integration with the polling loop. stdout/stderr accumulated in separate threads
 - **Single GitHubClient trait**: Hides REST/GraphQL distinction from the application layer. Composed using the facade pattern
-- **Event batch application**: Collects all events within a polling cycle and applies them in batch, prioritizing IssueClosed
+- **Decide/Effect decision core**: `domain::decide` is a pure function `(Issue, WorldSnapshot, Config) → Decision`. A `Decision` carries the next State, metadata updates, and a priority-ordered `Vec<Effect>`. Side effects are *data*; the `execute` stage interprets them. This keeps state transitions unit-testable without mocks.
+- **5-stage polling pipeline** (`application/polling/`): `collect` fetches GitHub signals → `resolve` builds a `WorldSnapshot` per issue → `decide` (domain) produces a `Decision` → `persist` writes state/metadata changes → `execute` runs effects (spawn, comment, cleanup, close). Effects are sorted by priority so transition effects run before persistent ones.
 - **Daemon mode**: Re-exec strategy (`--daemon-child`) to avoid fork() inside tokio runtime. PID file based lifecycle management
 - **Session management**: HashMap of issue_id → running process, with concurrent session limiting and stall detection
 - **Doctor sections**: `DoctorUseCase` outputs results split into `StartReadiness` (prerequisites for starting the daemon) and `OperationalReadiness` (runtime health checks), each check carrying an optional `remediation` hint

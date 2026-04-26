@@ -187,14 +187,6 @@ pub async fn run(cli: Cli) -> Result<()> {
                 }
             );
             println!(
-                "  settings.json: {}",
-                if report.settings_json_written {
-                    "written"
-                } else {
-                    "up to date"
-                }
-            );
-            println!(
                 "  steering bootstrap: {}",
                 match report.steering_bootstrap_message {
                     Some(ref msg) => msg,
@@ -583,7 +575,12 @@ async fn start_foreground(
         }
 
         let exec_log_repo = SqliteExecutionLogRepository::new(db);
-        let claude_runner = ClaudeCodeProcess::new("claude", cfg.claude_code_env.clone());
+        let claude_runner = ClaudeCodeProcess::new(
+            "claude",
+            cfg.claude_code_env.clone(),
+            &cfg.claude_code_permissions,
+        )
+        .context("failed to build Claude Code runner from cupola.toml permissions")?;
         let worktree = GitWorktreeManager::new(".");
         let file_gen = InitFileGenerator::new(std::env::current_dir()?);
 
@@ -751,7 +748,12 @@ async fn start_daemon_child(
         }
 
         let exec_log_repo = SqliteExecutionLogRepository::new(db);
-        let claude_runner = ClaudeCodeProcess::new("claude", cfg.claude_code_env.clone());
+        let claude_runner = ClaudeCodeProcess::new(
+            "claude",
+            cfg.claude_code_env.clone(),
+            &cfg.claude_code_permissions,
+        )
+        .context("failed to build Claude Code runner from cupola.toml permissions")?;
         let worktree = GitWorktreeManager::new(".");
         let file_gen = InitFileGenerator::new(config_dir.clone());
 

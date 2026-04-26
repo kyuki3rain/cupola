@@ -8,13 +8,18 @@ Layer separation following Clean Architecture. The `src/` directory is divided i
 
 ### Domain Layer (`src/domain/`)
 **Purpose**: Pure business logic. No framework dependencies
-**Contains**: State enum, Event enum, StateMachine (pure functions), Issue entity, Config value object, Phase enum, TaskWeight enum, ModelConfig, FixingProblemKind, ExecutionLog, AuthorAssociation / TrustedAssociations (security value objects for label actor trust)
-**Rule**: No I/O. Only derive macros (serde, thiserror) are permitted
+**Contains**:
+- Decision core: `decide()` pure function + `Decision` (next_state + metadata_updates + effects) + `Effect` enum + `WorldSnapshot` (GitHub issue/PR/CI observations)
+- Entities & VOs: Issue, Config, State, Phase, TaskWeight, ModelConfig, ProcessRun, FixingProblemKind, ExecutionLog, MetadataUpdates, ShutdownMode, ClaudeSettings / ClaudeCodeEnvConfig
+- Security: AuthorAssociation / TrustedAssociations (label actor trust value objects)
+
+**Rule**: No I/O. Only derive macros (serde, thiserror) are permitted. `decide()` takes `(prev: &Issue, snap: &WorldSnapshot, cfg: &Config)` and returns a `Decision` — all side effects are emitted as `Effect` values, never performed.
 
 ### Application Layer (`src/application/`)
 **Purpose**: Use cases and port (trait) definitions
-**Contains**: PollingUseCase, TransitionUseCase, SessionManager, RetryPolicy, StopUseCase, InitUseCase, DoctorUseCase, CleanupUseCase, CompressUseCase, AssociationGuard (label actor trust check), InitAgent (enum for init target), prompt/io helpers
-**Subdir**: `port/` — trait definitions for external dependencies (GitHubClient, IssueRepository, ClaudeCodeRunner, ExecutionLogRepository, GitWorktree, PidFilePort, CommandRunner, ConfigLoader, DbInitializer, SignalPort)
+**Contains**: PollingUseCase, StartUseCase, StopUseCase, InitUseCase, DoctorUseCase, CleanupUseCase, CompressUseCase, LogsUseCase, SessionManager, RetryPolicy, InitTaskManager, TemplateManager, AssociationGuard (label actor trust check), InitAgent enum, prompt/io helpers
+**Subdir `polling/`**: 5-stage pipeline (`collect` → `resolve` → decide → `persist` → `execute`) — observation, snapshot build, call into `domain::decide`, persist state/metadata, then run effects
+**Subdir `port/`**: trait definitions for outbound dependencies (GitHubClient, IssueRepository, ClaudeCodeRunner, ExecutionLogRepository, ProcessRunRepository, FileGenerator, GitWorktree, PidFilePort, CommandRunner, ConfigLoader, DbInitializer, SignalPort)
 **Rule**: Depends on domain. Must not import concrete types from adapter
 
 ### Adapter Layer (`src/adapter/`)

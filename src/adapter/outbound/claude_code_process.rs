@@ -4,7 +4,24 @@ use std::process::{Child, Command, Stdio};
 use anyhow::{Context, Result};
 
 use crate::application::port::claude_code_runner::ClaudeCodeRunner;
+use crate::application::template_manager::TemplateManager;
 use crate::domain::claude_code_env_config::{BASE_ALLOWLIST, ClaudeCodeEnvConfig};
+use crate::domain::claude_code_permissions_config::ClaudeCodePermissionsConfig;
+
+/// `ClaudeCodeProcess::new` の構築失敗を表すエラー。
+///
+/// テンプレート解決失敗（`TemplateError`）と、resolved 後の各エントリに
+/// CLI フラグの CSV 表現を壊す文字（`,` / 改行）が含まれている場合の
+/// バリデーション失敗を区別して報告する。
+#[derive(Debug, thiserror::Error)]
+pub enum ClaudeCodeProcessError {
+    #[error("failed to resolve permission template: {0}")]
+    TemplateError(#[from] crate::application::template_manager::TemplateError),
+    #[error(
+        "permission entry contains '{forbidden}' which would break CLI CSV encoding: {entry:?}"
+    )]
+    InvalidEntry { entry: String, forbidden: String },
+}
 
 /// Claude のプロセス出力から構造化データを取り出すためのパーサ。
 /// --output-format json で出力される JSON の result フィールドを解析する。
@@ -155,14 +172,62 @@ pub fn parse_fixing_output(raw: &str) -> FixingOutput {
 pub struct ClaudeCodeProcess {
     executable: String,
     env_config: ClaudeCodeEnvConfig,
+    /// `--allowedTools` CLI フラグとして渡す CSV 文字列。空文字列ならフラグを付けない
+    allowed_tools: String,
+    /// `--disallowedTools` CLI フラグとして渡す CSV 文字列。空文字列ならフラグを付けない
+    disallowed_tools: String,
+}
+
+fn validate_entry(entry: &str) -> Result<(), ClaudeCodeProcessError> {
+    if entry.contains(',') {
+        return Err(ClaudeCodeProcessError::InvalidEntry {
+            entry: entry.to_string(),
+            forbidden: ",".to_string(),
+        });
+    }
+    if entry.contains('\n') || entry.contains('\r') {
+        return Err(ClaudeCodeProcessError::InvalidEntry {
+            entry: entry.to_string(),
+            forbidden: "newline".to_string(),
+        });
+    }
+    Ok(())
 }
 
 impl ClaudeCodeProcess {
-    pub fn new(executable: impl Into<String>, env_config: ClaudeCodeEnvConfig) -> Self {
-        Self {
+    /// `ClaudeCodeProcess` を初期化する。
+    ///
+    /// `permissions.templates` を `TemplateManager::build_settings` で解決し、`extra_allow`
+    /// / `extra_deny` を足した結果をカンマ区切り文字列として保持する。spawn ごとに
+    /// テンプレートを解決し直さず、bootstrap 時に一度だけ解決することで未知テンプレート
+    /// などの設定エラーを起動時に検出する。
+    pub fn new(
+        executable: impl Into<String>,
+        env_config: ClaudeCodeEnvConfig,
+        permissions: &ClaudeCodePermissionsConfig,
+    ) -> Result<Self, ClaudeCodeProcessError> {
+        let template_keys: Vec<&str> = permissions.templates.iter().map(String::as_str).collect();
+        let settings = TemplateManager::build_settings(&template_keys)?;
+
+        let mut allowed: Vec<String> = settings.permissions.allow;
+        allowed.extend(permissions.extra_allow.iter().cloned());
+        let mut disallowed: Vec<String> = settings.permissions.deny;
+        disallowed.extend(permissions.extra_deny.iter().cloned());
+
+        // 各エントリの validation: --allowedTools / --disallowedTools は CSV 形式で
+        // 受け取るため、エントリ内に `,` または改行があるとパースが破綻し、意図しない
+        // 権限セットになる。設定ファイル / テンプレートの誤りを起動時に明示的に
+        // エラーとして検出する（黙って壊れた CSV を渡すより早期 failure が安全）。
+        for entry in allowed.iter().chain(disallowed.iter()) {
+            validate_entry(entry)?;
+        }
+
+        Ok(Self {
             executable: executable.into(),
             env_config,
-        }
+            allowed_tools: allowed.join(","),
+            disallowed_tools: disallowed.join(","),
+        })
     }
 
     /// Build the Command with all required flags.
@@ -181,6 +246,13 @@ impl ClaudeCodeProcess {
             .arg("json")
             .arg("--model")
             .arg(model);
+
+        if !self.allowed_tools.is_empty() {
+            cmd.arg("--allowedTools").arg(&self.allowed_tools);
+        }
+        if !self.disallowed_tools.is_empty() {
+            cmd.arg("--disallowedTools").arg(&self.disallowed_tools);
+        }
 
         if let Some(schema) = json_schema {
             cmd.arg("--json-schema").arg(schema);
@@ -235,7 +307,12 @@ mod tests {
     static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn default_process() -> ClaudeCodeProcess {
-        ClaudeCodeProcess::new("claude", ClaudeCodeEnvConfig::default())
+        ClaudeCodeProcess::new(
+            "claude",
+            ClaudeCodeEnvConfig::default(),
+            &ClaudeCodePermissionsConfig::default(),
+        )
+        .expect("build")
     }
 
     #[test]
@@ -247,16 +324,21 @@ mod tests {
         assert_eq!(program, OsStr::new("claude"));
 
         let args: Vec<&OsStr> = cmd.get_args().collect();
-        assert_eq!(
-            args,
-            vec![
-                "-p",
-                "hello",
-                "--output-format",
-                "json",
-                "--model",
-                "sonnet",
-            ]
+        // 基本フラグが含まれる
+        assert_eq!(args[0], OsStr::new("-p"));
+        assert_eq!(args[1], OsStr::new("hello"));
+        assert!(args.contains(&OsStr::new("--output-format")));
+        assert!(args.contains(&OsStr::new("json")));
+        assert!(args.contains(&OsStr::new("--model")));
+        assert!(args.contains(&OsStr::new("sonnet")));
+        // base テンプレートによる permission フラグが付加される
+        assert!(
+            args.contains(&OsStr::new("--allowedTools")),
+            "--allowedTools must be present with resolved base template permissions"
+        );
+        assert!(
+            args.contains(&OsStr::new("--disallowedTools")),
+            "--disallowedTools must be present with resolved base template permissions"
         );
         assert!(
             !args.contains(&OsStr::new("--dangerously-skip-permissions")),
@@ -277,7 +359,12 @@ mod tests {
 
     #[test]
     fn build_command_with_custom_executable() {
-        let proc = ClaudeCodeProcess::new("/usr/local/bin/claude", ClaudeCodeEnvConfig::default());
+        let proc = ClaudeCodeProcess::new(
+            "/usr/local/bin/claude",
+            ClaudeCodeEnvConfig::default(),
+            &ClaudeCodePermissionsConfig::default(),
+        )
+        .expect("build");
         let cmd = proc.build_command("prompt", Path::new("."), None, "sonnet");
         assert_eq!(cmd.get_program(), OsStr::new("/usr/local/bin/claude"));
     }
@@ -290,6 +377,113 @@ mod tests {
         let args: Vec<&OsStr> = cmd.get_args().collect();
         assert!(args.contains(&OsStr::new("--model")));
         assert!(args.contains(&OsStr::new("opus")));
+    }
+
+    /// 追加 template (例: rust) を指定した場合、base + rust の union が
+    /// `--allowedTools` の CSV に含まれることを確認する。
+    #[test]
+    fn build_command_merges_template_allow_into_allowed_tools() {
+        let permissions = ClaudeCodePermissionsConfig {
+            templates: vec!["rust".to_string()],
+            extra_allow: Vec::new(),
+            extra_deny: Vec::new(),
+        };
+        let proc = ClaudeCodeProcess::new("claude", ClaudeCodeEnvConfig::default(), &permissions)
+            .expect("build");
+
+        let cmd = proc.build_command("prompt", Path::new("/tmp"), None, "sonnet");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+
+        let allow_csv_idx = args
+            .iter()
+            .position(|a| a == "--allowedTools")
+            .expect("allow flag present");
+        let allow_csv = &args[allow_csv_idx + 1];
+        assert!(
+            allow_csv.contains("Read"),
+            "base template should contribute Read: {allow_csv}"
+        );
+        assert!(
+            allow_csv.contains("Bash(cargo build*)"),
+            "rust template should contribute Bash(cargo build*): {allow_csv}"
+        );
+    }
+
+    /// `extra_allow` にカンマを含むエントリが渡された場合、CSV 表現を壊すため
+    /// `ClaudeCodeProcess::new` がエラーを返すことを確認する。
+    #[test]
+    fn new_rejects_entry_containing_comma() {
+        let permissions = ClaudeCodePermissionsConfig {
+            templates: Vec::new(),
+            extra_allow: vec!["Bash(echo a,b)".to_string()],
+            extra_deny: Vec::new(),
+        };
+        let result = ClaudeCodeProcess::new("claude", ClaudeCodeEnvConfig::default(), &permissions);
+        let err = match result {
+            Ok(_) => panic!("comma in entry should be rejected"),
+            Err(e) => e,
+        };
+        match err {
+            ClaudeCodeProcessError::InvalidEntry { entry, forbidden } => {
+                assert_eq!(forbidden, ",");
+                assert!(entry.contains("Bash(echo a,b)"));
+            }
+            other => panic!("expected InvalidEntry, got {other:?}"),
+        }
+    }
+
+    /// `extra_deny` に改行を含むエントリが渡された場合も同様にエラーになる。
+    #[test]
+    fn new_rejects_entry_containing_newline() {
+        let permissions = ClaudeCodePermissionsConfig {
+            templates: Vec::new(),
+            extra_allow: Vec::new(),
+            extra_deny: vec!["Bash(line1\nline2)".to_string()],
+        };
+        let result = ClaudeCodeProcess::new("claude", ClaudeCodeEnvConfig::default(), &permissions);
+        let err = match result {
+            Ok(_) => panic!("newline in entry should be rejected"),
+            Err(e) => e,
+        };
+        match err {
+            ClaudeCodeProcessError::InvalidEntry { forbidden, .. } => {
+                assert_eq!(forbidden, "newline");
+            }
+            other => panic!("expected InvalidEntry, got {other:?}"),
+        }
+    }
+
+    /// `extra_allow` / `extra_deny` がテンプレート解決結果に append されることを確認する。
+    #[test]
+    fn build_command_appends_extra_allow_and_deny() {
+        let permissions = ClaudeCodePermissionsConfig {
+            templates: Vec::new(),
+            extra_allow: vec!["Bash(devbox*)".to_string()],
+            extra_deny: vec!["Bash(sudo*)".to_string()],
+        };
+        let proc = ClaudeCodeProcess::new("claude", ClaudeCodeEnvConfig::default(), &permissions)
+            .expect("build");
+
+        let cmd = proc.build_command("p", Path::new("/tmp"), None, "sonnet");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+
+        let allow_idx = args
+            .iter()
+            .position(|a| a == "--allowedTools")
+            .expect("allow present");
+        assert!(args[allow_idx + 1].contains("Bash(devbox*)"));
+
+        let deny_idx = args
+            .iter()
+            .position(|a| a == "--disallowedTools")
+            .expect("deny present");
+        assert!(args[deny_idx + 1].contains("Bash(sudo*)"));
     }
 
     /// T-4.CC.1: Spawn produces stdout/stderr readers that don't block on full pipe buffers.
@@ -366,7 +560,12 @@ mod tests {
 
     #[test]
     fn build_command_env_clear_applied_no_extra_allow() {
-        let proc = ClaudeCodeProcess::new("claude", ClaudeCodeEnvConfig::default());
+        let proc = ClaudeCodeProcess::new(
+            "claude",
+            ClaudeCodeEnvConfig::default(),
+            &ClaudeCodePermissionsConfig::default(),
+        )
+        .expect("build");
         let cmd = proc.build_command("hello", Path::new("/tmp"), None, "sonnet");
         // env_clear が適用されているため、BASE_ALLOWLIST に含まれない var は設定されない
         // get_envs() は env_clear() 後に明示的に設定された env var のみ返す
@@ -381,7 +580,12 @@ mod tests {
     #[test]
     fn build_command_base_allowlist_vars_inherited() {
         // PATH は親プロセスに存在すると仮定（CI 環境でも通常存在する）
-        let proc = ClaudeCodeProcess::new("claude", ClaudeCodeEnvConfig::default());
+        let proc = ClaudeCodeProcess::new(
+            "claude",
+            ClaudeCodeEnvConfig::default(),
+            &ClaudeCodePermissionsConfig::default(),
+        )
+        .expect("build");
         let cmd = proc.build_command("hello", Path::new("/tmp"), None, "sonnet");
         let envs: std::collections::HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
             cmd.get_envs().collect();
@@ -397,7 +601,12 @@ mod tests {
         let env_config = ClaudeCodeEnvConfig {
             extra_allow: vec!["ANTHROPIC_API_KEY".to_string()],
         };
-        let proc = ClaudeCodeProcess::new("claude", env_config);
+        let proc = ClaudeCodeProcess::new(
+            "claude",
+            env_config,
+            &ClaudeCodePermissionsConfig::default(),
+        )
+        .expect("build");
         let cmd = proc.build_command("hello", Path::new("/tmp"), None, "sonnet");
         let envs: std::collections::HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
             cmd.get_envs().collect();
@@ -424,7 +633,12 @@ mod tests {
         let env_config = ClaudeCodeEnvConfig {
             extra_allow: vec!["CUPOLA_TEST_WILDCARD_*".to_string()],
         };
-        let proc = ClaudeCodeProcess::new("claude", env_config);
+        let proc = ClaudeCodeProcess::new(
+            "claude",
+            env_config,
+            &ClaudeCodePermissionsConfig::default(),
+        )
+        .expect("build");
         let cmd = proc.build_command("hello", Path::new("/tmp"), None, "sonnet");
         let envs: std::collections::HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
             cmd.get_envs().collect();
@@ -452,7 +666,12 @@ mod tests {
         let env_config = ClaudeCodeEnvConfig {
             extra_allow: vec!["OTHER_*".to_string()],
         };
-        let proc = ClaudeCodeProcess::new("claude", env_config);
+        let proc = ClaudeCodeProcess::new(
+            "claude",
+            env_config,
+            &ClaudeCodePermissionsConfig::default(),
+        )
+        .expect("build");
         let cmd = proc.build_command("hello", Path::new("/tmp"), None, "sonnet");
         let envs: std::collections::HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
             cmd.get_envs().collect();

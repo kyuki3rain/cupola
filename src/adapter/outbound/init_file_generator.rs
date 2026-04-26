@@ -1,10 +1,8 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
 use crate::application::port::file_generator::FileGenerator;
-use crate::domain::claude_settings::ClaudeSettings;
 
 const CLAUDE_CODE_ASSETS: &[(&str, &str)] = &[
     (
@@ -324,7 +322,7 @@ impl InitFileGenerator {
         Self { base_dir }
     }
 
-    pub fn generate_toml_template(&self) -> Result<bool> {
+    pub fn generate_toml_template(&self, templates: &[String]) -> Result<bool> {
         let toml_path = self.base_dir.join(".cupola").join("cupola.toml");
         if toml_path.exists() {
             tracing::info!(
@@ -333,7 +331,17 @@ impl InitFileGenerator {
             );
             return Ok(false);
         }
-        std::fs::write(&toml_path, CUPOLA_TOML_TEMPLATE)
+
+        let mut content = String::from(CUPOLA_TOML_TEMPLATE);
+        if !templates.is_empty() {
+            content.push_str("\n[claude_code.permissions]\n# Permission templates resolved via TemplateManager and passed to Claude Code\n# as --allowedTools / --disallowedTools CLI flags.\ntemplates = [\n");
+            for t in templates {
+                content.push_str(&format!("    \"{}\",\n", t));
+            }
+            content.push_str("]\n");
+        }
+
+        std::fs::write(&toml_path, content)
             .with_context(|| format!("failed to write cupola.toml at {}", toml_path.display()))?;
         tracing::info!(path = %toml_path.display(), "cupola.toml template generated");
         Ok(true)
@@ -515,118 +523,11 @@ impl InitFileGenerator {
         );
         Ok(true)
     }
-
-    pub fn write_claude_settings(&self, settings: &ClaudeSettings) -> Result<bool> {
-        let claude_dir = self.base_dir.join(".claude");
-        std::fs::create_dir_all(&claude_dir).with_context(|| {
-            format!(
-                "failed to create .claude directory at {}",
-                claude_dir.display()
-            )
-        })?;
-
-        let settings_path = claude_dir.join("settings.json");
-        let managed =
-            serde_json::to_value(settings).context("failed to serialize ClaudeSettings")?;
-
-        let existing = if settings_path.exists() {
-            let content = std::fs::read_to_string(&settings_path)
-                .with_context(|| format!("failed to read {}", settings_path.display()))?;
-            Some(
-                serde_json::from_str::<serde_json::Value>(&content).with_context(|| {
-                    format!(
-                        "failed to parse existing {}: please fix the JSON manually",
-                        settings_path.display()
-                    )
-                })?,
-            )
-        } else {
-            None
-        };
-
-        let merged = if let Some(existing_val) = existing.as_ref() {
-            deep_merge_json(existing_val.clone(), managed)
-        } else {
-            managed
-        };
-
-        if existing
-            .as_ref()
-            .is_some_and(|existing_val| existing_val == &merged)
-        {
-            return Ok(false);
-        }
-
-        let new_content =
-            serde_json::to_string_pretty(&merged).context("failed to serialize settings")?;
-
-        std::fs::write(&settings_path, &new_content)
-            .with_context(|| format!("failed to write {}", settings_path.display()))?;
-        tracing::info!(path = %settings_path.display(), "wrote .claude/settings.json");
-        Ok(true)
-    }
-}
-
-/// 2 つの JSON Value をディープマージする。
-///
-/// ルール:
-/// - `permissions.allow` / `permissions.deny` 配列は union マージ（重複排除）
-/// - スカラーキー: existing 優先 (existing に値があれば managed は無視)
-/// - ネストオブジェクト: 再帰的に同ルールを適用
-/// - 配列（上記 allow/deny 以外）: existing 優先
-fn deep_merge_json(existing: serde_json::Value, managed: serde_json::Value) -> serde_json::Value {
-    deep_merge_json_inner(existing, managed, false, false)
-}
-
-fn deep_merge_json_inner(
-    existing: serde_json::Value,
-    managed: serde_json::Value,
-    in_permissions: bool,
-    union_merge: bool,
-) -> serde_json::Value {
-    use serde_json::Value;
-    match (existing, managed) {
-        (Value::Object(mut existing_map), Value::Object(managed_map)) => {
-            for (key, managed_val) in managed_map {
-                let child_in_permissions = key == "permissions";
-                let child_union_merge = in_permissions && (key == "allow" || key == "deny");
-                if let Some(existing_val) = existing_map.remove(&key) {
-                    let merged = deep_merge_json_inner(
-                        existing_val,
-                        managed_val,
-                        child_in_permissions,
-                        child_union_merge,
-                    );
-                    existing_map.insert(key, merged);
-                } else {
-                    existing_map.insert(key, managed_val);
-                }
-            }
-            Value::Object(existing_map)
-        }
-        // allow/deny: union merge
-        (Value::Array(existing_arr), Value::Array(managed_arr)) if union_merge => {
-            let mut seen: HashSet<String> = HashSet::new();
-            let mut result: Vec<Value> = Vec::new();
-            for v in existing_arr.iter().chain(managed_arr.iter()) {
-                if let Some(s) = v.as_str() {
-                    if seen.insert(s.to_string()) {
-                        result.push(v.clone());
-                    }
-                } else {
-                    result.push(v.clone());
-                }
-            }
-            Value::Array(result)
-        }
-        // その他: existing 優先
-        (existing, _managed) => existing,
-    }
 }
 
 impl FileGenerator for InitFileGenerator {
-    fn generate_toml_template(&self) -> Result<bool> {
-        InitFileGenerator::generate_toml_template(self)
+    fn generate_toml_template(&self, templates: &[String]) -> Result<bool> {
+        InitFileGenerator::generate_toml_template(self, templates)
     }
 
     fn install_claude_code_assets(&self, upgrade: bool) -> Result<bool> {
@@ -659,10 +560,6 @@ impl FileGenerator for InitFileGenerator {
             language,
         )
     }
-
-    fn write_claude_settings(&self, settings: &ClaudeSettings) -> Result<bool> {
-        InitFileGenerator::write_claude_settings(self, settings)
-    }
 }
 
 #[cfg(test)]
@@ -681,7 +578,7 @@ mod tests {
     #[test]
     fn toml_template_creates_file_when_absent() {
         let (tmp, generator) = setup();
-        let result = generator.generate_toml_template().expect("generate");
+        let result = generator.generate_toml_template(&[]).expect("generate");
         assert!(result);
 
         let toml_path = tmp.path().join(".cupola").join("cupola.toml");
@@ -700,12 +597,58 @@ mod tests {
         let toml_path = tmp.path().join(".cupola").join("cupola.toml");
         fs::write(&toml_path, "existing content").expect("write");
 
-        let result = generator.generate_toml_template().expect("generate");
+        let result = generator.generate_toml_template(&[]).expect("generate");
         assert!(!result);
         assert_eq!(
             fs::read_to_string(&toml_path).expect("read"),
             "existing content"
         );
+    }
+
+    #[test]
+    fn toml_template_with_empty_templates_omits_permissions_section() {
+        let (tmp, generator) = setup();
+        generator.generate_toml_template(&[]).expect("generate");
+        let content =
+            fs::read_to_string(tmp.path().join(".cupola").join("cupola.toml")).expect("read");
+        assert!(
+            !content.contains("[claude_code.permissions]"),
+            "empty templates should omit the [claude_code.permissions] section"
+        );
+    }
+
+    #[test]
+    fn toml_template_with_single_template_writes_permissions_section() {
+        let (tmp, generator) = setup();
+        generator
+            .generate_toml_template(&["rust".to_string()])
+            .expect("generate");
+        let content =
+            fs::read_to_string(tmp.path().join(".cupola").join("cupola.toml")).expect("read");
+        assert!(
+            content.contains("[claude_code.permissions]"),
+            "non-empty templates should add [claude_code.permissions] section"
+        );
+        assert!(
+            content.contains("templates = ["),
+            "should write templates array"
+        );
+        assert!(
+            content.contains("\"rust\""),
+            "should include rust as a quoted entry"
+        );
+    }
+
+    #[test]
+    fn toml_template_with_multiple_templates_writes_all_entries() {
+        let (tmp, generator) = setup();
+        generator
+            .generate_toml_template(&["rust".to_string(), "devbox".to_string()])
+            .expect("generate");
+        let content =
+            fs::read_to_string(tmp.path().join(".cupola").join("cupola.toml")).expect("read");
+        assert!(content.contains("\"rust\""));
+        assert!(content.contains("\"devbox\""));
     }
 
     #[test]
@@ -1026,118 +969,6 @@ mod tests {
                 .join("specs")
                 .join("issue-193")
                 .exists()
-        );
-    }
-
-    // --- write_claude_settings tests ---
-
-    use crate::domain::claude_settings::{ClaudePermissions, ClaudeSettings};
-
-    fn make_settings(allow: &[&str], deny: &[&str]) -> ClaudeSettings {
-        ClaudeSettings {
-            permissions: ClaudePermissions {
-                allow: allow.iter().map(|s| s.to_string()).collect(),
-                deny: deny.iter().map(|s| s.to_string()).collect(),
-            },
-        }
-    }
-
-    #[test]
-    fn write_claude_settings_creates_new_file() {
-        let (tmp, generator) = setup();
-        let settings = make_settings(&["Read", "Bash(git status)"], &["Bash(rm -rf*)"]);
-
-        let result = generator.write_claude_settings(&settings).expect("write");
-        assert!(result, "should report file was written");
-
-        let path = tmp.path().join(".claude").join("settings.json");
-        assert!(path.exists());
-        let content = fs::read_to_string(&path).expect("read");
-        assert!(content.contains("Read"));
-        assert!(content.contains("Bash(git status)"));
-        assert!(content.contains("Bash(rm -rf*)"));
-    }
-
-    #[test]
-    fn write_claude_settings_merges_with_existing_allow() {
-        let (tmp, generator) = setup();
-        let settings_path = tmp.path().join(".claude").join("settings.json");
-        fs::create_dir_all(settings_path.parent().unwrap()).expect("create .claude");
-        fs::write(
-            &settings_path,
-            r#"{"permissions":{"allow":["Bash(existing-cmd)"],"deny":[]}}"#,
-        )
-        .expect("write existing");
-
-        let settings = make_settings(&["Read"], &[]);
-        generator.write_claude_settings(&settings).expect("write");
-
-        let content = fs::read_to_string(&settings_path).expect("read");
-        assert!(content.contains("existing-cmd"), "existing allow preserved");
-        assert!(content.contains("Read"), "new allow added");
-    }
-
-    #[test]
-    fn write_claude_settings_scalar_existing_wins() {
-        let (tmp, generator) = setup();
-        let settings_path = tmp.path().join(".claude").join("settings.json");
-        fs::create_dir_all(settings_path.parent().unwrap()).expect("create .claude");
-        fs::write(
-            &settings_path,
-            r#"{"customKey":"user-value","permissions":{"allow":[],"deny":[]}}"#,
-        )
-        .expect("write existing");
-
-        let settings = make_settings(&[], &[]);
-        generator.write_claude_settings(&settings).expect("write");
-
-        let content = fs::read_to_string(&settings_path).expect("read");
-        assert!(
-            content.contains("user-value"),
-            "scalar from existing wins: {content}"
-        );
-    }
-
-    #[test]
-    fn write_claude_settings_no_change_returns_false() {
-        let (tmp, generator) = setup();
-
-        let settings = make_settings(&["Read"], &[]);
-        generator
-            .write_claude_settings(&settings)
-            .expect("first write");
-
-        let result = generator
-            .write_claude_settings(&settings)
-            .expect("second write");
-        let _ = tmp;
-        assert!(
-            !result,
-            "second write with same content should return false"
-        );
-    }
-
-    #[test]
-    fn write_claude_settings_union_merge_no_duplicates() {
-        let (tmp, generator) = setup();
-        let settings_path = tmp.path().join(".claude").join("settings.json");
-        fs::create_dir_all(settings_path.parent().unwrap()).expect("create .claude");
-        fs::write(
-            &settings_path,
-            r#"{"permissions":{"allow":["Read","Bash(git status)"],"deny":[]}}"#,
-        )
-        .expect("write existing");
-
-        let settings = make_settings(&["Read", "Write"], &[]);
-        generator.write_claude_settings(&settings).expect("write");
-
-        let content = fs::read_to_string(&settings_path).expect("read");
-        let parsed: serde_json::Value = serde_json::from_str(&content).expect("parse");
-        let allow = parsed["permissions"]["allow"].as_array().expect("array");
-        let read_count = allow.iter().filter(|v| v.as_str() == Some("Read")).count();
-        assert_eq!(
-            read_count, 1,
-            "Read should appear only once after union merge"
         );
     }
 }

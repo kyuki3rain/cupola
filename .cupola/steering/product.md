@@ -15,9 +15,11 @@ Design and implementation are executed through bundled `/cupola:*` skills (Claud
 
 Deployed to `.claude/commands/cupola/` by `cupola init`:
 
+- **`/cupola:spec-init`**: Initialize a new spec directory (`spec.json` + `requirements.md` scaffolding)
 - **`/cupola:spec-design`**: One-pass generation of requirements (EARS format), research, design, and tasks from an Issue description
 - **`/cupola:spec-impl`**: TDD-based implementation of spec tasks
 - **`/cupola:spec-compress`**: Archive and summarize completed specs
+- **`/cupola:fix`**: Address review comments, CI failures, and merge conflicts on a Cupola-managed PR
 - **`/cupola:steering`**: Maintain `.cupola/steering/` as persistent project memory
 
 ## Target Use Cases

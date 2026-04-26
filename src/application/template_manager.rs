@@ -37,6 +37,13 @@ const TEMPLATES: &[(&str, &str)] = &[
             "/assets/claude-settings/go.json"
         )),
     ),
+    (
+        "devbox",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/claude-settings/devbox.json"
+        )),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -178,6 +185,40 @@ mod tests {
         assert!(
             settings.permissions.allow.iter().any(|a| a.contains("npm")),
             "typescript template should be present"
+        );
+    }
+
+    #[test]
+    fn build_settings_with_devbox_template() {
+        let settings = TemplateManager::build_settings(&["devbox"]).expect("build");
+        assert!(
+            settings
+                .permissions
+                .allow
+                .iter()
+                .any(|a| a == "Bash(devbox*)"),
+            "devbox template should add Bash(devbox*)"
+        );
+    }
+
+    #[test]
+    fn build_settings_merges_rust_and_devbox() {
+        let settings = TemplateManager::build_settings(&["rust", "devbox"]).expect("build");
+        assert!(
+            settings
+                .permissions
+                .allow
+                .iter()
+                .any(|a| a.contains("cargo")),
+            "rust template cargo entries should be present"
+        );
+        assert!(
+            settings
+                .permissions
+                .allow
+                .iter()
+                .any(|a| a == "Bash(devbox*)"),
+            "devbox template should be merged in"
         );
     }
 
