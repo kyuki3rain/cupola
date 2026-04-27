@@ -161,6 +161,31 @@ impl DbInitializer for SqliteConnection {
 }
 
 #[cfg(test)]
+impl SqliteConnection {
+    #[allow(clippy::expect_used)]
+    pub fn dump_schema(&self) -> String {
+        let conn = self.conn_lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT sql FROM sqlite_master \
+                 WHERE type IN ('table', 'index') AND sql IS NOT NULL \
+                 ORDER BY name",
+            )
+            .expect("prepare dump_schema");
+        let rows: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query dump_schema")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect dump_schema rows");
+        if rows.is_empty() {
+            String::new()
+        } else {
+            rows.join(";\n") + ";"
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -304,5 +329,40 @@ mod tests {
         db.init_schema().expect("first init");
         db.init_schema()
             .expect("second init should succeed (idempotent)");
+    }
+
+    #[test]
+    fn dump_schema_returns_schema_after_init() {
+        let db = SqliteConnection::open_in_memory().expect("should open");
+        db.init_schema().expect("init_schema");
+        let schema = db.dump_schema();
+        assert!(
+            schema.contains("last_pr_review_submitted_at"),
+            "schema should include last_pr_review_submitted_at column"
+        );
+        assert!(
+            schema.contains("body_hash"),
+            "schema should include body_hash column"
+        );
+    }
+
+    #[test]
+    fn dump_schema_is_consistent_across_connections() {
+        let db1 = SqliteConnection::open_in_memory().expect("open db1");
+        db1.init_schema().expect("init db1");
+        let db2 = SqliteConnection::open_in_memory().expect("open db2");
+        db2.init_schema().expect("init db2");
+        assert_eq!(
+            db1.dump_schema(),
+            db2.dump_schema(),
+            "same schema should produce identical dump_schema output"
+        );
+    }
+
+    #[test]
+    fn dump_schema_empty_on_fresh_db() {
+        let db = SqliteConnection::open_in_memory().expect("should open");
+        let schema = db.dump_schema();
+        assert!(schema.is_empty(), "fresh db should have empty dump_schema");
     }
 }

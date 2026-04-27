@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- DB マイグレーション回帰テスト (`tests/migrations/`) を追加 ([#327])
+  - `SqliteConnection::dump_schema()` テスト用ヘルパーを追加 (`#[cfg(test)]`)
+  - `v0001-initial` fixture と `current-schema.sql` スナップショットを追加
+  - `migrate_v0001_is_idempotent` / `fixture_reaches_current_schema` テストを追加
+
+### Note
+- スキーマを変更する PR では `tests/migrations/fixtures/` に新規 fixture を追加すること
+  (`docs/tests/migration-test.md` の section 3 / 5 を参照)
+
 ## [0.1.0] - 2026-04-01
 
 ### Added

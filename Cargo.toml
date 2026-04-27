@@ -38,6 +38,10 @@ tokio = { version = "1", features = ["test-util"] }
 tracing-core = "0.1"
 wiremock = "0.6"
 
+[[test]]
+name = "migrations"
+path = "tests/migrations/mod.rs"
+
 [lints.clippy]
 all = { level = "warn", priority = -1 }
 expect_used = "deny"
