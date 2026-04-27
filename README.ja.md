@@ -245,16 +245,16 @@ templates = ["rust", "devbox"]
 
 ### Permission テンプレート一覧
 
-利用可能な組み込みテンプレート：
+以下は各テンプレートで追加される allow 操作の**概要**です。厳密な allow パターンは `assets/claude-settings/*.json` を参照してください。
 
-| キー | 追加される allow 操作 | 対象環境 |
-|------|----------------------|---------|
-| `base` | git 操作（add/commit/checkout/branch/fetch/pull/stash/show）、基本ファイル操作（ls/find/grep/cat/echo/mkdir/cp/mv/touch） | 常に暗黙適用 |
-| `rust` | `Bash(cargo build/test/clippy/fmt/check/run/doc*)`, `Bash(rustup*)` | Rust プロジェクト |
-| `typescript` | `Bash(npm*)`, `Bash(npx*)`, `Bash(node*)`, `Bash(tsc*)` | TypeScript/Node プロジェクト |
-| `python` | `Bash(python*)`, `Bash(pip*)`, `Bash(pytest*)`, `Bash(uv*)`, `Bash(ruff*)` | Python プロジェクト |
-| `go` | `Bash(go build/test/run/fmt/vet/mod*)` | Go プロジェクト |
-| `devbox` | `Bash(devbox*)` | Devbox 管理環境 |
+| キー | 追加される allow 操作の概要 | 対象環境 |
+|------|---------------------------|---------| 
+| `base` | git 操作、および基本的なファイル操作 | 常に暗黙適用 |
+| `rust` | Rust 開発で一般的に使う `cargo` / `rustup` 系の操作 | Rust プロジェクト |
+| `typescript` | TypeScript / Node 開発で一般的に使う `npm` / `npx` / `node` / `tsc` 系の操作 | TypeScript/Node プロジェクト |
+| `python` | Python 開発で一般的に使う `python` / `pip` / `pytest` / `uv` / `ruff` 系の操作 | Python プロジェクト |
+| `go` | Go 開発で一般的に使う `go` 系の操作 | Go プロジェクト |
+| `devbox` | Devbox 管理で一般的に使う `devbox` 系の操作 | Devbox 管理環境 |
 
 permission モデルの詳細は [SECURITY.md](SECURITY.md) を参照してください。
 

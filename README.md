@@ -259,14 +259,16 @@ templates = ["rust", "devbox"]
 
 The following built-in templates are available:
 
-| Key | Added allow operations | Notes |
-|-----|------------------------|-------|
-| `base` | git operations (add/commit/checkout/branch/fetch/pull/stash/show), basic file ops (ls/find/grep/cat/echo/mkdir/cp/mv/touch) | Always applied implicitly |
-| `rust` | `Bash(cargo build/test/clippy/fmt/check/run/doc*)`, `Bash(rustup*)` | Rust projects |
-| `typescript` | `Bash(npm*)`, `Bash(npx*)`, `Bash(node*)`, `Bash(tsc*)` | TypeScript/Node projects |
-| `python` | `Bash(python*)`, `Bash(pip*)`, `Bash(pytest*)`, `Bash(uv*)`, `Bash(ruff*)` | Python projects |
-| `go` | `Bash(go build/test/run/fmt/vet/mod*)` | Go projects |
-| `devbox` | `Bash(devbox*)` | Devbox-managed environments |
+| Key | Purpose | Notes |
+|-----|---------|-------|
+| `base` | Core git and basic file operations | Always applied implicitly |
+| `rust` | Rust toolchain and Cargo workflows | Rust projects |
+| `typescript` | TypeScript/Node.js development workflows | TypeScript/Node projects |
+| `python` | Python tooling and test workflows | Python projects |
+| `go` | Go development workflows | Go projects |
+| `devbox` | Devbox-managed environment workflows | Devbox-managed environments |
+
+Exact allow entries are defined in `assets/claude-settings/*.json`.
 
 See [SECURITY.md](SECURITY.md) for a full explanation of the permission model.
 

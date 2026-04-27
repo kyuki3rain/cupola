@@ -156,7 +156,7 @@ cupola.toml [claude_code.permissions]
         │
         ▼
   Claude Code subprocess
-  ├── --allowedTools "Read,Write,Bash(cargo*)..."
+  ├── --allowedTools "Read,Write,Bash(cargo build*),Bash(cargo test*),Bash(cargo clippy*)..."
   └── --disallowedTools "Bash(gh*),Bash(git push*)..."
 ```
 
@@ -177,14 +177,14 @@ operations that Cupola itself manages (push, GitHub CLI) can only be performed b
 
 ### Built-in Templates
 
-| Key | Added allow operations | Notes |
-|-----|------------------------|-------|
-| `base` | git (add/commit/checkout/branch/fetch/pull/stash/show), basic file ops (ls/find/grep/cat/echo/mkdir/cp/mv/touch) | Always applied implicitly |
-| `rust` | `Bash(cargo build/test/clippy/fmt/check/run/doc*)`, `Bash(rustup*)` | Rust projects |
-| `typescript` | `Bash(npm*)`, `Bash(npx*)`, `Bash(node*)`, `Bash(tsc*)` | TypeScript/Node projects |
-| `python` | `Bash(python*)`, `Bash(pip*)`, `Bash(pytest*)`, `Bash(uv*)`, `Bash(ruff*)` | Python projects |
-| `go` | `Bash(go build/test/run/fmt/vet/mod*)` | Go projects |
-| `devbox` | `Bash(devbox*)` | Devbox-managed environments |
+| Key | Example added allow operations | Notes |
+|-----|--------------------------------|-------|
+| `base` | Examples: `Bash(git add*)`, `Bash(git commit*)`, `Bash(ls*)`, `Bash(find*)` | Always applied implicitly; see `assets/claude-settings/*.json` for the exact built-in entries |
+| `rust` | Examples: `Bash(cargo build*)`, `Bash(cargo test*)`, `Bash(rustup*)` | Rust projects |
+| `typescript` | Examples: `Bash(npm install*)`, `Bash(npx*)`, `Bash(node*)`, `Bash(tsc*)` | TypeScript/Node projects |
+| `python` | Examples: `Bash(python*)`, `Bash(pip*)`, `Bash(pytest*)`, `Bash(uv*)`, `Bash(ruff*)` | Python projects |
+| `go` | Examples: `Bash(go build*)`, `Bash(go test*)`, `Bash(go run*)`, `Bash(go fmt*)`, `Bash(go vet*)`, `Bash(go mod*)` | Go projects |
+| `devbox` | Example: `Bash(devbox*)` | Devbox-managed environments |
 
 ### Configuration
 
