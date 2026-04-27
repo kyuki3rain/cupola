@@ -31,7 +31,7 @@ Collect は純粋な観測のみで DB を書かない。
 
 | 操作 | タイミング | 主体 |
 |------|-----------|------|
-| セット | `Idle → InitializeRunning` 遷移時（デフォルト: `issue-{N}`） | Persist（Decide が決定） |
+| セット | Collect の Discovery で新規 issue を DB 登録する時（デフォルト: `issue-{N}`） | Collect |
 
 ---
 
