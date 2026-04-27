@@ -76,6 +76,7 @@ CHANGELOG.md                            ← [Unreleased] セクション更新
 
 ```rust
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 pub fn dump_schema(&self) -> String {
     let conn = self.conn_lock();
     let mut stmt = conn
@@ -88,8 +89,8 @@ pub fn dump_schema(&self) -> String {
     let rows: Vec<String> = stmt
         .query_map([], |row| row.get::<_, String>(0))
         .expect("query dump_schema")
-        .filter_map(Result::ok)
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect dump_schema rows");
     if rows.is_empty() {
         String::new()
     } else {
@@ -97,6 +98,11 @@ pub fn dump_schema(&self) -> String {
     }
 }
 ```
+
+**clippy 対応**:
+- `src/` に置かれた `#[cfg(test)]` ブロックも `cargo clippy --all-targets` の対象となる
+- `expect_used = "deny"` に対応するため、関数に `#[allow(clippy::expect_used)]` を付与する
+- `tests/migrations/mod.rs` にも `#![allow(clippy::expect_used)]` をファイル先頭に記述する（既存の `tests/scenarios.rs` / `tests/integration_test.rs` と同様の方針）
 
 **補足**:
 - `sqlite_master` の `sql` カラムには SQLite が管理する DDL テキストが格納される
@@ -286,6 +292,9 @@ std::fs::write("tests/migrations/snapshots/current-schema.sql", schema).unwrap()
 
 同様に `#[test] #[ignore]` 付きの生成テストとして記述し、一度実行後に commit する。
 
+**`docs/tests/migration-test.md` との整合**:
+`migration-test.md` の section 3 / 5 では `sqlite3 /tmp/latest.db .schema` でスナップショットを生成する手順を記述しているが、テスト（section 4.3）では `dump_schema()` の出力と比較する。両者の出力フォーマットが一致するとは限らないため、本設計では `dump_schema()` 出力を正とし、実装フェーズで `migration-test.md` の手順も `dump_schema()` を使う形に更新する。
+
 ---
 
 ### `Cargo.toml` の変更
@@ -325,7 +334,7 @@ path = "tests/migrations/mod.rs"
 | `current-schema.sql` 読み取り失敗 | `fixture_reaches_current_schema` | `.expect("read current-schema.sql")` でパニック |
 | スキーマ不一致 | `fixture_reaches_current_schema` | `assert_eq!` で差分を含むエラーメッセージを表示して失敗 |
 
-テストコード内では `expect_used` clippy lint が deny になっているが、テストファイル (`tests/`) は `[lints.clippy]` の適用外であるため問題ない。
+テストコードも CI の `cargo clippy --all-targets` の対象である。したがって、`expect_used` を利用する `tests/migrations/` や `dump_schema()` では、既存テストと同様に `#![allow(clippy::expect_used)]` などの明示的な lint 回避を入れる前提とする。
 
 ## Testing Strategy
 
