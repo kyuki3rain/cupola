@@ -7,7 +7,7 @@
 - **Persist**: Decide の決定を DB にコミットする
 - **Execute**: 副作用実行時に更新（プロセス起動・cleanup 時）
 
-Collect は純粋な観測のみで DB を書かない。
+Collect は原則として純粋な観測のみで DB を書かない。ただし Discovery（新規 issue 登録）では例外的に INSERT を行う（`feature_name` の初期値セットを含む）。
 
 ## Issue テーブル
 
