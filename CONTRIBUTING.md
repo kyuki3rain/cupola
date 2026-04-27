@@ -82,6 +82,98 @@ cargo test          # Run all tests
 
 All three must pass. CI enforces these checks on every pull request.
 
+## Adding a New Permission Template
+
+Permission templates define which tools Claude Code subprocesses are allowed or denied to use.
+Follow these steps to add a new built-in template.
+
+### 1. Create the template file
+
+Create `assets/claude-settings/<key>.json` with the following minimal structure:
+
+```json
+{
+  "permissions": {
+    "allow": ["Bash(<cmd>*)"]
+  }
+}
+```
+
+To also restrict tools, add a `deny` array:
+
+```json
+{
+  "permissions": {
+    "allow": ["Bash(<cmd>*)"],
+    "deny": ["Bash(<restricted-cmd>*)"]
+  }
+}
+```
+
+Only list the operations that are *specific to this template*. The `base` template's entries
+are always merged in automatically.
+
+### 2. Register the template in `TEMPLATES`
+
+Add an entry to the `TEMPLATES` constant in
+`src/application/template_manager.rs`:
+
+```rust
+(
+    "<key>",
+    include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/claude-settings/<key>.json"
+    )),
+),
+```
+
+### 3. Add tests
+
+In the `#[cfg(test)]` block of `src/application/template_manager.rs`, add at least two tests:
+
+- **Single-template test**: verify that `build_settings(&["<key>"])` produces the expected
+  allow entries.
+- **Merge test**: verify that `build_settings(&["<key>", "<other>"])` includes entries from
+  both templates.
+
+```rust
+#[test]
+fn build_settings_with_<key>_template() {
+    let settings = TemplateManager::build_settings(&["<key>"]).expect("build");
+    assert!(
+        settings.permissions.allow.iter().any(|a| a.contains("<cmd>")),
+        "<key> template should add <cmd> commands"
+    );
+}
+
+#[test]
+fn build_settings_merges_<key>_and_base() {
+    let settings = TemplateManager::build_settings(&["<key>", "rust"]).expect("build");
+    assert!(settings.permissions.allow.iter().any(|a| a.contains("<cmd>")));
+    assert!(settings.permissions.allow.iter().any(|a| a.contains("cargo")));
+}
+```
+
+Run `cargo test` to confirm all tests pass.
+
+### 4. Update the README template tables
+
+Add the new template to the table in both:
+
+- `README.md` — [Permission Templates](#permission-templates) section
+- `README.ja.md` — `### Permission テンプレート一覧` section
+
+### 5. Naming conventions
+
+Choose a key that follows these conventions:
+
+| Category | Examples | Rule |
+|----------|---------|------|
+| Language | `rust`, `python`, `go` | Lowercase language name |
+| Ecosystem / tool | `devbox`, `docker` | Lowercase tool name |
+| Framework | `nextjs`, `rails` | Lowercase framework name |
+
 ## Architecture
 
 Cupola follows Clean Architecture with 4 layers. See the [Architecture Overview](README.md#architecture-overview) in the README for details.

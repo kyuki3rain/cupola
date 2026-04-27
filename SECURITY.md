@@ -132,6 +132,74 @@ If an Issue body change is intentional and acceptable, a trusted user can resume
   whose login is explicitly listed in `trusted_reviewers`. Do not use Issue body edits to
   send change requests to the agent; use PR review comments instead.
 
+## Permission Model
+
+Cupola controls what the Claude Code subprocess is allowed to do by passing explicit permission
+flags at spawn time. This design isolates agent permissions from your interactive Claude Code
+session.
+
+### How It Works
+
+When Cupola spawns a Claude Code subprocess, it passes `--allowedTools` and `--disallowedTools`
+CLI flags derived from the active permission templates. Cupola **never** writes to
+`.claude/settings.json`, so your interactive Claude Code sessions are completely unaffected.
+
+```
+cupola.toml [claude_code.permissions]
+  └── templates = ["rust", "devbox"]
+        │
+        ▼
+  TemplateManager::build_settings()
+  ├── "base" is always applied first (implicit)
+  ├── specified templates merged in order
+  └── allow/deny deduplicated
+        │
+        ▼
+  Claude Code subprocess
+  ├── --allowedTools "Read,Write,Bash(cargo build*),Bash(cargo test*),Bash(cargo clippy*)..."
+  └── --disallowedTools "Bash(gh*),Bash(git push*)..."
+```
+
+The subprocess is **never** started with `--dangerously-skip-permissions`.
+
+### Base Template Deny List
+
+The `base` template always applies and includes the following deny entries, ensuring that
+operations that Cupola itself manages (push, GitHub CLI) can only be performed by Cupola:
+
+| Denied tool | Reason |
+|-------------|--------|
+| `Bash(git push*)` | Pushes are managed by Cupola |
+| `Bash(gh*)` | GitHub API calls are managed by Cupola |
+| `Bash(rm -rf*)` | Prevent accidental recursive deletion |
+| `Bash(curl*)`, `Bash(wget*)`, `Bash(ssh*)` | Prevent unexpected network/shell access |
+| `WebFetch`, `WebSearch` | Prevent uncontrolled web access |
+
+### Built-in Templates
+
+| Key | Example added allow operations | Notes |
+|-----|--------------------------------|-------|
+| `base` | Examples: `Bash(git add*)`, `Bash(git commit*)`, `Bash(ls*)`, `Bash(find*)` | Always applied implicitly; see `assets/claude-settings/*.json` for the exact built-in entries |
+| `rust` | Examples: `Bash(cargo build*)`, `Bash(cargo test*)`, `Bash(rustup*)` | Rust projects |
+| `typescript` | Examples: `Bash(npm install*)`, `Bash(npx*)`, `Bash(node*)`, `Bash(tsc*)` | TypeScript/Node projects |
+| `python` | Examples: `Bash(python*)`, `Bash(pip*)`, `Bash(pytest*)`, `Bash(uv*)`, `Bash(ruff*)` | Python projects |
+| `go` | Examples: `Bash(go build*)`, `Bash(go test*)`, `Bash(go run*)`, `Bash(go fmt*)`, `Bash(go vet*)`, `Bash(go mod*)` | Go projects |
+| `devbox` | Example: `Bash(devbox*)` | Devbox-managed environments |
+
+### Configuration
+
+In your `cupola.toml`:
+
+```toml
+[claude_code.permissions]
+templates = ["rust", "devbox"]
+# extra_allow = ["Bash(my-tool*)"]   # add tool-specific allowances
+# extra_deny = ["Bash(forbidden*)"]  # enforce additional restrictions
+```
+
+`base` is always applied first regardless of the `templates` value. Extra entries are merged
+after template resolution and follow the same allow/deny semantics.
+
 ## Reporting Security Vulnerabilities
 
 Please report security vulnerabilities by opening a GitHub Issue with the `security` label,
