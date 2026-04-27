@@ -82,7 +82,7 @@ fn check_env_allowlist(summary: &DoctorConfigSummary) -> DoctorCheckResult {
                     .to_string(),
             ),
             remediation: Some(
-                "cupola.toml の extra_allow から \"*\" を削除し、必要な変数名を明示的に指定してください"
+                "cupola.toml の `extra_allow` から `\"*\"` を削除し、必要な変数名を明示的に指定してください"
                     .to_string(),
             ),
         };
@@ -125,7 +125,7 @@ fn check_env_allowlist(summary: &DoctorConfigSummary) -> DoctorCheckResult {
                 "潜在的に危険なパターンが extra_allow に含まれています: {dangerous_list}"
             )),
             remediation: Some(
-                "不要であれば cupola.toml の extra_allow から削除してください".to_string(),
+                "不要であれば cupola.toml の `extra_allow` から削除してください".to_string(),
             ),
         }
     }
@@ -150,7 +150,7 @@ async fn check_pending_ci_fix_limit_notifications(
                         "CI 修正上限通知が未送信の Issue が {pending_count} 件あります"
                     )),
                     remediation: Some(
-                        "GitHub の通信状況を確認の上、cupola start で再度ポーリングを実行してください"
+                        "GitHub の通信状況を確認の上、`cupola start` で再度ポーリングを実行してください"
                             .to_string(),
                     ),
                 }
@@ -169,7 +169,7 @@ async fn check_pending_ci_fix_limit_notifications(
             section: DoctorSection::OperationalReadiness,
             name: "ci-fix-limit notification".to_string(),
             status: CheckStatus::Warn(format!("Issue 一覧の取得に失敗しました: {e}")),
-            remediation: Some("cupola init で DB を初期化してください".to_string()),
+            remediation: Some("`cupola init` で DB を初期化してください".to_string()),
         },
     }
 }
@@ -215,7 +215,9 @@ fn check_git(runner: &dyn CommandRunner) -> DoctorCheckResult {
             section: DoctorSection::StartReadiness,
             name: "git".to_string(),
             status: CheckStatus::Fail(format!("git の確認中にエラーが発生しました: {e}")),
-            remediation: Some("git をインストールしてください: https://git-scm.com/".to_string()),
+            remediation: Some(
+                "`git` をインストールしてください (https://git-scm.com/)".to_string(),
+            ),
         },
         Ok(output) if output.success => DoctorCheckResult {
             section: DoctorSection::StartReadiness,
@@ -227,7 +229,9 @@ fn check_git(runner: &dyn CommandRunner) -> DoctorCheckResult {
             section: DoctorSection::StartReadiness,
             name: "git".to_string(),
             status: CheckStatus::Fail("git がインストールされていません".to_string()),
-            remediation: Some("git をインストールしてください: https://git-scm.com/".to_string()),
+            remediation: Some(
+                "`git` をインストールしてください (https://git-scm.com/)".to_string(),
+            ),
         },
         Ok(output) => DoctorCheckResult {
             section: DoctorSection::StartReadiness,
@@ -236,7 +240,9 @@ fn check_git(runner: &dyn CommandRunner) -> DoctorCheckResult {
                 "git の実行に失敗しました: {}",
                 output.stderr.trim()
             )),
-            remediation: Some("git をインストールしてください: https://git-scm.com/".to_string()),
+            remediation: Some(
+                "`git` をインストールしてください (https://git-scm.com/)".to_string(),
+            ),
         },
     }
 }
@@ -262,7 +268,7 @@ fn check_github_token(runner: &dyn CommandRunner) -> DoctorCheckResult {
             name: "github token".to_string(),
             status: CheckStatus::Fail("gh CLI がインストールされていません".to_string()),
             remediation: Some(
-                "gh CLI をインストールしてください: https://cli.github.com/".to_string(),
+                "`gh` をインストールしてください (https://cli.github.com/)".to_string(),
             ),
         },
         Ok(_) => DoctorCheckResult {
@@ -280,7 +286,9 @@ fn check_claude(runner: &dyn CommandRunner) -> DoctorCheckResult {
             section: DoctorSection::StartReadiness,
             name: "claude CLI".to_string(),
             status: CheckStatus::Fail(format!("claude CLI の確認中にエラーが発生しました: {e}")),
-            remediation: Some("https://claude.ai/code からインストールしてください".to_string()),
+            remediation: Some(
+                "`claude` をインストールしてください (https://claude.ai/code)".to_string(),
+            ),
         },
         Ok(output) if output.success => DoctorCheckResult {
             section: DoctorSection::StartReadiness,
@@ -294,7 +302,9 @@ fn check_claude(runner: &dyn CommandRunner) -> DoctorCheckResult {
             status: CheckStatus::Fail(
                 "claude CLI がインストールされていないか正常に動作しません".to_string(),
             ),
-            remediation: Some("https://claude.ai/code からインストールしてください".to_string()),
+            remediation: Some(
+                "`claude` をインストールしてください (https://claude.ai/code)".to_string(),
+            ),
         },
     }
 }
@@ -399,7 +409,7 @@ fn check_labels(runner: &dyn CommandRunner) -> [DoctorCheckResult; 2] {
                     "gh CLI がインストールされていないため、ラベルを確認できません".to_string(),
                 ),
                 remediation: Some(
-                    "gh CLI をインストールしてください: https://cli.github.com/".to_string(),
+                    "`gh` をインストールしてください (https://cli.github.com/)".to_string(),
                 ),
             },
             DoctorCheckResult {
@@ -409,7 +419,7 @@ fn check_labels(runner: &dyn CommandRunner) -> [DoctorCheckResult; 2] {
                     "gh CLI がインストールされていないため、ラベルを確認できません".to_string(),
                 ),
                 remediation: Some(
-                    "gh CLI をインストールしてください: https://cli.github.com/".to_string(),
+                    "`gh` をインストールしてください (https://cli.github.com/)".to_string(),
                 ),
             },
         ]
