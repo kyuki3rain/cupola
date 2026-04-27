@@ -16,6 +16,7 @@ Issue-driven local agent control plane for spec-driven development.
 - [CLI Command Reference](#cli-command-reference)
 - [Configuration Reference](#configuration-reference)
 - [Security: trusted_associations](#security-trusted_associations)
+- [Permission Model](#permission-model)
 - [Fork Workflow for External Contributors](#fork-workflow-for-external-contributors)
 - [Architecture Overview](#architecture-overview)
 - [Limitations](#limitations)
@@ -168,6 +169,25 @@ Bootstraps Cupola into the current repository for the target agent runtime.
 cupola init
 ```
 
+The `--template` option specifies which permission templates to apply to Claude Code subprocesses
+spawned by Cupola. The `base` template is always applied; additional templates enable language-
+or tool-specific commands.
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--template <key>[,<key>]` | Permission templates to apply | `base` only |
+
+```bash
+# Rust project with devbox environment
+cupola init --template rust,devbox
+
+# TypeScript project
+cupola init --template typescript
+```
+
+The selected templates are saved to `cupola.toml` under `[claude_code.permissions].templates`
+and can be updated manually at any time.
+
 ### `cupola status`
 
 Lists the processing status of all Issues.
@@ -202,6 +222,9 @@ The configuration file is located at `.cupola/cupola.toml`.
 | `trusted_associations` | Array of String or `["all"]` | `["OWNER", "MEMBER", "COLLABORATOR"]` | Author associations trusted to trigger the agent |
 | `[log] level` | String | `"info"` | Log level |
 | `[log] dir` | String | — (optional) | Log output directory |
+| `[claude_code.permissions] templates` | Array of String | `[]` (= `base` only) | Permission template keys to apply |
+| `[claude_code.permissions] extra_allow` | Array of String | `[]` | Additional allow entries merged after templates |
+| `[claude_code.permissions] extra_deny` | Array of String | `[]` | Additional deny entries merged after templates |
 
 Full configuration example:
 
@@ -225,7 +248,27 @@ trusted_associations = ["OWNER", "MEMBER", "COLLABORATOR"]
 [log]
 level = "info"
 dir = ".cupola/logs"
+
+[claude_code.permissions]
+templates = ["rust", "devbox"]
+# extra_allow = ["Bash(my-tool*)"]
+# extra_deny = ["Bash(forbidden-cmd)"]
 ```
+
+### Permission Templates
+
+The following built-in templates are available:
+
+| Key | Added allow operations | Notes |
+|-----|------------------------|-------|
+| `base` | git operations (add/commit/checkout/branch/fetch/pull/stash/show), basic file ops (ls/find/grep/cat/echo/mkdir/cp/mv/touch) | Always applied implicitly |
+| `rust` | `Bash(cargo build/test/clippy/fmt/check/run/doc*)`, `Bash(rustup*)` | Rust projects |
+| `typescript` | `Bash(npm*)`, `Bash(npx*)`, `Bash(node*)`, `Bash(tsc*)` | TypeScript/Node projects |
+| `python` | `Bash(python*)`, `Bash(pip*)`, `Bash(pytest*)`, `Bash(uv*)`, `Bash(ruff*)` | Python projects |
+| `go` | `Bash(go build/test/run/fmt/vet/mod*)` | Go projects |
+| `devbox` | `Bash(devbox*)` | Devbox-managed environments |
+
+See [SECURITY.md](SECURITY.md) for a full explanation of the permission model.
 
 ## Security: trusted_associations
 
@@ -246,6 +289,24 @@ GitHub `author_association` to:
 repositories** where all users are trusted.
 
 See [SECURITY.md](SECURITY.md) for a detailed explanation of the security model.
+
+## Permission Model
+
+Cupola controls Claude Code subprocess permissions via `--allowedTools` / `--disallowedTools`
+CLI flags. It **never** writes to `.claude/settings.json`, so your interactive Claude Code
+sessions are unaffected.
+
+Configure permissions in `cupola.toml`:
+
+```toml
+[claude_code.permissions]
+templates = ["rust", "devbox"]
+# extra_allow = ["Bash(my-tool*)"]
+# extra_deny = ["Bash(forbidden*)"]
+```
+
+See [Configuration Reference](#configuration-reference) for available templates and field
+descriptions, and [SECURITY.md](SECURITY.md) for the full security model.
 
 ## Fork Workflow for External Contributors
 
