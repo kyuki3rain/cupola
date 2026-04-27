@@ -114,7 +114,7 @@ templates = ["rust", "devbox"]
 
 #### Acceptance Criteria
 
-2.1. When README.md の `cupola init` コマンド説明を読むとき、the ドキュメント shall `--template` オプションの用途と使い方（例: `--template rust,devbox`、`--template typescript`）を含む
+2.1. When a user reads the README.md `cupola init` section, the document shall include the purpose and usage of the `--template` option, including examples such as `--template rust,devbox` and `--template typescript`
 
 2.2. The README.md shall Configuration Reference に `[claude_code.permissions]` セクションの説明（`templates`, `extra_allow`, `extra_deny` フィールド）を追加する
 
@@ -130,7 +130,7 @@ templates = ["rust", "devbox"]
 
 #### Acceptance Criteria
 
-3.1. When README.ja.md の `cupola init` コマンド説明を読むとき、the ドキュメント shall `--template` オプションの用途と使い方の日本語説明を含む
+3.1. README.ja.md の `cupola init` コマンド説明を読む場合、当該ドキュメントは `--template` オプションの用途と使い方の日本語説明を含むこと
 
 3.2. The README.ja.md shall 設定リファレンスに `[claude_code.permissions]` セクションの日本語説明（`templates`, `extra_allow`, `extra_deny` フィールド）を追加する
 

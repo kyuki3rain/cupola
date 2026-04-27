@@ -72,7 +72,7 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         upgrade: bool,
         /// Permission template keys (comma-separated, e.g. "rust" or "rust,typescript").
-        /// Available: base, rust, typescript, python, go.
+        /// Available: base, rust, typescript, python, go, devbox.
         /// base is always applied; specifying it explicitly is allowed but not required.
         #[arg(long, value_delimiter = ',')]
         template: Vec<String>,

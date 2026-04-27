@@ -27,11 +27,12 @@
 - **Findings**:
   - `cupola init --template <key>[,<key>]` でカンマ区切り複数指定が可能
   - 組み込みテンプレート: `base`, `rust`, `typescript`, `python`, `go`, `devbox`
+  - `src/adapter/inbound/cli.rs` の `cupola init --help` 文言は当初 `Available: base, rust, typescript, python, go.` となっており、`TemplateManager::TEMPLATES` と一致せず `devbox` が欠けていた（本設計フェーズで修正済み）
   - `base` は常に暗黙に適用（明示指定も可だが二重適用されない）
   - `extra_allow` / `extra_deny` でテンプレート解決後の allow/deny リストをカスタマイズ可能
   - spawn 時に `--allowedTools` / `--disallowedTools` CLI フラグとして Claude Code に渡される
   - `.claude/settings.json` への書き込みは行わない
-- **Implications**: ドキュメントには `base` が暗黙適用される動作を明示する必要がある
+- **Implications**: ドキュメントには `base` が暗黙適用される動作を明示する必要がある。利用可能テンプレート一覧の正とする情報源は `TemplateManager::TEMPLATES` であり、CLI ヘルプ文言と乖離が生じた場合は `src/adapter/inbound/cli.rs` も合わせて更新すること
 
 ### 既存ドキュメントの現状調査
 

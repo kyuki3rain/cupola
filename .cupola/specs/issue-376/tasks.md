@@ -53,14 +53,14 @@
   - `deny` フィールドを追加する場合の例も記載する
   - _Requirements: 4.1_
 
-- [ ] 4.2 TEMPLATES 配列への登録手順を記載する
-  - `src/application/template_manager.rs` の `TEMPLATES` 定数への `("<key>", include_str!(...))` 追加方法をコードスニペット付きで説明する
+- [ ] 4.2 新 template を利用可能にする登録手順を記載する
+  - 新しい template をアプリケーションから選択・適用できるようにするための登録手順を、コード断片や内部識別子に依存せず記載する
   - _Requirements: 4.2_
 
 - [ ] 4.3 テスト追加要件を記載する
-  - 単独指定テスト（`build_settings(&["<key>"])` で期待する allow エントリを検証）の例を記載する
-  - 他テンプレートとの merge テスト（`build_settings(&["<key>", "rust"])` 等）の例を記載する
-  - `template_manager.rs` の `#[cfg(test)]` ブロックへの追加を指示する
+  - 新 template を単独指定した場合に期待する allow 設定になることを確認するテスト要件を記載する
+  - 既存 template と組み合わせた場合に設定が正しくマージされることを確認するテスト要件を記載する
+  - 新 template 追加時には関連する自動テストも更新することを明記する
   - _Requirements: 4.3_
 
 - [ ] 4.4 README テンプレート一覧更新と命名規則を記載する
