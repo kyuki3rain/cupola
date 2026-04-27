@@ -160,7 +160,6 @@ impl DbInitializer for SqliteConnection {
     }
 }
 
-#[cfg(test)]
 impl SqliteConnection {
     #[allow(clippy::expect_used)]
     pub fn dump_schema(&self) -> String {

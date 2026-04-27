@@ -2,34 +2,13 @@
 
 use cupola::adapter::outbound::sqlite_connection::SqliteConnection;
 
-fn load_fixture(name: &str) -> (SqliteConnection, tempfile::TempDir) {
+fn load_fixture(name: &str) -> (tempfile::TempDir, SqliteConnection) {
     let src = format!("tests/migrations/fixtures/{name}.db");
     let dir = tempfile::tempdir().expect("create temp dir");
     let dst = dir.path().join("fixture.db");
     std::fs::copy(&src, &dst).expect("copy fixture");
     let conn = SqliteConnection::open(&dst).expect("open fixture");
-    (conn, dir)
-}
-
-fn dump_schema(conn: &SqliteConnection) -> String {
-    let guard = conn.conn().lock().expect("lock");
-    let mut stmt = guard
-        .prepare(
-            "SELECT sql FROM sqlite_master \
-             WHERE type IN ('table', 'index') AND sql IS NOT NULL \
-             ORDER BY name",
-        )
-        .expect("prepare dump_schema");
-    let rows: Vec<String> = stmt
-        .query_map([], |row| row.get::<_, String>(0))
-        .expect("query dump_schema")
-        .collect::<Result<Vec<_>, _>>()
-        .expect("collect dump_schema rows");
-    if rows.is_empty() {
-        String::new()
-    } else {
-        rows.join(";\n") + ";"
-    }
+    (dir, conn)
 }
 
 fn normalize_schema(s: &str) -> String {
@@ -42,7 +21,7 @@ fn normalize_schema(s: &str) -> String {
 
 #[test]
 fn migrate_v0001_is_idempotent() {
-    let (conn, _dir) = load_fixture("v0001-initial");
+    let (_dir, conn) = load_fixture("v0001-initial");
 
     conn.init_schema().expect("first init_schema");
     conn.init_schema()
@@ -86,13 +65,13 @@ fn migrate_v0001_is_idempotent() {
 
 #[test]
 fn fixture_reaches_current_schema() {
-    let (conn, _dir) = load_fixture("v0001-initial");
+    let (_dir, conn) = load_fixture("v0001-initial");
     conn.init_schema().expect("init_schema");
 
     let expected_raw = std::fs::read_to_string("tests/migrations/snapshots/current-schema.sql")
         .expect("read current-schema.sql");
 
-    let actual = dump_schema(&conn);
+    let actual = conn.dump_schema();
     let expected = normalize_schema(&expected_raw);
     let actual_norm = normalize_schema(&actual);
 
@@ -113,7 +92,7 @@ fn generate_v0001_fixture() {
     }
     let conn = Connection::open(path).expect("open");
     conn.execute_batch(
-        "PRAGMA journal_mode = WAL;
+        "PRAGMA journal_mode = DELETE;
          PRAGMA foreign_keys = ON;",
     )
     .expect("pragmas");
@@ -181,7 +160,7 @@ fn generate_current_schema_snapshot() {
     std::fs::create_dir_all("tests/migrations/snapshots").expect("create snapshots dir");
     let db = SqliteConnection::open_in_memory().expect("open in-memory");
     db.init_schema().expect("init_schema");
-    let schema = dump_schema(&db);
+    let schema = db.dump_schema();
     std::fs::write("tests/migrations/snapshots/current-schema.sql", &schema)
         .expect("write current-schema.sql");
     println!("Generated: tests/migrations/snapshots/current-schema.sql");
