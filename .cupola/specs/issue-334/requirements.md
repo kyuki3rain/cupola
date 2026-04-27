@@ -14,8 +14,8 @@
 
 1. `docs/architecture/metadata.md` の `feature_name` テーブルにおいて、タイミング列が `Collect の Discovery で新規 issue を DB 登録する時（デフォルト: \`issue-{N}\`）` となっている。
 2. `docs/architecture/metadata.md` の `feature_name` テーブルにおいて、主体列が `Collect` となっている。
-3. When `docs/architecture/metadata.md` を参照したとき、`feature_name` の初期化主体について誤解が生じない記述になっている。
-4. The docs shall 変更後も `observations.md:107` に記載された「Collect が例外的に DB 書き込みを行う Discovery 箇所」との整合性を保つ。
+3. `docs/architecture/metadata.md` の `feature_name` セクションに、`feature_name` の初期化主体が `Collect` であることを示す記述がある。
+4. `docs/architecture/metadata.md` の `feature_name` セクションの記述が、`docs/architecture/observations.md:107` に記載された「Collect が例外的に DB 書き込みを行う Discovery 箇所」と整合している。
 
 ### Requirement 2: effects.md の SpawnInit 処理内容に state=running を明記する
 
@@ -24,5 +24,5 @@
 #### Acceptance Criteria
 
 1. `docs/architecture/effects.md` の `SpawnInit` 処理内容セルが `ProcessRun(type=init, state=running) INSERT → fetch / worktree 作成 / ...` となっている。
-2. When `docs/architecture/effects.md` を参照したとき、`SpawnInit` が `state=running` で `ProcessRun` を INSERT することが明確に読み取れる。
-3. The docs shall `docs/architecture/polling-loop.md:164-179` の記述（`let run = ProcessRun { state: running, ... }`）と一貫した説明を提供する。
+2. `docs/architecture/effects.md` の `SpawnInit` の説明には、`ProcessRun` の INSERT 時点で `state=running` であることが明示されている。
+3. `docs/architecture/effects.md` には、`SpawnInit` が `state=running` の `ProcessRun` を INSERT してから後続の `fetch / worktree 作成` を行うことを説明する文言が含まれている。

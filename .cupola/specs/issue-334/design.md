@@ -94,8 +94,8 @@
 ```
 
 **実装ノート**:
-- `observations.md:107` の「Discovery は Collect が例外的に DB 書き込みを行う箇所」との整合性を確認する
-- ファイル先頭の「Collect は純粋な観測のみで DB を書かない。」という注記は Discovery の例外を説明していないため、注記との矛盾を避けるため変更後の記述でも「例外的」であることを読み取れる形にする（`observations.md:107` への参照は本 doc に不要だが矛盾がないことを確認する）
+- `docs/architecture/observations.md:107` の「Discovery は Collect が例外的に DB 書き込みを行う箇所」との整合性を確認する
+- ファイル先頭の「Collect は純粋な観測のみで DB を書かない。」という注記は Discovery の例外を説明していないため、注記との矛盾を避けるため変更後の記述でも「例外的」であることを読み取れる形にする（`docs/architecture/observations.md:107` への参照は本 doc に不要だが矛盾がないことを確認する）
 
 #### `docs/architecture/effects.md` 修正
 
@@ -120,7 +120,7 @@
 
 **実装ノート**:
 - `type=init` の直後に `, state=running` を追記するのみ。他の記述は変更しない
-- `polling-loop.md:164-179` の `ProcessRun { state: running, ... }` と一致することを確認する
+- `docs/architecture/polling-loop.md:164-179` の `ProcessRun { state: running, ... }` と一致することを確認する
 
 ## Testing Strategy
 

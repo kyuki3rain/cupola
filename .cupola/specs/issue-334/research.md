@@ -22,7 +22,7 @@
 - **Findings**:
   - `metadata.md` は「`Idle → InitializeRunning` 遷移時（デフォルト: `issue-{N}`）」「主体: Persist（Decide が決定）」と記述
   - 実装 `collect.rs:74`: `let issue = Issue::new(issue_number, format!("issue-{issue_number}"));` — Collect の Discovery で初期化
-  - `observations.md:107` は「Discovery は Collect が例外的に DB 書き込みを行う箇所」と説明しており Collect 主体であることと整合
+  - `docs/architecture/observations.md:107` は「Discovery は Collect が例外的に DB 書き込みを行う箇所」と説明しており Collect 主体であることと整合
 - **Implications**: doc が実装と乖離。修正方針はドキュメントを実装に合わせる。コード変更不要
 
 ### SpawnInit の state=running 記載の確認
@@ -55,7 +55,7 @@
 ## Risks & Mitigations
 
 - Markdown テーブルのフォーマット崩れ — 修正後に目視でテーブル構造を確認する
-- 他ドキュメントとの整合性 — `observations.md:107` はすでに Collect の DB 書き込みを説明しており追加修正不要
+- 他ドキュメントとの整合性 — `docs/architecture/observations.md:107` はすでに Collect の DB 書き込みを説明しており追加修正不要
 
 ## References
 
