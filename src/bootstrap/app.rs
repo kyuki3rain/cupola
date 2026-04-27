@@ -273,7 +273,7 @@ pub async fn run(cli: Cli) -> Result<()> {
 
             let has_issues = results
                 .iter()
-                .any(|r| matches!(r.status, CheckStatus::Warn(_) | CheckStatus::Fail(_)));
+                .any(|r| matches!(&r.status, CheckStatus::Warn(_) | CheckStatus::Fail(_)));
             if has_issues {
                 println!();
                 println!("─────────────────────────────────────");
