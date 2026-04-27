@@ -271,6 +271,15 @@ pub async fn run(cli: Cli) -> Result<()> {
                 }
             }
 
+            let has_issues = results
+                .iter()
+                .any(|r| matches!(&r.status, CheckStatus::Warn(_) | CheckStatus::Fail(_)));
+            if has_issues {
+                println!();
+                println!("─────────────────────────────────────");
+                println!("Fix the issues above, then run `cupola doctor` again to verify.");
+            }
+
             if has_failure {
                 return Err(anyhow::anyhow!("doctor checks failed"));
             }
