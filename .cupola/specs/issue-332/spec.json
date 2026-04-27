@@ -1,0 +1,22 @@
+{
+  "feature_name": "issue-332",
+  "created_at": "2026-04-27T07:55:04Z",
+  "updated_at": "2026-04-27T08:30:00Z",
+  "language": "ja",
+  "phase": "design",
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": false
+    },
+    "design": {
+      "generated": true,
+      "approved": false
+    },
+    "tasks": {
+      "generated": true,
+      "approved": false
+    }
+  },
+  "ready_for_implementation": false
+}
