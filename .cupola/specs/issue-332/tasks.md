@@ -163,7 +163,7 @@ DB エラーパス:
 更新が必要なテストの探し方:
 ```bash
 # 旧フォーマットの文字列を含むテストを特定
-grep -n "git-scm.com\|cli.github.com\|claude.ai/code\|extra_allow から\|cupola start で\|cupola init で DB" src/application/doctor_use_case.rs
+grep -E -n "git-scm.com|cli.github.com|claude.ai/code|extra_allow から|cupola start で|cupola init で DB" src/application/doctor_use_case.rs
 ```
 
 **完了条件**: `cargo test` が全テスト通過
